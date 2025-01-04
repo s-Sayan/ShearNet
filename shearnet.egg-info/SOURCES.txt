@@ -1,0 +1,9 @@
+LICENSE
+README.md
+setup.py
+shearnet.egg-info/PKG-INFO
+shearnet.egg-info/SOURCES.txt
+shearnet.egg-info/dependency_links.txt
+shearnet.egg-info/entry_points.txt
+shearnet.egg-info/requires.txt
+shearnet.egg-info/top_level.txt

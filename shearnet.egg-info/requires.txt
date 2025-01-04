@@ -1,0 +1,9 @@
+jax
+flax
+galsim
+ngmix
+numpy
+tqdm
+scipy
+optax
+matplotlib
