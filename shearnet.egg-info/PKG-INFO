@@ -1,0 +1,13 @@
+Metadata-Version: 2.1
+Name: shearnet
+Version: 0.1
+License-File: LICENSE
+Requires-Dist: jax
+Requires-Dist: flax
+Requires-Dist: galsim
+Requires-Dist: ngmix
+Requires-Dist: numpy
+Requires-Dist: tqdm
+Requires-Dist: scipy
+Requires-Dist: optax
+Requires-Dist: matplotlib
