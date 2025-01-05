@@ -93,6 +93,7 @@ def main():
     parser.add_argument('--test_samples', type=int, default=1000, help='Number of test samples.')
     parser.add_argument('--psf_fwhm', type=float, default=1.0, help='PSF FWHM for simulation.')
     parser.add_argument('--mcal', action='store_true', help='If you want mcal MSE')
+    parser.add_argument('--plot', action='store_true', help='Flag to plot')
     parser.add_argument('--plot_residuals', action='store_true', help='Plot residuals.')
     parser.add_argument('--plot_samples', action='store_true', help='Plot samples.')
     parser.add_argument('--plot_scatter', action='store_true', help='Plot true vs. predicted scatterplots.')
@@ -124,12 +125,15 @@ def main():
     if args.mcal:
         eval_mcal(test_images, test_labels, args.psf_fwhm)
 
-    predicted_labels = state.apply_fn(state.params, test_images)
-    #import pdb; pdb.set_trace()
+    #if args.plot_residuals:
+    if args.plot:
+        predicted_labels = state.apply_fn(state.params, test_images)
+        #import pdb; pdb.set_trace()
 
-    if args.plot_residuals:
+        df_plot_path = os.path.join(args.plot_path, args.model_name)
+        os.makedirs(df_plot_path, exist_ok=True)
         print("Plotting residuals...")
-        residuals_path = os.path.join(args.plot_path, args.model_name, "residuals_plot") if args.plot_path else None
+        residuals_path = os.path.join(df_plot_path, "residuals_plot") if args.plot_path else None
         plot_residuals(
             test_images,
             test_labels,
@@ -140,20 +144,20 @@ def main():
             combined=args.combined_residuals
         )
 
-    if args.plot_samples:
+    #if args.plot_samples:
         print("Plotting samples...")
-        samples_path = os.path.join(args.plot_path, args.model_name, "samples_plot.png") if args.plot_path else None
+        samples_path = os.path.join(df_plot_path, "samples_plot.png") if args.plot_path else None
         visualize_samples(test_images, test_labels, predicted_labels, path=samples_path)
 
-    if args.plot_scatter:
+    #if args.plot_scatter:
         print("Plotting scatter plots...")
-        scatter_path = os.path.join(args.plot_path, args.model_name, "scatter_plot") if args.plot_path else None
+        scatter_path = os.path.join(df_plot_path, "scatter_plot") if args.plot_path else None
         preds_mcal = mcal_preds(test_images, args.psf_fwhm) if args.mcal else None
         plot_true_vs_predicted(test_labels, predicted_labels, path=scatter_path, mcal=args.mcal, preds_mcal=preds_mcal)
 
     if args.plot_animation:
         pass # Under development
-        animation_path = os.path.join(args.plot_path, args.model_name, "animation_plot") if args.plot_path else None
+        animation_path = os.path.join(df_plot_path, "animation_plot") if args.plot_path else None
         epochs = np.arange(1, 101)  # Assuming 100 epochs
         animate_model_epochs(test_labels, load_path, args.plot_path, epochs, state=state, model_name=args.model_name, mcal=args.mcal, preds_mcal=preds_mcal)
 
