@@ -51,7 +51,7 @@ Below is an example comparison of shear estimation results obtained from `shearn
 
 
 ### **Comparison of Predictions**
-<img src="./plots/dense/scatter_plot_e2_scatter.png" alt="Comparison of Predictions" width="600"/>
+<img src="./plots/dense/scatter_plot_e1_scatter.png" alt="Comparison of Predictions" width="600"/>
 
 ### **Mean Squared Error (MSE) Comparison**
 | Method             | MSE               |
@@ -93,7 +93,7 @@ shearnet-train --epochs 50 --batch_size 50 --samples 10000  --psf_fwhm 1.0 --sav
 After you have successfully trained a model and saved it to the checkpoint directory with a specific model name, you can load up that model and evaluate its performance on a newly generated simulations of test data: 
 
 ```bash
-shearnet-eval --load_path ./model_checkpoint --model_name dense --test_samples 1000 --psf_fwhm 1.0 --plot_residuals --plot_samples --plot_path ./plots/ --plot_scatter
+shearnet-eval --load_path ./model_checkpoint --model_name dense --test_samples 1000 --psf_fwhm 1.0 --plot_residuals --plot_samples --plot_path ./plots/ --plot_scatter --mcal
 ```
 
 ### **Command-Line Arguments**

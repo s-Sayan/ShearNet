@@ -128,6 +128,7 @@ def main():
     #import pdb; pdb.set_trace()
 
     if args.plot_residuals:
+        print("Plotting residuals...")
         residuals_path = os.path.join(args.plot_path, args.model_name, "residuals_plot") if args.plot_path else None
         plot_residuals(
             test_images,
@@ -140,18 +141,21 @@ def main():
         )
 
     if args.plot_samples:
+        print("Plotting samples...")
         samples_path = os.path.join(args.plot_path, args.model_name, "samples_plot.png") if args.plot_path else None
         visualize_samples(test_images, test_labels, predicted_labels, path=samples_path)
 
     if args.plot_scatter:
+        print("Plotting scatter plots...")
         scatter_path = os.path.join(args.plot_path, args.model_name, "scatter_plot") if args.plot_path else None
         preds_mcal = mcal_preds(test_images, args.psf_fwhm) if args.mcal else None
         plot_true_vs_predicted(test_labels, predicted_labels, path=scatter_path, mcal=args.mcal, preds_mcal=preds_mcal)
 
     if args.plot_animation:
+        pass # Under development
         animation_path = os.path.join(args.plot_path, args.model_name, "animation_plot") if args.plot_path else None
         epochs = np.arange(1, 101)  # Assuming 100 epochs
-        animate_model_epochs(test_labels, load_path, args.plot_path, epochs, model_name=args.model_name, mcal=args.mcal, preds_mcal=preds_mcal)
+        animate_model_epochs(test_labels, load_path, args.plot_path, epochs, state=state, model_name=args.model_name, mcal=args.mcal, preds_mcal=preds_mcal)
 
 
 if __name__ == "__main__":

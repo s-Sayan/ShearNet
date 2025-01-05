@@ -40,7 +40,7 @@ def main():
     os.makedirs(plot_path, exist_ok=True) if plot_path else None
 
     get_device()
-    
+
     train_images, train_labels = generate_dataset(args.samples, args.psf_fwhm)
     rng_key = random.PRNGKey(args.seed)
     print(f"Shape of training images: {train_images.shape}")
@@ -57,6 +57,7 @@ def main():
                         )
 
     if args.plot:
+        print("Plotting learning curve...")
         plot_path = os.path.join(args.plot_path, args.model_name, "learning_curve.png") if args.plot_path else None
         plot_learning_curve(epoch_loss, plot_path)
 
