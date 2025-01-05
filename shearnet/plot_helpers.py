@@ -251,7 +251,7 @@ def plot_true_vs_predicted_anim(true_labels, predicted_labels, path=None, mcal=F
     else:
         plt.show()
 
-def animate_model_epochs(true_labels, load_path, plot_path, epochs, model_name="model", mcal=False, preds_mcal=None):
+def animate_model_epochs(true_labels, load_path, plot_path, epochs, state, model_name="model", mcal=False, preds_mcal=None):
     """Create an animation that shows the predictions of the model over different epochs."""
     
     # Load the trained model at each epoch
