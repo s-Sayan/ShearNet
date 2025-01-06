@@ -56,12 +56,10 @@ Below is an example comparison of shear estimation results obtained from `shearn
 ### **Mean Squared Error (MSE) Comparison**
 | Method             | MSE               |
 |--------------------|-------------------|
-| **Metacalibration** | 2.280 × 10⁻⁶      |
-| **ShearNet**        | 1.412 × 10⁻⁶      |
+| **Metacalibration** | 2.217 × 10<sup>-6</sup>  |
+| **ShearNet**        | 5.554 × 10<sup>-7</sup>  |
 
 ShearNet achieves significantly lower MSE for both `e1` and `e2`, highlighting its superior performance in shear estimation.
-
-
 
 ---
 

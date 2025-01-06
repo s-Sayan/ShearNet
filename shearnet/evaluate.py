@@ -115,6 +115,21 @@ def main():
     init_params = model.init(rng_key, jnp.ones_like(test_images[0]))
     state = train_state.TrainState.create(apply_fn=model.apply, params=init_params, tx=optax.adam(1e-3))
 
+    # Check for directories that start with args.model_name
+    matching_dirs = [d for d in os.listdir(load_path) if os.path.isdir(os.path.join(load_path, d)) and d.startswith(args.model_name)]
+
+    # Print the number of matching directories
+    print(f"Number of matching directories found: {len(matching_dirs)}")
+
+    # Handle the case when no matching directories are found
+    if not matching_dirs:
+        raise FileNotFoundError(f"No directory found in {load_path} starting with '{args.model_name}'.")
+
+    # Print the list of matching directories
+    for idx, directory in enumerate(matching_dirs, start=1):
+        print(f"Matching directory {idx}: {directory}")
+
+
     # Load the trained model
     state = checkpoints.restore_checkpoint(ckpt_dir=load_path, target=state, prefix=args.model_name)
     print("Model checkpoint loaded successfully.")
