@@ -16,14 +16,14 @@ def load_model(model, load_path):
     params = jax.numpy.load(os.path.join(load_path, 'model_params.npy'), allow_pickle=True)
     return model, params
 
-def save_checkpoint(state, step, checkpoint_dir, model_name):
+def save_checkpoint(state, step, checkpoint_dir, model_name, overwrite=True):
     """Save the model checkpoint."""
     checkpoints.save_checkpoint(
         ckpt_dir=checkpoint_dir,
         target=state,
         step=step,
         prefix=model_name,
-        overwrite=True
+        overwrite=overwrite
     )
     print(f"Checkpoint saved at step {step}.")
 
@@ -70,6 +70,6 @@ def train_model(images, labels, rng_key, epochs=10, batch_size=32, save_path=Non
         # Save the model after every epoch if a save path is provided
         if save_path:
             #save_model(state, save_path)
-            save_checkpoint(state, step=epoch + 1, checkpoint_dir=save_path, model_name=model_name)
+            save_checkpoint(state, step=epoch + 1, checkpoint_dir=save_path, model_name=model_name, overwrite=True)
     
     return state, epoch_losses
