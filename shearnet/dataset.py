@@ -27,7 +27,7 @@ def sim_func(g1, g2, seed, psf_fwhm, sigma=1.0, type='exp', npix=53, scale=0.2):
         raise ValueError("type must be 'exp' or 'gauss'")
 
     # Create a PSF
-    psf = galsim.Gaussian(sigma=psf_fwhm)
+    psf = galsim.Gaussian(fwhm=psf_fwhm)
 
     # Apply a random shift
     dx, dy = 2.0 * (rng.uniform(size=2) - 0.5) * 0.2
