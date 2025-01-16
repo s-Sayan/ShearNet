@@ -65,16 +65,43 @@ ShearNet achieves significantly lower MSE for both `e1` and `e2`, highlighting i
 
 ## **Installation**
 
-Clone the repository and run:
-```bash
-pip install -e .
-```
-Then, configure the save directory by running:
-```bash
-python post_installation.py
-```
-The default path will be the current directory. You can specify a different one. Restart your terminal or run `source ~/.bashrc` (or `source ~/.zshrc` for Zsh) to apply changes.
-
+1. **Create a new Conda environment:**
+    
+    ```bash
+    conda env create -f sn2025_gpu.yml
+    conda activate sn2025_gpu
+    ```
+    
+2. **Install `ngmix`:**
+    
+    ```bash
+    pip install git+https://github.com/esheldon/ngmix.git
+    ```
+    
+3. **Install this package:**
+    
+    ```bash
+    git clone https://github.com/s-Sayan/ShearNet.git
+    cd ShearNet
+    pip install -e .
+    ```
+    
+4. **Configure the save directory:**
+    
+    ```bash
+    python post_installation.py
+    ```
+    
+    The default directory is the current folder. You can specify another path if needed.
+    
+5. **Apply changes:**
+    
+    Restart your terminal or run:
+    
+    ```bash
+    source ~/.bashrc  # For Bash
+    source ~/.zshrc   # For Zsh
+    ```
 ---
 
 ## **Usage**
@@ -84,7 +111,7 @@ The default path will be the current directory. You can specify a different one.
 After installation, you can train the model using the command-line interface:
 
 ```bash
-shearnet-train --epochs 50 --batch_size 50 --samples 10000  --psf_fwhm 1.0 --save --model_name dense --plot
+shearnet-train --epochs 50 --batch_size 50 --samples 10000  --psf_fwhm 1.0 --save --model_name test1 --plot --nn simple --patience 20 --plot_training_loss
 ```
 ### **Model Evaluation**
 
