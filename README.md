@@ -66,10 +66,10 @@ ShearNet achieves significantly lower MSE for both `e1` and `e2`, highlighting i
 ## **Installation**
 
 1. **Create a new Conda environment:**
-    
+(Use sn2025_gpu.yml, if you have access to gpu's)    
     ```bash
-    conda env create -f sn2025_gpu.yml
-    conda activate sn2025_gpu
+    conda env create -f sn2025_cpu.yml
+    conda activate sn2025_cpu
     ```
     
 2. **Install `ngmix`:**

@@ -14,13 +14,21 @@ def main():
 
     # Determine the shell configuration file
     shell = os.getenv('SHELL', '/bin/bash')
+    home_dir = os.path.expanduser('~')
+
     if 'zsh' in shell:
-        rc_file = os.path.expanduser('~/.zshrc')
+        rc_file = os.path.join(home_dir, '.zshrc')
+    elif 'bash' in shell:
+        # Prefer .bashrc if it exists, otherwise use .bash_profile
+        if os.path.exists(os.path.join(home_dir, '.bashrc')):
+            rc_file = os.path.join(home_dir, '.bashrc')
+        else:
+            rc_file = os.path.join(home_dir, '.bash_profile')
     else:
-        rc_file = os.path.expanduser('~/.bashrc')
-    
+        rc_file = os.path.join(home_dir, '.profile')  # Fallback for other shells
+
     # Add the environment variable to the shell configuration file
-    env_variable = f'export SHEARNET_DATA_PATH="{save_path}"\n'
+    env_variable = f'\nexport SHEARNET_DATA_PATH="{save_path}"\n'
     with open(rc_file, 'a') as f:
         f.write(env_variable)
 
