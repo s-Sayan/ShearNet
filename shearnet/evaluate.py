@@ -92,6 +92,7 @@ def main():
     parser.add_argument('--model_name', type=str, default='my_model', help='Path to load the model parameters.')
     parser.add_argument('--test_samples', type=int, default=1000, help='Number of test samples.')
     parser.add_argument('--psf_fwhm', type=float, default=1.0, help='PSF FWHM for simulation.')
+    parser.add_argument('--exp', type=str, default='ideal', help='Which experiment to run')
     parser.add_argument('--mcal', action='store_true', help='If you want mcal MSE')
     parser.add_argument('--plot', action='store_true', help='Flag to plot')
     parser.add_argument('--plot_residuals', action='store_true', help='Plot residuals.')
@@ -105,7 +106,7 @@ def main():
     load_path = os.path.abspath(args.load_path)
 
     # Generate test data
-    test_images, test_labels = generate_dataset(args.test_samples, args.psf_fwhm)
+    test_images, test_labels = generate_dataset(args.samples, args.psf_fwhm, exp=args.exp)
     print(f"Shape of test images: {test_images.shape}")
     print(f"Shape of test labels: {test_labels.shape}")
 
