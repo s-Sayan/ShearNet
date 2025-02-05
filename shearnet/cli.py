@@ -25,6 +25,7 @@ def main():
     parser.add_argument('--samples', type=int, default=10000, help='Number of training samples.')
     parser.add_argument('--patience', type=int, default=10, help='Patience for early stopping.')
     parser.add_argument('--psf_fwhm', type=float, default=1.0, help='PSF FWHM for simulation.')
+    parser.add_argument('--exp', type=str, default='ideal', help='Which experiment to run')
     parser.add_argument('--nn', type=str, default='simple', help='Which model to use')
     parser.add_argument('--save', action='store_true', help='Flag to save a model')
     parser.add_argument('--save_path', type=str, default=default_save_path, help='Path to save the model parameters.')
@@ -44,7 +45,7 @@ def main():
 
     get_device()
 
-    train_images, train_labels = generate_dataset(args.samples, args.psf_fwhm)
+    train_images, train_labels = generate_dataset(args.samples, args.psf_fwhm, exp=args.exp)
     rng_key = random.PRNGKey(args.seed)
     print(f"Shape of training images: {train_images.shape}")
     print(f"Shape of training labels: {train_labels.shape}")
