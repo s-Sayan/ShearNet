@@ -118,7 +118,7 @@ shearnet-train --epochs 50 --batch_size 50 --samples 10000  --psf_fwhm 1.0 --sav
 After you have successfully trained a model and saved it to the checkpoint directory with a specific model name, you can load up that model and evaluate its performance on a newly generated simulations of test data: 
 
 ```bash
-shearnet-eval --model_name dense --test_samples 1000 --psf_fwhm 1.0 --plot --mcal
+shearnet-eval --model_name test1 --test_samples 1000 --psf_fwhm 1.0 --plot --mcal
 ```
 
 ### **Command-Line Arguments**
