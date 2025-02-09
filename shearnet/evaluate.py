@@ -106,7 +106,7 @@ def main():
     load_path = os.path.abspath(args.load_path)
 
     # Generate test data
-    test_images, test_labels = generate_dataset(args.samples, args.psf_fwhm, exp=args.exp)
+    test_images, test_labels = generate_dataset(args.test_samples, args.psf_fwhm, exp=args.exp)
     print(f"Shape of test images: {test_images.shape}")
     print(f"Shape of test labels: {test_labels.shape}")
 
