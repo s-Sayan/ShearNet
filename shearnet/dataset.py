@@ -166,8 +166,8 @@ def sim_func_superbit(g1, g2, seed, sigma=1.0, type='exp', npix=53, scale=0.2, s
         noise=noise_map,
         weight=weight_image_cropped,
         jacobian=jac,
-        bmask=np.zeros_like(nse_im, dtype=np.int32),
-        ormask=np.zeros_like(nse_im, dtype=np.int32),
+#        bmask=np.zeros_like(nse_im, dtype=np.int32),
+#        ormask=np.zeros_like(nse_im, dtype=np.int32),
         psf=psf_obs,
     )
 
