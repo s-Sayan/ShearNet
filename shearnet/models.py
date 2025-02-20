@@ -39,33 +39,37 @@ class SimpleGalaxyNN(nn.Module):
         x = nn.relu(x)
         x = nn.Dense(2)(x)  # Output e1, e2
         return x
-
+    
 class EnhancedGalaxyNN(nn.Module):
     @nn.compact
-    def __call__(self, x, deterministic: bool = False):
-        if x.ndim == 2:  # If batch dimension is missing
+    def __call__(self, x, deterministic: bool = True):
+        # Input handling 
+        if x.ndim == 2:
             x = jnp.expand_dims(x, axis=0)
         assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
         
-        # Convolutional layers for feature extraction
-        x = nn.Conv(32, (3, 3))(x)  # 32 filters, 3x3 kernel
+        x = jnp.expand_dims(x, axis=-1)
+        
+        # Simple conv stack with pooling
+        x = nn.Conv(16, (3, 3), padding='SAME')(x)
         x = nn.relu(x)
-        x = nn.Conv(64, (3, 3))(x)
+        x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))  # 27x27x16
+        
+        x = nn.Conv(32, (3, 3), padding='SAME')(x)
         x = nn.relu(x)
-        print(x.shape)
-        x = jnp.reshape(x, (x.shape[0], -1))
-        print(x.shape)
-
-        # Fully connected layers        
+        x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))  # 14x14x32
+        
+        # Flatten: 14*14*32 = 6,272 features
+        x = x.reshape((x.shape[0], -1))
+        
+        # Dense layers similar to working FNN
         x = nn.Dense(128)(x)
         x = nn.relu(x)
-        #x = nn.Dropout(0.5, deterministic=deterministic)(x)  # Dropout for regularization
-        x = nn.Dense(64)(x)
-        x = nn.relu(x)
-        x = nn.Dense(2)(x)  
-        #x = nn.tanh(x) # Output e1, e2
+        x = nn.Dense(2)(x)
+        
         return x
-
+    
+    
 class GalaxyResNet(nn.Module):
     @nn.compact
     def __call__(self, x, deterministic: bool = False):
