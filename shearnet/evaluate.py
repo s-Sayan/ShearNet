@@ -7,7 +7,7 @@ import optax
 from flax.training import checkpoints, train_state
 from shearnet.train import loss_fn
 from shearnet.dataset import generate_dataset
-from shearnet.models import SimpleGalaxyNN, EnhancedGalaxyNN
+from shearnet.models import *
 from shearnet.mcal import mcal_preds
 from shearnet.plot_helpers import plot_residuals, visualize_samples, plot_true_vs_predicted, animate_model_epochs
 import jax
@@ -46,45 +46,33 @@ def eval_mcal(test_images, test_labels, psf_fwhm, batch_size=32):
     print(f"Average Bias from Metacalibration: {avg_bias}")
 
 @jax.jit
-def eval_step_simple(state, images, labels):
-    """Evaluate the simple model on a single batch."""
-    loss = loss_fn(state, state.params, images, labels)
-    preds = state.apply_fn(state.params, images)
-    return loss, preds
-
-@jax.jit
-def eval_step_enhanced(state, images, labels):
-    """Evaluate the enhanced model on a single batch."""
-    loss = loss_fn(state, state.params, images, labels)
+def eval_step(state, images, labels):
+    """Evaluate the model on a single batch."""
+    loss = loss_fn(state, state.params, images, labels)  # Reuse the training loss function
     preds = state.apply_fn(state.params, images, deterministic=True)
     return loss, preds
 
-def eval_model(state, test_images, test_labels, batch_size=32, is_simple_nn=False):
+def eval_model(state, test_images, test_labels, batch_size=32):
     """Evaluate the model on the entire test set."""
     total_loss = 0
     total_samples = 0
     total_bias = 0
-    all_preds = []
-
-    eval_step_fn = eval_step_simple if is_simple_nn else eval_step_enhanced
 
     for i in range(0, len(test_images), batch_size):
         batch_images = test_images[i:i + batch_size]
         batch_labels = test_labels[i:i + batch_size]
-        loss, preds = eval_step_fn(state, batch_images, batch_labels)
+        loss, preds = eval_step(state, batch_images, batch_labels)
         
         batch_bias = (preds - batch_labels).mean()
         batch_size_actual = len(batch_images)
         total_loss += loss * batch_size_actual
         total_bias += batch_bias * batch_size_actual
         total_samples += batch_size_actual
-        all_preds.append(preds)
 
     avg_loss = total_loss / total_samples
     avg_bias = total_bias / total_samples
     print(f"Mean Squared Error (MSE) from NN: {avg_loss}")
     print(f"Average Bias from NN: {avg_bias}")
-    return jnp.concatenate(all_preds) if all_preds else None
 
 def main():
     # Get the SHEARNET_DATA_PATH environment variable
@@ -101,8 +89,8 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate a trained galaxy shear estimation model.")
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility.')
     parser.add_argument('--load_path', type=str, default=default_save_path, help='Path to load the model parameters.')
-    parser.add_argument('--model_name', type=str, default='my_model', help='Path to load the model parameters.')
     parser.add_argument('--nn', type=str, default='enhanced', choices=['simple', 'enhanced'], help='Neural network architecture to use (simple or enhanced).')
+    parser.add_argument('--model_name', type=str, default='my_model', help='Path to load the model parameters.')
     parser.add_argument('--test_samples', type=int, default=1000, help='Number of test samples.')
     parser.add_argument('--psf_fwhm', type=float, default=1.0, help='PSF FWHM for simulation.')
     parser.add_argument('--exp', type=str, default='ideal', help='Which experiment to run')
@@ -125,15 +113,15 @@ def main():
 
     # Initialize the model and its parameters
     rng_key = random.PRNGKey(args.seed)
-    
-    # Select the model architecture based on the --nn flag
-    if args.nn == 'simple':
+    if args.nn == "simple":
         model = SimpleGalaxyNN()
-        init_params = model.init(rng_key, jnp.ones_like(test_images[0]))
-    else:  # enhanced
+    elif args.nn == "enhanced":
         model = EnhancedGalaxyNN()
-        init_params = model.init(rng_key, jnp.ones_like(test_images[0]), deterministic=True)
-        
+    elif args.nn == "resnet":
+        model = GalaxyResNet() 
+    else:
+        raise ValueError("Invalid model type specified.")
+    init_params = model.init(rng_key, jnp.ones_like(test_images[0]))
     state = train_state.TrainState.create(apply_fn=model.apply, params=init_params, tx=optax.adam(1e-3))
 
     # Check for directories that start with args.model_name
@@ -156,18 +144,16 @@ def main():
     print("Model checkpoint loaded successfully.")
 
     # Evaluate the model
-    predicted_labels = eval_model(state, test_images, test_labels, is_simple_nn=(args.nn == 'simple'))
+    eval_model(state, test_images, test_labels)
 
     if args.mcal:
         eval_mcal(test_images, test_labels, args.psf_fwhm)
 
+    #if args.plot_residuals:
     if args.plot:
-        if predicted_labels is None:
-            if args.nn == 'simple':
-                predicted_labels = state.apply_fn(state.params, test_images)
-            else:
-                predicted_labels = state.apply_fn(state.params, test_images, deterministic=True)
-        
+        predicted_labels = state.apply_fn(state.params, test_images, deterministic=True)
+        #import pdb; pdb.set_trace()
+
         df_plot_path = os.path.join(args.plot_path, args.model_name)
         os.makedirs(df_plot_path, exist_ok=True)
         print("Plotting residuals...")
@@ -182,21 +168,22 @@ def main():
             combined=args.combined_residuals
         )
 
-        if args.plot_samples:
-            print("Plotting sample visualizations...")
-            samples_path = os.path.join(df_plot_path, "samples_plot") if args.plot_path else None
-            visualize_samples(
-                test_images,
-                test_labels,
-                predicted_labels,
-                path=samples_path
-            )
+    #if args.plot_samples:
+        print("Plotting samples...")
+        samples_path = os.path.join(df_plot_path, "samples_plot.png") if args.plot_path else None
+        visualize_samples(test_images, test_labels, predicted_labels, path=samples_path)
+
+    #if args.plot_scatter:
+        print("Plotting scatter plots...")
+        scatter_path = os.path.join(df_plot_path, "scatter_plot") if args.plot_path else None
+        preds_mcal = mcal_preds(test_images, args.psf_fwhm) if args.mcal else None
+        plot_true_vs_predicted(test_labels, predicted_labels, path=scatter_path, mcal=args.mcal, preds_mcal=preds_mcal)
 
     if args.plot_animation:
         pass # Under development
         animation_path = os.path.join(df_plot_path, "animation_plot") if args.plot_path else None
         epochs = np.arange(1, 101)  # Assuming 100 epochs
-        animate_model_epochs(test_labels, load_path, args.plot_path, epochs, state=state, model_name=args.model_name, mcal=args.mcal, preds_mcal=predicted_labels)
+        animate_model_epochs(test_labels, load_path, args.plot_path, epochs, state=state, model_name=args.model_name, mcal=args.mcal, preds_mcal=preds_mcal)
 
 
 if __name__ == "__main__":

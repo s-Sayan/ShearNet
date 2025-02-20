@@ -132,7 +132,7 @@ def train_modelv2(images, labels, rng_key, epochs=10, batch_size=32, nn="simple"
                 total_samples += batch_size_actual
             val_loss /= total_samples
             val_losses.append(val_loss)
-            print(f"Validation Loss: {val_loss:.4f}")
+            print(f"Validation Loss: {val_loss:.4e}")
 
             # Check for early stopping
             if val_loss < best_val_loss:
@@ -140,7 +140,7 @@ def train_modelv2(images, labels, rng_key, epochs=10, batch_size=32, nn="simple"
                 patience_counter = 0  # Reset patience counter
                 if save_path:  # Save the best model
                     save_checkpoint(state, step=epoch + 1, checkpoint_dir=save_path, model_name=f"{model_name}_best", overwrite=True)
-                print(f"New best validation loss: {val_loss:.4f}")
+                print(f"New best validation loss: {val_loss:.4e}")
             else:
                 patience_counter += 1
                 print(f"No improvement in validation loss. Patience: {patience_counter}/{patience}")
