@@ -28,7 +28,7 @@ class ResidualBlock(nn.Module):
 
 class SimpleGalaxyNN(nn.Module):
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, deterministic: bool = False):
         if x.ndim == 2:  # If batch dimension is missing
             x = jnp.expand_dims(x, axis=0)
         assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
@@ -42,7 +42,7 @@ class SimpleGalaxyNN(nn.Module):
     
 class EnhancedGalaxyNN(nn.Module):
     @nn.compact
-    def __call__(self, x, deterministic: bool = True):
+    def __call__(self, x, deterministic: bool = False):
         # Input handling 
         if x.ndim == 2:
             x = jnp.expand_dims(x, axis=0)
@@ -65,8 +65,9 @@ class EnhancedGalaxyNN(nn.Module):
         # Dense layers similar to working FNN
         x = nn.Dense(128)(x)
         x = nn.relu(x)
+        #x = nn.Dropout(0.5)(x, deterministic=deterministic)  # Dropout applied only if deterministic=False
         x = nn.Dense(2)(x)
-        
+        x = nn.tanh(x)
         return x
     
     
