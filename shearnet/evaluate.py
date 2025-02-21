@@ -7,7 +7,7 @@ import optax
 from flax.training import checkpoints, train_state
 from shearnet.train import loss_fn
 from shearnet.dataset import generate_dataset
-from shearnet.models import SimpleGalaxyNN
+from shearnet.models import SimpleGalaxyNN, VGG16
 from shearnet.mcal import mcal_preds
 from shearnet.plot_helpers import plot_residuals, visualize_samples, plot_true_vs_predicted, animate_model_epochs
 import jax
@@ -113,7 +113,8 @@ def main():
     # Initialize the model and its parameters
     rng_key = random.PRNGKey(args.seed)
     # model = SimpleGalaxyNN()
-    model = VGG16(train=False)
+    model = VGG16()
+
     init_params = model.init(rng_key, jnp.ones_like(test_images[0]))
     state = train_state.TrainState.create(apply_fn=model.apply, params=init_params, tx=optax.adam(1e-3))
 

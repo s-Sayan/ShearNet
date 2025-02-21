@@ -101,7 +101,6 @@ def train_modelv2(images, labels, rng_key, epochs=10, batch_size=32, nn="simple"
         raise ValueError("Invalid model type specified.")
     
     params = model.init(rng_key, jnp.ones_like(images[0]))  # Initialize model parameters
-    print(params.keys())
     lr_schedule = optax.cosine_decay_schedule(init_value=1e-4, decay_steps=epochs * (len(train_images) // batch_size))
     tx = optax.adamw(learning_rate=lr_schedule, weight_decay=weight_decay)
     state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
@@ -123,7 +122,6 @@ def train_modelv2(images, labels, rng_key, epochs=10, batch_size=32, nn="simple"
             for i in range(0, len(train_images), batch_size):
                 batch_images = shuffled_train_images[i:i + batch_size]
                 batch_labels = shuffled_train_labels[i:i + batch_size]
-                # batch = {"input": batch_images, "labels": batch_labels}
                 batch_size_actual = len(batch_images)
                 state, loss = train_step(state, batch_images, batch_labels)
                 train_loss += loss * batch_size_actual
