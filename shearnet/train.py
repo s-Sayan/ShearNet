@@ -18,20 +18,24 @@ def save_checkpoint(state, step, checkpoint_dir, model_name, overwrite=True):
     print(f"Checkpoint saved at step {step}.")
 
 def loss_fn(state, params, images, labels):
-    preds = state.apply_fn(params, images)
+    preds, new_model_state = state.apply_fn(params, images, mutable=['batch_stats'], train=True)
+    # preds = state.apply_fn(params, images)
     loss = optax.l2_loss(preds, labels).mean()
-    return loss  # Mean Squared Error
+    return loss, new_model_state  # Mean Squared Error
 
 @jax.jit
 def train_step(state, images, labels):
-    grad_fn = jax.value_and_grad(loss_fn, argnums=1, has_aux=False)
-    loss, grads = grad_fn(state, state.params, images, labels)
+    grad_fn = jax.value_and_grad(loss_fn, argnums=1, has_aux=True)
+    (loss, new_model_state), grads = grad_fn(state, state.params, images, labels)
     state = state.apply_gradients(grads=grads)
+    state.params["batch_stats"] = new_model_state["batch_stats"]
     return state, loss
 
 @jax.jit
 def eval_step(state, images, labels):
-    loss = loss_fn(state, state.params, images, labels)
+    preds = state.apply_fn(state.params, images, train=False) # mutable=False
+    loss = optax.l2_loss(preds, labels).mean()
+    # loss = loss_fn(state, state.params, images, labels)
     return loss
 
 def train_model(images, labels, rng_key, epochs=10, batch_size=32, nn="simple", save_path=None, model_name="my_model"):
@@ -39,6 +43,8 @@ def train_model(images, labels, rng_key, epochs=10, batch_size=32, nn="simple", 
         model = SimpleGalaxyNN()  # Initialize the model
     elif nn == "enhanced":
         model = GalaxyResNet()  # Initialize the complex model
+    elif nn == "vgg16":
+        model = VGG16() # Initialize the transfer learning model
     else:
         raise ValueError("Invalid model type specified.")
     model = SimpleGalaxyNN()  # Initialize the model
@@ -60,7 +66,7 @@ def train_model(images, labels, rng_key, epochs=10, batch_size=32, nn="simple", 
             for i in range(0, len(images), batch_size):
                 batch_images = shuffled_images[i:i + batch_size]
                 batch_labels = shuffled_labels[i:i + batch_size]
-                state, loss = train_step(state, batch_images, batch_labels)  
+                state, loss = train_step(state, batch_images, batch_labels)
                 epoch_loss += loss
                 count += 1
                 pbar.update(1)
@@ -87,11 +93,16 @@ def train_modelv2(images, labels, rng_key, epochs=10, batch_size=32, nn="simple"
         model = EnhancedGalaxyNN()  # Initialize the complex model
     elif nn == "resnet":
         model = GalaxyResNet()  # Initialize the complex model
+    elif nn == "vgg16":
+        model = VGG16()   # Initialize the transfer learning model
+    elif nn == "fork":
+        model = ForkCNN()
     else:
         raise ValueError("Invalid model type specified.")
     
     params = model.init(rng_key, jnp.ones_like(images[0]))  # Initialize model parameters
-    lr_schedule = optax.cosine_decay_schedule(init_value=1e-3, decay_steps=epochs * (len(train_images) // batch_size))
+    print(params.keys())
+    lr_schedule = optax.cosine_decay_schedule(init_value=1e-4, decay_steps=epochs * (len(train_images) // batch_size))
     tx = optax.adamw(learning_rate=lr_schedule, weight_decay=weight_decay)
     state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
@@ -112,6 +123,7 @@ def train_modelv2(images, labels, rng_key, epochs=10, batch_size=32, nn="simple"
             for i in range(0, len(train_images), batch_size):
                 batch_images = shuffled_train_images[i:i + batch_size]
                 batch_labels = shuffled_train_labels[i:i + batch_size]
+                # batch = {"input": batch_images, "labels": batch_labels}
                 batch_size_actual = len(batch_images)
                 state, loss = train_step(state, batch_images, batch_labels)
                 train_loss += loss * batch_size_actual

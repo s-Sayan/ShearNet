@@ -112,7 +112,8 @@ def main():
 
     # Initialize the model and its parameters
     rng_key = random.PRNGKey(args.seed)
-    model = SimpleGalaxyNN()
+    # model = SimpleGalaxyNN()
+    model = VGG16(train=False)
     init_params = model.init(rng_key, jnp.ones_like(test_images[0]))
     state = train_state.TrainState.create(apply_fn=model.apply, params=init_params, tx=optax.adam(1e-3))
 
