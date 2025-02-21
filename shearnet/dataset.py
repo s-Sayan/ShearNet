@@ -80,8 +80,7 @@ def sim_func(g1, g2, seed, psf_fwhm, sigma=1.0, type='exp', npix=53, scale=0.2):
 
     return obj_obs
 
-def sim_func_superbit(g1, g2, seed, sigma=1.0, type='exp', npix=53, scale=0.2, superbit_psf_fnmae=psf_fnmae, superbit_weight_fname=weight_fname):
-
+def sim_func_superbit(g1, g2, seed, sigma=1.0, type='exp', npix= 53, scale=0.2, superbit_psf_fnmae=psf_fnmae, superbit_weight_fname=weight_fname):
     rng = np.random.RandomState(seed=seed)
     
     # Create a galaxy object
