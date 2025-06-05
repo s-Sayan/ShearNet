@@ -61,13 +61,13 @@ def measure_e1e2(g1=None, g2=None, im=None, sigma=1, scale=0.2, npix=53):
     return e1, e2
 
 def calculate_responsivity(psf_fwhm, seed, h=0.01):
-    obj_im_p = sim_func(h, 0, seed, psf_fwhm)
-    obj_im_m = sim_func(-h, 0, seed, psf_fwhm)
+    obj_im_p = sim_func(h, 0, seed=seed, psf_sigma=psf_fwhm)
+    obj_im_m = sim_func(-h, 0, seed=seed, psf_sigma=psf_fwhm)
     e1p, _ = measure_e1e2(im=obj_im_p.image)
     e1m, _ = measure_e1e2(im=obj_im_m.image)
     R1 = (e1p - e1m) / (2 * h)
-    obj_im_p = sim_func(0, h, seed, psf_fwhm)
-    obj_im_m = sim_func(0, -h, seed, psf_fwhm)
+    obj_im_p = sim_func(0, h, seed=seed, psf_sigma=psf_fwhm)
+    obj_im_m = sim_func(0, -h, seed=seed, psf_sigma=psf_fwhm)
     _, e2p = measure_e1e2(im=obj_im_p.image)
     _, e2m  = measure_e1e2(im=obj_im_m.image)
     R2 = (e2p - e2m) / (2 * h)

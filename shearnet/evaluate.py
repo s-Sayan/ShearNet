@@ -1,3 +1,10 @@
+import os
+import warnings
+import logging
+
+logging.getLogger('absl').setLevel(logging.ERROR)
+
+
 import argparse
 import os
 import jax.random as random
@@ -9,70 +16,247 @@ from shearnet.train import loss_fn
 from shearnet.dataset import generate_dataset
 from shearnet.models import *
 from shearnet.mcal import mcal_preds
+from shearnet.ngmix import _get_priors, mp_fit_one, ngmix_pred
 from shearnet.plot_helpers import plot_residuals, visualize_samples, plot_true_vs_predicted, animate_model_epochs
 import jax
+import ipdb
 import matplotlib.pyplot as plt
+import time
 
+
+# Define styles
+BOLD = '\033[1m'
+YELLOW = '\033[93m'
+CYAN = '\033[96m'
+GREEN = '\033[92m'
+END = '\033[0m'
 
 def loss_fn_mcal(images, labels, psf_fwhm):
     """Calculate the loss for the MCAL model."""
-
     preds = mcal_preds(images, psf_fwhm)
+    
+    # Combined loss for g1, g2
+    loss = optax.l2_loss(preds[:, :2], labels[:, :2]).mean()
+    
+    # Per-label losses (only g1, g2 for mcal)
+    loss_per_label = {
+        'g1': optax.l2_loss(preds[:, 0], labels[:, 0]).mean(),
+        'g2': optax.l2_loss(preds[:, 1], labels[:, 1]).mean(),
+        'g1g2_combined': loss  # Same as combined loss
+    }
+    
+    return loss, preds, loss_per_label
+
+def loss_fn_ngmix(obs_list, labels, seed=1234, psf_model='gauss', gal_model='gauss'):
+    """Calculate the loss for the NGmix model."""
+    
+    prior = _get_priors(seed)
+    rng = np.random.RandomState(seed)
+    datalist = mp_fit_one(obs_list, prior, rng, psf_model=psf_model, gal_model=gal_model)
+    preds = ngmix_pred(datalist)
+    
+    # Combined loss
     loss = optax.l2_loss(preds, labels).mean()
+    
+    # Per-label losses
+    loss_per_label = {
+        'g1': optax.l2_loss(preds[:, 0], labels[:, 0]).mean(),
+        'g2': optax.l2_loss(preds[:, 1], labels[:, 1]).mean(),
+        'g1g2_combined': optax.l2_loss(preds[:, :2], labels[:, :2]).mean(),  # Combined g1,g2
+        'sigma': optax.l2_loss(preds[:, 2], labels[:, 2]).mean(),
+        'flux': optax.l2_loss(preds[:, 3], labels[:, 3]).mean()
+    }
 
-    return loss, preds
+    return loss, preds, loss_per_label
 
-def eval_mcal(test_images, test_labels, psf_fwhm, batch_size=32):
-    """Evaluate the model on the entire test set."""
-    total_loss = 0
-    total_samples = 0
-    total_bias = 0
+def loss_fn_eval(state, params, images, labels):
+    preds = state.apply_fn(params, images)
+    
+    # Combined loss (assuming preds shape matches labels shape)
+    loss = optax.l2_loss(preds, labels).mean()
+    
+    # Per-label losses
+    loss_per_label = {
+        'g1': optax.l2_loss(preds[:, 0], labels[:, 0]).mean(),
+        'g2': optax.l2_loss(preds[:, 1], labels[:, 1]).mean(),
+        'g1g2_combined': optax.l2_loss(preds[:, :2], labels[:, :2]).mean(),
+        'sigma': optax.l2_loss(preds[:, 2], labels[:, 2]).mean(),
+        'flux': optax.l2_loss(preds[:, 3], labels[:, 3]).mean()
+    }
+    
+    return loss, loss_per_label
 
+def eval_mcal(test_images, test_labels, psf_fwhm):
+    """Evaluate metacalibration on the entire test set at once."""
+    # Get all predictions
+    start_time = time.time()
+    preds = mcal_preds(test_images, psf_fwhm)
+    
+    # Combined metrics
+    loss = optax.l2_loss(preds[:, :2], test_labels[:, :2]).mean()
+    bias = (preds - test_labels[:, :2]).mean()
+    
+    # Per-label metrics
+    loss_per_label = {
+        'g1': optax.l2_loss(preds[:, 0], test_labels[:, 0]).mean(),
+        'g2': optax.l2_loss(preds[:, 1], test_labels[:, 1]).mean(),
+        'g1g2_combined': loss
+    }
+    
+    bias_per_label = {
+        'g1': (preds[:, 0] - test_labels[:, 0]).mean(),
+        'g2': (preds[:, 1] - test_labels[:, 1]).mean(),
+        'g1g2_combined': bias
+    }
+    total_time = time.time() - start_time
+    # Print results
+    print("\n=== Combined Metrics (Moment-Based Approach) ===")
+    print(f"Mean Squared Error (MSE) from MOM: {loss:.6e}")
+    print(f"Average Bias from MOM: {bias:.6e}")
+    print(f"Time taken: {total_time:.2f} seconds")
+    
+    print("\n=== Per-Label Metrics ===")
+    label_names = ['g1', 'g2', 'g1g2_combined']
+    for label in label_names:
+        print(f"{label:>15}: MSE = {loss_per_label[label]:.6e}, Bias = {bias_per_label[label]:+.6e}")
+    print()
+    return {
+        'loss': loss,
+        'bias': bias,
+        'loss_per_label': loss_per_label,
+        'bias_per_label': bias_per_label,
+        'preds': preds
+    }
 
-    for i in range(0, len(test_images), batch_size):
-        batch_images = test_images[i:i + batch_size]
-        batch_labels = test_labels[i:i + batch_size]
-        loss, preds = loss_fn_mcal(batch_images, batch_labels, psf_fwhm)
-        
-        batch_bias = (preds - batch_labels).mean()
-        batch_size_actual = len(batch_images)
-        total_loss += loss * batch_size_actual
-        total_bias += batch_bias * batch_size_actual
-        total_samples += batch_size_actual
+def eval_ngmix(test_obs, test_labels, seed=1234, psf_model='gauss', gal_model='gauss'):
+    """Evaluate the model using ngmix on the entire test set."""
+    start_time = time.time()
 
-    avg_loss = total_loss / total_samples
-    avg_bias = total_bias / total_samples
-    print(f"Mean Squared Error (MSE) from Metacalibration: {avg_loss}")
-    print(f"Average Bias from Metacalibration: {avg_bias}")
+    loss, preds, loss_per_label = loss_fn_ngmix(test_obs, test_labels, seed, 
+                                                psf_model=psf_model, gal_model=gal_model)
+    
+    # Combined metrics
+    bias = (preds - test_labels).mean()
+    
+    # Per-label biases
+    bias_per_label = {
+        'g1': (preds[:, 0] - test_labels[:, 0]).mean(),
+        'g2': (preds[:, 1] - test_labels[:, 1]).mean(),
+        'g1g2_combined': (preds[:, :2] - test_labels[:, :2]).mean(),  # Average bias for g1,g2
+        'sigma': (preds[:, 2] - test_labels[:, 2]).mean(),
+        'flux': (preds[:, 3] - test_labels[:, 3]).mean()
+    }
+    total_time = time.time() - start_time
+    
+    #ipdb.set_trace()
+    # Print combined metrics
+    print(f"\n{BOLD}=== Combined Metrics (NGmix) ==={END}")
+    print(f"Mean Squared Error (MSE) from NGmix: {BOLD}{YELLOW}{loss:.6e}{END}")
+    print(f"Average Bias from NGmix: {BOLD}{YELLOW}{bias:.6e}{END}")
+    print(f"Time taken: {BOLD}{CYAN}{total_time:.2f} seconds{END}")
+    
+    # Print per-label metrics
+    print("\n=== Per-Label Metrics ===")
+    label_names = ['g1', 'g2', 'g1g2_combined', 'sigma', 'flux']
+    for label in label_names:
+        print(f"{label:>15}: MSE = {loss_per_label[label]:.6e}, Bias = {bias_per_label[label]:+.6e}")
+    print()
+    return {
+        'loss': loss,
+        'bias': bias,
+        'loss_per_label': loss_per_label,
+        'bias_per_label': bias_per_label,
+        'preds': preds
+    }
 
 @jax.jit
 def eval_step(state, images, labels):
     """Evaluate the model on a single batch."""
-    loss = loss_fn(state, state.params, images, labels)  # Reuse the training loss function
+    loss, loss_per_label = loss_fn_eval(state, state.params, images, labels)
     preds = state.apply_fn(state.params, images, deterministic=True)
-    return loss, preds
+    
+    # Calculate per-label biases
+    bias_per_label = {
+        'g1': (preds[:, 0] - labels[:, 0]).mean(),
+        'g2': (preds[:, 1] - labels[:, 1]).mean(),
+        'g1g2_combined': (preds[:, :2] - labels[:, :2]).mean(),
+        'sigma': (preds[:, 2] - labels[:, 2]).mean(),
+        'flux': (preds[:, 3] - labels[:, 3]).mean()
+    }
+    
+    return loss, preds, loss_per_label, bias_per_label
 
 def eval_model(state, test_images, test_labels, batch_size=32):
     """Evaluate the model on the entire test set."""
+    start_time = time.time()
+
     total_loss = 0
     total_samples = 0
     total_bias = 0
+    
+    # Initialize per-label accumulators
+    total_loss_per_label = {
+        'g1': 0, 'g2': 0, 'g1g2_combined': 0, 'sigma': 0, 'flux': 0
+    }
+    total_bias_per_label = {
+        'g1': 0, 'g2': 0, 'g1g2_combined': 0, 'sigma': 0, 'flux': 0
+    }
+    
+    all_preds = []
 
     for i in range(0, len(test_images), batch_size):
         batch_images = test_images[i:i + batch_size]
         batch_labels = test_labels[i:i + batch_size]
-        loss, preds = eval_step(state, batch_images, batch_labels)
+        loss, preds, loss_per_label, bias_per_label = eval_step(state, batch_images, batch_labels)
+        
+        all_preds.append(preds)
         
         batch_bias = (preds - batch_labels).mean()
         batch_size_actual = len(batch_images)
+        
+        # Accumulate combined metrics
         total_loss += loss * batch_size_actual
         total_bias += batch_bias * batch_size_actual
         total_samples += batch_size_actual
+        
+        # Accumulate per-label metrics
+        for label in total_loss_per_label:
+            total_loss_per_label[label] += loss_per_label[label] * batch_size_actual
+            total_bias_per_label[label] += bias_per_label[label] * batch_size_actual
 
+    # Calculate averages
     avg_loss = total_loss / total_samples
     avg_bias = total_bias / total_samples
-    print(f"Mean Squared Error (MSE) from NN: {avg_loss}")
-    print(f"Average Bias from NN: {avg_bias}")
+    
+    avg_loss_per_label = {
+        label: total / total_samples 
+        for label, total in total_loss_per_label.items()
+    }
+    avg_bias_per_label = {
+        label: total / total_samples 
+        for label, total in total_bias_per_label.items()
+    }
+    total_time = time.time() - start_time
+    
+    # Print combined metrics
+    print(f"\n{BOLD}=== Combined Metrics (ShearNet) ==={END}")
+    print(f"Mean Squared Error (MSE) from ShearNet: {BOLD}{YELLOW}{avg_loss:.6e}{END}")
+    print(f"Average Bias from ShearNet: {BOLD}{YELLOW}{avg_bias:.6e}{END}")
+    print(f"Time taken: {BOLD}{CYAN}{total_time:.2f} seconds{END}")
+    
+    # Print per-label metrics
+    print("\n=== Per-Label Metrics ===")
+    label_names = ['g1', 'g2', 'g1g2_combined', 'sigma', 'flux']
+    for label in label_names:
+        print(f"{label:>15}: MSE = {avg_loss_per_label[label]:.6e}, Bias = {avg_bias_per_label[label]:+.6e}")
+    print()
+    return {
+        'loss': avg_loss,
+        'bias': avg_bias,
+        'loss_per_label': avg_loss_per_label,
+        'bias_per_label': avg_bias_per_label,
+        'all_preds': jnp.concatenate(all_preds) if all_preds else None
+    }
 
 def main():
     # Get the SHEARNET_DATA_PATH environment variable
@@ -87,7 +271,7 @@ def main():
     os.makedirs(default_plot_path, exist_ok=True)
 
     parser = argparse.ArgumentParser(description="Evaluate a trained galaxy shear estimation model.")
-    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility.')
+    parser.add_argument('--seed', type=int, default=58, help='Random seed for reproducibility.')
     parser.add_argument('--load_path', type=str, default=default_save_path, help='Path to load the model parameters.')
     parser.add_argument('--nn', type=str, default='enhanced', choices=['simple', 'enhanced'], help='Neural network architecture to use (simple or enhanced).')
     parser.add_argument('--model_name', type=str, default='my_model', help='Path to load the model parameters.')
@@ -107,7 +291,7 @@ def main():
     load_path = os.path.abspath(args.load_path)
 
     # Generate test data
-    test_images, test_labels = generate_dataset(args.test_samples, args.psf_fwhm, exp=args.exp)
+    test_images, test_labels, test_obs = generate_dataset(args.test_samples, args.psf_fwhm, exp=args.exp, return_obs=True)
     print(f"Shape of test images: {test_images.shape}")
     print(f"Shape of test labels: {test_labels.shape}")
 
@@ -147,7 +331,8 @@ def main():
     eval_model(state, test_images, test_labels)
 
     if args.mcal:
-        eval_mcal(test_images, test_labels, args.psf_fwhm)
+        res_ngmix = eval_ngmix(test_obs, test_labels, seed=1234)
+        _ = eval_mcal(test_images, test_labels, args.psf_fwhm)
 
     #if args.plot_residuals:
     if args.plot:
@@ -176,7 +361,7 @@ def main():
     #if args.plot_scatter:
         print("Plotting scatter plots...")
         scatter_path = os.path.join(df_plot_path, "scatter_plot") if args.plot_path else None
-        preds_mcal = mcal_preds(test_images, args.psf_fwhm) if args.mcal else None
+        preds_mcal = res_ngmix['preds'] if args.mcal else None
         plot_true_vs_predicted(test_labels, predicted_labels, path=scatter_path, mcal=args.mcal, preds_mcal=preds_mcal)
 
     if args.plot_animation:

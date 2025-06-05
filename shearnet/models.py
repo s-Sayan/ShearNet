@@ -37,7 +37,7 @@ class SimpleGalaxyNN(nn.Module):
         x = nn.relu(x)
         x = nn.Dense(64)(x)
         x = nn.relu(x)
-        x = nn.Dense(2)(x)  # Output e1, e2
+        x = nn.Dense(4)(x)  # Output e1, e2
         return x
     
 class EnhancedGalaxyNN(nn.Module):
@@ -66,8 +66,8 @@ class EnhancedGalaxyNN(nn.Module):
         x = nn.Dense(128)(x)
         x = nn.relu(x)
         #x = nn.Dropout(0.5)(x, deterministic=deterministic)  # Dropout applied only if deterministic=False
-        x = nn.Dense(2)(x)
-        x = nn.tanh(x)
+        x = nn.Dense(4)(x)
+        #x = 0.5*nn.tanh(x)
         return x
     
     
