@@ -1,6 +1,16 @@
 LICENSE
 README.md
 setup.py
+shearnet/__init__.py
+shearnet/cli.py
+shearnet/dataset.py
+shearnet/evaluate.py
+shearnet/mcal.py
+shearnet/models.py
+shearnet/ngmix.py
+shearnet/plot_helpers.py
+shearnet/train.py
+shearnet/utils.py
 shearnet.egg-info/PKG-INFO
 shearnet.egg-info/SOURCES.txt
 shearnet.egg-info/dependency_links.txt

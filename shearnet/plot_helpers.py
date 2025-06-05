@@ -5,14 +5,17 @@ from shearnet.mcal import mcal_preds
 from scipy.stats import binned_statistic
 from flax.training import checkpoints, train_state
 
-def plot_learning_curve(losses, path=None):
+def plot_learning_curve(losses, train_loss=None, path=None):
     """Plot loss over epochs."""
     plt.figure(figsize=(8, 6))
-    plt.plot(range(1, len(losses) + 1), losses, marker='o')
+    plt.plot(range(1, len(losses) + 1), losses, label='Validation Loss')
+    if train_loss is not None:
+        plt.plot(range(1, len(train_loss) + 1), train_loss, label='Training Loss')
     plt.yscale('log')
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
     plt.title('Learning Curve')
+    plt.legend(fontsize=12)
     plt.grid()
     if path:
         os.makedirs(os.path.dirname(path), exist_ok=True)  # Ensure directory exists
@@ -109,7 +112,7 @@ def visualize_samples(images, true_labels, predicted_labels, num_samples=5, path
 def plot_true_vs_predicted(true_labels, predicted_labels, path=None, mcal=False, preds_mcal=None):
     """Plot true vs predicted values for both model and MCAL with residuals and error bars."""
     
-    def plot_binned(true, predicted, ax, label_true, label_pred, color_pred, plot_true=False, residuals=None):
+    def plot_binned(true, predicted, ax, label_true, label_pred, color_pred, plot_true=True, residuals=None):
         # Bin data
         bins = np.linspace(min(true), max(true), 20)
         bin_means, bin_edges, _ = binned_statistic(true, predicted, statistic='mean', bins=bins)
