@@ -1,5 +1,4 @@
 import numpy as np
-from shearnet.dataset import sim_func
 
 def measure_moments(im):
     """
@@ -61,6 +60,7 @@ def measure_e1e2(g1=None, g2=None, im=None, sigma=1, scale=0.2, npix=53):
     return e1, e2
 
 def calculate_responsivity(psf_fwhm, seed, h=0.01):
+    from ..core.dataset import sim_func
     obj_im_p = sim_func(h, 0, seed=seed, psf_sigma=psf_fwhm)
     obj_im_m = sim_func(-h, 0, seed=seed, psf_sigma=psf_fwhm)
     e1p, _ = measure_e1e2(im=obj_im_p.image)
@@ -102,6 +102,7 @@ def mcal_preds(images, psf_fwhm):
     Returns:
         tuple: A tuple containing two lists, one for the observed g1 values and one for the observed g2 values.
     """
+    
     preds = []
     for image in images:
         g1, g2 = obs_g1g2(image, psf_fwhm)

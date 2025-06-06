@@ -5,7 +5,6 @@ from tqdm import tqdm
 import multiprocessing as mp
 from multiprocessing import Pool, cpu_count
 import sys
-from pympler import asizeof
 
 
 # Function to remove NaN values and count them
@@ -273,6 +272,10 @@ def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_p
     TO DO: add a label indicating whether the galaxy passed the selection
     cuts for each shear step (i.e. no_shear,1p,1m,2p,2m).
     """
+
+    import multiprocessing as mp
+    mp.set_start_method('spawn', force=True)
+    
     # get image pixel scale (assumes constant across list)
     jacobian = obslist[0]._jacobian
     Tguess = 4*jacobian.get_scale()**2
@@ -412,6 +415,7 @@ def mp_fit_one_single(obslist, prior, rng, psf_model='gauss', gal_model='gauss',
     return data_list, resdict_list
 
 def get_memory_usage(obj):
+    from pympler import asizeof
     """Prints the memory usage of each attribute in an object in MB."""
     memory_usage = {attr: asizeof.asizeof(getattr(obj, attr)) / (1024 * 1024) for attr in obj.__dict__}
     

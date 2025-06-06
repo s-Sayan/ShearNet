@@ -1,7 +1,7 @@
 import os
 import matplotlib.pyplot as plt
 import numpy as np
-from shearnet.mcal import mcal_preds
+from ..methods.mcal import mcal_preds
 from scipy.stats import binned_statistic
 from flax.training import checkpoints, train_state
 
@@ -47,7 +47,7 @@ def plot_residuals(images, true_labels, predicted_labels, path=None, mcal=False,
         plt.figure(figsize=(8, 6))
         plt.hist(residuals_combined, bins=30, alpha=0.7, color='blue', edgecolor='black', label='Combined Residuals')
         if mcal:
-            plt.hist(residuals_combined_mcal, bins=30, alpha=0.5, color='orange', edgecolor='black', label='Combined Residuals (MCAL)')
+            plt.hist(residuals_combined_mcal, bins=30, alpha=0.5, color='orange', edgecolor='black', label='Combined Residuals (NGmix)')
         plt.axvline(0, color='red', linestyle='--', label='Zero Residual')
         plt.xlabel('Residuals')
         plt.ylabel('Frequency')
@@ -64,7 +64,7 @@ def plot_residuals(images, true_labels, predicted_labels, path=None, mcal=False,
     plt.figure(figsize=(8, 6))
     plt.hist(residuals_e1, bins=30, alpha=0.7, color='blue', edgecolor='black', label='Residuals e1')
     if mcal:
-        plt.hist(residuals_e1_mcal, bins=30, alpha=0.5, color='orange', edgecolor='black', label='Residuals e1 (MCAL)')
+        plt.hist(residuals_e1_mcal, bins=30, alpha=0.5, color='orange', edgecolor='black', label='Residuals e1 (NGmix)')
     plt.axvline(0, color='red', linestyle='--', label='Zero Residual e1')
     plt.xlabel('Residuals for e1')
     plt.ylabel('Frequency')
@@ -79,7 +79,7 @@ def plot_residuals(images, true_labels, predicted_labels, path=None, mcal=False,
     plt.figure(figsize=(8, 6))
     plt.hist(residuals_e2, bins=30, alpha=0.7, color='green', edgecolor='black', label='Residuals e2')
     if mcal:
-        plt.hist(residuals_e2_mcal, bins=30, alpha=0.5, color='purple', edgecolor='black', label='Residuals e2 (MCAL)')
+        plt.hist(residuals_e2_mcal, bins=30, alpha=0.5, color='purple', edgecolor='black', label='Residuals e2 (NGmix)')
     plt.axvline(0, color='red', linestyle='--', label='Zero Residual e2')
     plt.xlabel('Residuals for e2')
     plt.ylabel('Frequency')
@@ -112,7 +112,7 @@ def visualize_samples(images, true_labels, predicted_labels, num_samples=5, path
 def plot_true_vs_predicted(true_labels, predicted_labels, path=None, mcal=False, preds_mcal=None):
     """Plot true vs predicted values for both model and MCAL with residuals and error bars."""
     
-    def plot_binned(true, predicted, ax, label_true, label_pred, color_pred, plot_true=True, residuals=None):
+    def plot_binned(true, predicted, ax, label_true, label_pred, color_pred, plot_true=False, residuals=None):
         # Bin data
         bins = np.linspace(min(true), max(true), 20)
         bin_means, bin_edges, _ = binned_statistic(true, predicted, statistic='mean', bins=bins)
@@ -140,52 +140,47 @@ def plot_true_vs_predicted(true_labels, predicted_labels, path=None, mcal=False,
         ax.legend()
         ax.grid()
 
+    # Parameters to plot
+    params = [
+        {'index': 0, 'name': 'e1', 'file_suffix': '_e1_scatter.png'},
+        {'index': 1, 'name': 'e2', 'file_suffix': '_e2_scatter.png'},
+        {'index': 2, 'name': 'sigma', 'file_suffix': '_sigma_scatter.png'},
+        {'index': 3, 'name': 'flux', 'file_suffix': '_flux_scatter.png'}
+    ]
+    
+    for param in params:
+        idx = param['index']
+        name = param['name']
         
-
-    # Plot for e1
-    fig, (ax1, ax2) = plt.subplots(2, 1, gridspec_kw={'height_ratios': [3, 1]}, figsize=(8, 6), sharex=True)
-
-    # Upper plot: True vs Predicted for both model and MCAL
-    plot_binned(true_labels[:, 0], predicted_labels[:, 0], ax1, 'e1', 'shearnet e1', 'blue',  residuals=None)
-    
-    if mcal and preds_mcal is not None:
-        plot_binned(true_labels[:, 0], preds_mcal[:, 0], ax1, 'e1', 'mcal e1', 'green', plot_true=True,residuals=None)
-
-    # Lower plot: Residuals for both model and MCAL
-    residual_model = predicted_labels[:, 0] - true_labels[:, 0]
-    plot_binned(true_labels[:, 0], predicted_labels[:, 0], ax2, 'e1', 'shearnet e1', 'blue',  residuals=residual_model)
-    
-    if mcal and preds_mcal is not None:
-        residual_mcal = preds_mcal[:, 0] - true_labels[:, 0]
-        plot_binned(true_labels[:, 0], preds_mcal[:, 0], ax2, 'e1', 'mcal e1', 'green', plot_true=True,residuals=residual_mcal)
-
-    if path:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        plt.savefig(path + "_e1_scatter.png")
-    else:
-        plt.show()
-
-    # Plot for e2
-    fig, (ax1, ax2) = plt.subplots(2, 1, gridspec_kw={'height_ratios': [3, 1]}, figsize=(8, 6), sharex=True)
-
-    # Upper plot: True vs Predicted for both model and MCAL
-    plot_binned(true_labels[:, 1], predicted_labels[:, 1], ax1, 'e2', 'shearnet e2', 'blue', residuals=None)
-    
-    if mcal and preds_mcal is not None:
-        plot_binned(true_labels[:, 1], preds_mcal[:, 1], ax1, 'e2', 'mcal e2', 'green', plot_true=True, residuals=None)
-
-    # Lower plot: Residuals for both model and MCAL
-    residual_model = true_labels[:, 1] - predicted_labels[:, 1]
-    plot_binned(true_labels[:, 1], predicted_labels[:, 1], ax2, 'e2', 'shearnet e2', 'blue', residuals=residual_model)
-    
-    if mcal and preds_mcal is not None:
-        residual_mcal = true_labels[:, 1] - preds_mcal[:, 1]
-        plot_binned(true_labels[:, 1], preds_mcal[:, 1], ax2, 'e2', 'mcal e2', 'green', plot_true=True, residuals=residual_mcal)
-
-    if path:
-        plt.savefig(path + "_e2_scatter.png")
-    else:
-        plt.show()
+        # Skip if we don't have this parameter in the predictions
+        if predicted_labels.shape[1] <= idx:
+            continue
+            
+        fig, (ax1, ax2) = plt.subplots(2, 1, gridspec_kw={'height_ratios': [3, 1]}, figsize=(8, 6), sharex=True)
+        
+        # Upper plot: True vs Predicted for both model and MCAL
+        plot_binned(true_labels[:, idx], predicted_labels[:, idx], ax1, name, f'ShearNet {name}', 'blue', residuals=None)
+        
+        if mcal and preds_mcal is not None and preds_mcal.shape[1] > idx:
+            plot_binned(true_labels[:, idx], preds_mcal[:, idx], ax1, name, f'NGmix {name}', 'green', plot_true=True, residuals=None)
+        
+        # Lower plot: Residuals for both model and MCAL
+        residual_model = predicted_labels[:, idx] - true_labels[:, idx]
+        plot_binned(true_labels[:, idx], predicted_labels[:, idx], ax2, name, f'ShearNet {name}', 'blue', residuals=residual_model)
+        
+        if mcal and preds_mcal is not None and preds_mcal.shape[1] > idx:
+            residual_mcal = preds_mcal[:, idx] - true_labels[:, idx]
+            plot_binned(true_labels[:, idx], preds_mcal[:, idx], ax2, name, f'NGmix {name}', 'green', plot_true=True, residuals=residual_mcal)
+        
+        plt.tight_layout()
+        
+        if path:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            plt.savefig(path + param['file_suffix'])
+        else:
+            plt.show()
+        
+        plt.close()
 
 
 def plot_true_vs_predicted_anim(true_labels, predicted_labels, path=None, mcal=False, preds_mcal=None):
