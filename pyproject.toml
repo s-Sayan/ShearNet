@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shearnet"
+version = "0.1.0"
+authors = [
+    {name = "Sayan Saha", email = "sayan.iiserp@gmail.com"},
+]
+description = "Neural network-based galaxy shear estimation with JAX"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+]
+keywords = ["astronomy", "machine-learning", "galaxy", "shear-estimation", "jax"]
+
+dependencies = [
+    "jax>=0.4.0",
+    "jaxlib>=0.4.0", 
+    "flax>=0.7.0",
+    "optax>=0.1.0",
+    "orbax-checkpoint==0.11.13",
+    "galsim>=2.3",
+    "numba>=0.57.0",
+    "pympler>=1.0",
+    "numpy>=1.20",
+    "scipy>=1.7",
+    "matplotlib>=3.5",
+    "tqdm>=4.60",
+    "pyyaml>=5.4",
+]
+
+[project.optional-dependencies]
+# GPU support (CUDA 12 only)
+gpu = [
+    "jax[cuda12]>=0.4.0",  # GPU version with CUDA 12
+]
+
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=3.0",
+    "black>=22.0",
+    "flake8>=4.0",
+    "isort>=5.0",
+    "ipython>=8.0",
+    "jupyter>=1.0",
+]
+[project.urls]
+Homepage = "https://github.com/s-Sayan/ShearNet"
+Repository = "https://github.com/s-Sayan/ShearNet.git"
+
+[project.scripts]
+shearnet-train = "shearnet.cli.train:main"
+shearnet-eval = "shearnet.cli.evaluate:main"
+
+[tool.setuptools.packages.find]
+include = ["shearnet*"]
+
+[tool.setuptools.package-data]
+shearnet = ["config/*.yaml"]

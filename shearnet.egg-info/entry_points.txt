@@ -1,3 +1,0 @@
-[console_scripts]
-shearnet-eval = shearnet.evaluate:main
-shearnet-train = shearnet.cli:main
