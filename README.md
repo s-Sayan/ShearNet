@@ -35,7 +35,7 @@ python scripts/post_installation.py
 ### Train a model
 
 ```bash
-shearnet-train --epochs 10 --batch_size 64 --samples 10000  --psf_sigma 0.25 --save --model_name cnn1 --plot --nn cnn --patience 20
+shearnet-train --epochs 10 --batch_size 64 --samples 10000  --psf_sigma 0.25 --model_name cnn1 --plot --nn cnn --patience 20
 ```
 
 ### Evaluate a model
