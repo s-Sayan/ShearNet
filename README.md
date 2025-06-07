@@ -35,18 +35,18 @@ python scripts/post_installation.py
 ### Train a model
 
 ```bash
-shearnet-train --epochs 10 --batch_size 64 --samples 10000  --psf_fwhm 0.25 --save --model_name cnn1 --plot --nn cnn --patience 20
+shearnet-train --epochs 10 --batch_size 64 --samples 10000  --psf_sigma 0.25 --save --model_name cnn1 --plot --nn cnn --patience 20
 ```
 
 ### Evaluate a model
 
 ```bash
-shearnet-eval --model_name cnn1 --test_samples 1000 --psf_fwhm 0.25 --plot --mcal --nn cnn
+shearnet-eval --model_name cnn1 --test_samples 1000 --psf_sigma 0.25 --plot --mcal --nn cnn
 ```
 
 Key options:
 
-- `-nn`: Model type (`simple`, `enhanced`, or `resnet`)
+- `-nn`: Model type (`mlp`, `cnn`, or `resnet`)
 - `-mcal`: Compare with metacalibration and NGmix
 - `-plot`: Generate plots
 
@@ -61,7 +61,6 @@ ShearNet provides shear estimates for g1, g2, sigma, and flux parameters. Exampl
 | Method          | MSE (g1, g2) | Time  |
 |-----------------|--------------|-------|
 | ShearNet        | ~6e-4        | <1s   |
-| NGmix           | ~2e-3        | ~60s  |
 | Moment-based    | ~1e-2        | ~7s   |
 ```
 

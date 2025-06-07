@@ -59,45 +59,45 @@ def measure_e1e2(g1=None, g2=None, im=None, sigma=1, scale=0.2, npix=53):
     e2 = Mcross / Mr
     return e1, e2
 
-def calculate_responsivity(psf_fwhm, seed, h=0.01):
+def calculate_responsivity(psf_sigma, seed, h=0.01):
     from ..core.dataset import sim_func
-    obj_im_p = sim_func(h, 0, seed=seed, psf_sigma=psf_fwhm)
-    obj_im_m = sim_func(-h, 0, seed=seed, psf_sigma=psf_fwhm)
+    obj_im_p = sim_func(h, 0, seed=seed, psf_sigma=psf_sigma)
+    obj_im_m = sim_func(-h, 0, seed=seed, psf_sigma=psf_sigma)
     e1p, _ = measure_e1e2(im=obj_im_p.image)
     e1m, _ = measure_e1e2(im=obj_im_m.image)
     R1 = (e1p - e1m) / (2 * h)
-    obj_im_p = sim_func(0, h, seed=seed, psf_sigma=psf_fwhm)
-    obj_im_m = sim_func(0, -h, seed=seed, psf_sigma=psf_fwhm)
+    obj_im_p = sim_func(0, h, seed=seed, psf_sigma=psf_sigma)
+    obj_im_m = sim_func(0, -h, seed=seed, psf_sigma=psf_sigma)
     _, e2p = measure_e1e2(im=obj_im_p.image)
     _, e2m  = measure_e1e2(im=obj_im_m.image)
     R2 = (e2p - e2m) / (2 * h)
     return R1, R2
 
-def obs_g1g2(im, psf_fwhm):
+def obs_g1g2(im, psf_sigma):
     """
     Calculates the observed g1 and g2 values for a given image and PSF FWHM.
 
     Args:
         im (numpy.ndarray): The input image.
-        psf_fwhm (float): The FWHM of the PSF.
+        psf_sigma (float): The Sigma of the PSF.
 
     Returns:
         tuple: A tuple containing the observed g1 and g2 values.
     """
-    R1, R2 = calculate_responsivity(psf_fwhm, 1234)
+    R1, R2 = calculate_responsivity(psf_sigma, 1234)
     e1, e2 = measure_e1e2(im=im)
     obs_g1 = e1 / R1
     obs_g2 = e2 / R2
     
     return obs_g1, obs_g2
 
-def mcal_preds(images, psf_fwhm):
+def mcal_preds(images, psf_sigma):
     """
     Calculates the observed g1 and g2 values for a list of images and a given PSF FWHM.
 
     Args:
         images (list): A list of input images.
-        psf_fwhm (float): The FWHM of the PSF.
+        psf_sigma (float): The Sigma of the PSF.
 
     Returns:
         tuple: A tuple containing two lists, one for the observed g1 values and one for the observed g2 values.
@@ -105,7 +105,7 @@ def mcal_preds(images, psf_fwhm):
     
     preds = []
     for image in images:
-        g1, g2 = obs_g1g2(image, psf_fwhm)
+        g1, g2 = obs_g1g2(image, psf_sigma)
         g1g2 = np.array([g1, g2])
         preds.append(g1g2)
     

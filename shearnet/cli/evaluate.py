@@ -1,13 +1,6 @@
 """Command-line interface for evaluating trained ShearNet models."""
 
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TF messages
-os.environ['ABSL_MIN_LOG_LEVEL'] = 'error'  # Suppress absl messages
-
-# Now your imports
-import logging
-logging.getLogger('absl').setLevel(logging.ERROR)
-
 import argparse
 import jax.random as random
 import jax.numpy as jnp
@@ -46,11 +39,10 @@ def main():
                         help='Neural network architecture to use.')
     parser.add_argument('--model_name', type=str, default='my_model', help='Name of the model to load.')
     parser.add_argument('--test_samples', type=int, default=1000, help='Number of test samples.')
-    parser.add_argument('--psf_fwhm', type=float, default=1.0, help='PSF FWHM for simulation.')
+    parser.add_argument('--psf_sigma', type=float, default=1.0, help='PSF FWHM for simulation.')
     parser.add_argument('--exp', type=str, default='ideal', help='Which experiment to run')
     parser.add_argument('--mcal', action='store_true', help='Compare with metacalibration and NGmix')
     parser.add_argument('--plot', action='store_true', help='Generate all plots')
-    parser.add_argument('--combined_residuals', action='store_true', help='Plot combined residuals for e1 and e2.')
     parser.add_argument('--plot_path', type=str, default=default_plot_path, help='Path to save plots.')
     parser.add_argument('--plot_animation', action='store_true', help='Plot animation of scatter plot.')
     
@@ -59,7 +51,7 @@ def main():
 
     # Generate test data
     test_images, test_labels, test_obs = generate_dataset(
-        args.test_samples, args.psf_fwhm, exp=args.exp, seed=args.seed, return_obs=True
+        args.test_samples, args.psf_sigma, exp=args.exp, seed=args.seed, return_obs=True
     )
     print(f"Shape of test images: {test_images.shape}")
     print(f"Shape of test labels: {test_labels.shape}")
@@ -98,9 +90,16 @@ def main():
     # Print the list of matching directories
     for idx, directory in enumerate(matching_dirs, start=1):
         print(f"Matching directory {idx}: {directory}")
+        
+    # If there's only one matching directory, use it
+    if len(matching_dirs) == 1:
+        model_dir = os.path.join(load_path, matching_dirs[0])
+    else:
+        # If multiple directories, you might want to choose the latest one
+        # This assumes directory names include timestamps or are sortable
+        model_dir = os.path.join(load_path, sorted(matching_dirs)[-1])
 
-    # Load the trained model
-    state = checkpoints.restore_checkpoint(ckpt_dir=load_path, target=state, prefix=args.model_name)
+    state = checkpoints.restore_checkpoint(ckpt_dir=model_dir, target=state)
     print("Model checkpoint loaded successfully.")
 
     # Evaluate the model
@@ -108,8 +107,8 @@ def main():
 
     # Compare with other methods if requested
     if args.mcal:
-        ngmix_results = eval_ngmix(test_obs, test_labels, seed=1234)
-        mcal_results = eval_mcal(test_images, test_labels, args.psf_fwhm)
+        ngmix_results = eval_ngmix(test_obs, test_labels, seed=1234, psf_model='gauss', gal_model='gauss')
+        mcal_results = eval_mcal(test_images, test_labels, args.psf_sigma)
 
     # Generate plots if requested
     if args.plot:
@@ -119,15 +118,13 @@ def main():
         os.makedirs(df_plot_path, exist_ok=True)
         
         print("Plotting residuals...")
-        residuals_path = os.path.join(df_plot_path, "residuals_plot") if args.plot_path else None
+        residuals_path = os.path.join(df_plot_path, "residuals") if args.plot_path else None
         plot_residuals(
-            test_images,
             test_labels,
             predicted_labels,
             path=residuals_path,
             mcal=args.mcal,
-            psf_fwhm=args.psf_fwhm,
-            combined=args.combined_residuals
+            preds_ngmix=ngmix_results['preds']
         )
 
         print("Plotting samples...")
@@ -135,11 +132,11 @@ def main():
         visualize_samples(test_images, test_labels, predicted_labels, path=samples_path)
 
         print("Plotting scatter plots...")
-        scatter_path = os.path.join(df_plot_path, "scatter_plot") if args.plot_path else None
-        preds_mcal = ngmix_results['preds'] if args.mcal else None
+        scatter_path = os.path.join(df_plot_path, "scatters") if args.plot_path else None
+        preds_ngmix = ngmix_results['preds'] if args.mcal else None
         plot_true_vs_predicted(
             test_labels, predicted_labels, path=scatter_path, 
-            mcal=args.mcal, preds_mcal=preds_mcal
+            mcal=args.mcal, preds_mcal=preds_ngmix
         )
 
     if args.plot_animation:
@@ -149,7 +146,7 @@ def main():
         animate_model_epochs(
             test_labels, load_path, args.plot_path, epochs, 
             state=state, model_name=args.model_name, 
-            mcal=args.mcal, preds_mcal=preds_mcal if args.mcal else None
+            mcal=args.mcal, preds_mcal=preds_ngmix if args.mcal else None
         )
 
 
