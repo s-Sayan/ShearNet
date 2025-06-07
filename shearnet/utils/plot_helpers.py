@@ -23,70 +23,56 @@ def plot_learning_curve(losses, train_loss=None, path=None):
     else:
         plt.show()  # Display the plot if no path is provided
 
-def plot_residuals(images, true_labels, predicted_labels, path=None, mcal=False, psf_fwhm=1.0, combined=False):
+def plot_residuals(true_labels, predicted_labels, path=None, mcal=False, preds_ngmix=None, combined=False):
     """
-    Plot the residuals (true - predicted) for both e1 and e2.
-    Optionally combine residuals for e1 and e2 into a single distribution.
+    Plot the residuals (true - predicted) for both g1 and g2.
+    Optionally combine residuals for g1 and g2 into a single distribution.
     """
+
     # Compute residuals
-    residuals_e1 = predicted_labels[:, 0] - true_labels[:, 0]  # Residual for e1
-    residuals_e2 = predicted_labels[:, 1] - true_labels[:, 1]   # Residual for e2
+    residuals = {
+        "g1": (predicted_labels[:, 0] - true_labels[:, 0], preds_ngmix[:, 0] - true_labels[:, 0]),
+        "g2": (predicted_labels[:, 1] - true_labels[:, 1], preds_ngmix[:, 1] - true_labels[:, 1]),
+        "sigma": (predicted_labels[:, 2] - true_labels[:, 2], preds_ngmix[:, 2] - true_labels[:, 2]),
+        "flux": (predicted_labels[:, 3] - true_labels[:, 3], preds_ngmix[:, 3] - true_labels[:, 3]),
+    }
 
-    if mcal:
-        preds_mcal = mcal_preds(images, psf_fwhm)
-        residuals_e1_mcal = true_labels[:, 0] - preds_mcal[:, 0]
-        residuals_e2_mcal = true_labels[:, 1] - preds_mcal[:, 1]
+    fig, axs = plt.subplots(2, 2, figsize=(12, 10))
+    bins = 50
 
-    if combined:
-        # Combine residuals for e1 and e2
-        residuals_combined = np.concatenate([residuals_e1, residuals_e2])
-        if mcal:
-            residuals_combined_mcal = np.concatenate([residuals_e1_mcal, residuals_e2_mcal])
+    for ax, (key, (res_nn, res_ngmix)) in zip(axs.flat, residuals.items()):
+        # Clip extremes to focus on the bulk distribution
+        clip_min = np.percentile(np.concatenate([res_nn, res_ngmix]), 1)
+        clip_max = np.percentile(np.concatenate([res_nn, res_ngmix]), 99)
 
-        # Plot combined residuals
-        plt.figure(figsize=(8, 6))
-        plt.hist(residuals_combined, bins=30, alpha=0.7, color='blue', edgecolor='black', label='Combined Residuals')
-        if mcal:
-            plt.hist(residuals_combined_mcal, bins=30, alpha=0.5, color='orange', edgecolor='black', label='Combined Residuals (NGmix)')
-        plt.axvline(0, color='red', linestyle='--', label='Zero Residual')
-        plt.xlabel('Residuals')
-        plt.ylabel('Frequency')
-        plt.title('Combined Residuals Distribution')
-        plt.legend()
-        if path:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            plt.savefig(path + "_combined.png")
-        else:
-            plt.show()
-        return
+        res_nn_clipped = res_nn[(res_nn >= clip_min) & (res_nn <= clip_max)]
+        res_ngmix_clipped = res_ngmix[(res_ngmix >= clip_min) & (res_ngmix <= clip_max)]
 
-    # Plot residuals for e1
-    plt.figure(figsize=(8, 6))
-    plt.hist(residuals_e1, bins=30, alpha=0.7, color='blue', edgecolor='black', label='Residuals e1')
-    if mcal:
-        plt.hist(residuals_e1_mcal, bins=30, alpha=0.5, color='orange', edgecolor='black', label='Residuals e1 (NGmix)')
-    plt.axvline(0, color='red', linestyle='--', label='Zero Residual e1')
-    plt.xlabel('Residuals for e1')
-    plt.ylabel('Frequency')
-    plt.title('Residuals Distribution for e1')
-    plt.legend()
+        # Plot histograms
+        ax.hist(res_nn_clipped, bins=bins, alpha=0.6, label="ShearNet", color='blue', density=True)
+        ax.hist(res_ngmix_clipped, bins=bins, alpha=0.6, label="ngmix", color='green', density=True)
+        
+        ax.axvline(0, color='red', linestyle='--')
+
+        # Add mean ± std lines (optional)
+        for label, res, color in [("ShearNet", res_nn_clipped, 'blue'), ("ngmix", res_ngmix_clipped, 'green')]:
+            mean = np.mean(res)
+            std = np.std(res)
+            ax.axvline(mean, color=color, linestyle='-', linewidth=1)
+            ax.axvline(mean + std, color=color, linestyle=':', linewidth=1)
+            ax.axvline(mean - std, color=color, linestyle=':', linewidth=1)
+
+        # Labels
+        ax.set_title(f"{key} residuals (pred - true)")
+        ax.set_xlabel("Residual")
+        ax.set_ylabel("Density")
+        ax.legend()
+        ax.grid(True)
+
+    plt.tight_layout()
     if path:
-        plt.savefig(path + "_e1.png")
-    else:
-        plt.show()
-
-    # Plot residuals for e2
-    plt.figure(figsize=(8, 6))
-    plt.hist(residuals_e2, bins=30, alpha=0.7, color='green', edgecolor='black', label='Residuals e2')
-    if mcal:
-        plt.hist(residuals_e2_mcal, bins=30, alpha=0.5, color='purple', edgecolor='black', label='Residuals e2 (NGmix)')
-    plt.axvline(0, color='red', linestyle='--', label='Zero Residual e2')
-    plt.xlabel('Residuals for e2')
-    plt.ylabel('Frequency')
-    plt.title('Residuals Distribution for e2')
-    plt.legend()
-    if path:
-        plt.savefig(path + "_e2.png")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        plt.savefig(path + ".png")
     else:
         plt.show()
 
@@ -110,6 +96,195 @@ def visualize_samples(images, true_labels, predicted_labels, num_samples=5, path
         plt.show()
 
 def plot_true_vs_predicted(true_labels, predicted_labels, path=None, mcal=False, preds_mcal=None):
+
+    # True values
+    g1_true = true_labels[:, 0]
+    g2_true = true_labels[:, 1]
+    sigma_true = true_labels[:, 2]
+    flux_true = true_labels[:, 3]
+
+    # NN predictions
+    g1_nn = predicted_labels[:, 0]
+    g2_nn = predicted_labels[:, 1]
+    sigma_nn = predicted_labels[:, 2]
+    flux_nn = predicted_labels[:, 3]
+
+    # ngmix predictions
+    g1_ngmix = preds_mcal[:, 0]
+    g2_ngmix = preds_mcal[:, 1]
+    sigma_ngmix = preds_mcal[:, 2]
+    flux_ngmix = preds_mcal[:, 3]
+
+    # Set up plot
+    fig, axs = plt.subplots(2, 2, figsize=(14, 12))
+
+    quantities = [
+        ("g1", g1_true, g1_nn, g1_ngmix, -1., 1.),
+        ("g2", g2_true, g2_nn, g2_ngmix, -1., 1.),
+        ("sigma", sigma_true, sigma_nn, sigma_ngmix, 0.2, 2.5),
+        ("flux", flux_true, flux_nn, flux_ngmix, 1, 5.)
+    ]
+
+    for ax, (name, true, nn, ngmix, vmin, vmax) in zip(axs.flat, quantities):
+        # Plot predictions
+        ax.scatter(true, nn, alpha=0.4, label="ShearNet", s=10, color='blue', marker='o')
+        ax.scatter(true, ngmix, alpha=0.4, label="ngmix", s=10, color='green', marker='^')
+        
+        # Reference line
+        ax.plot([vmin, vmax], [vmin, vmax], 'r--', label='y = x')
+        
+        # Axes formatting
+        ax.set_xlim(vmin, vmax)
+        ax.set_ylim(vmin, vmax)
+        ax.set_aspect('equal', adjustable='box')
+        ax.set_xlabel(f"{name} true")
+        ax.set_ylabel(f"{name} predicted")
+        ax.set_title(f"{name} prediction")
+
+        # Optional: log scale for sigma or flux
+        #if name in ["sigma", "flux"]:
+        #    ax.set_xscale('log')
+        #    ax.set_yscale('log')
+
+        # Metrics
+        rmse_nn = np.sqrt(np.mean((nn - true)**2))
+        bias_nn = np.mean(nn - true)
+        rmse_ngmix = np.sqrt(np.mean((ngmix - true)**2))
+        bias_ngmix = np.mean(ngmix - true)
+
+        ax.text(0.05, 0.95, 
+                f"ShearNet  RMSE: {rmse_nn:.3e}\nShearNet  Bias: {bias_nn:.3e}\n"
+                f"NGmix RMSE: {rmse_ngmix:.3e}\nNGmix Bias: {bias_ngmix:.3e}",
+                transform=ax.transAxes, fontsize=9,
+                verticalalignment='top',
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.6))
+
+        ax.legend()
+
+    plt.tight_layout()
+    if path:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        plt.savefig(path + ".png")
+    else:
+        plt.show()
+    
+    plt.close()
+
+def plot_residuals_v1(true_labels, predicted_labels, path=None, mcal=False, preds_ngmix=None, combined=False):
+    """
+    Plot the residuals (true - predicted) for both g1 and g2.
+    Optionally combine residuals for g1 and g2 into a single distribution.
+    """
+    # Compute residuals
+    residuals_e1 = predicted_labels[:, 0] - true_labels[:, 0]  # Residual for e1
+    residuals_e2 = predicted_labels[:, 1] - true_labels[:, 1]   # Residual for e2
+    residuals_sigma = predicted_labels[:, 2] - true_labels[:, 2]  # Residual for sigma
+    residuals_flux = predicted_labels[:, 3] - true_labels[:, 3]   # Residual for flux
+
+    if mcal and preds_ngmix is not None:
+        residuals_e1_ngmix = true_labels[:, 0] - preds_ngmix[:, 0]
+        residuals_e2_ngmix = true_labels[:, 1] - preds_ngmix[:, 1]
+        residuals_sigma_ngmix = true_labels[:, 2] - preds_ngmix[:, 2]
+        residuals_flux_ngmix = true_labels[:, 3] - preds_ngmix[:, 3]
+
+    if combined:
+        # Combine residuals for e1 and e2
+        residuals_combined = np.concatenate([residuals_e1, residuals_e2])
+        if mcal:
+            residuals_combined_ngmix = np.concatenate([residuals_e1_ngmix, residuals_e2_ngmix])
+
+        # Plot combined residuals
+        plt.figure(figsize=(8, 6))
+        plt.hist(residuals_combined, bins=30, alpha=0.7, color='blue', edgecolor='black', label='Combined Residuals')
+        if mcal:
+            plt.hist(residuals_combined_ngmix, bins=30, alpha=0.5, color='orange', edgecolor='black', label='Combined Residuals (NGmix)')
+        plt.axvline(0, color='red', linestyle='--', label='Zero Residual')
+        plt.xlabel('Residuals')
+        plt.ylabel('Frequency')
+        plt.title('Combined Residuals Distribution')
+        plt.legend()
+        if path:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            plt.savefig(path + "_combined.png")
+        else:
+            plt.show()
+        return
+
+    # Plot residuals for e1
+    plt.figure(figsize=(8, 6))
+    mask_e1 = (residuals_e1 >= -0.05) & (residuals_e1 <= 0.05)
+    print(f"Number of objects excluded from g1 NN mask: {np.sum(~mask_e1)}")
+
+    plt.hist(residuals_e1[mask_e1], bins=30, alpha=0.7, color='blue', edgecolor='black', label='Residuals e1')
+    if mcal:
+        mask_e1_ngmix = (residuals_e1_ngmix >= -0.15) & (residuals_e1_ngmix <= 0.15)
+        print(f"Number of objects excluded from g1 ngmix mask: {np.sum(~mask_e1_ngmix)}")
+        plt.hist(residuals_e1_ngmix[mask_e1_ngmix], bins=30, alpha=0.5, color='orange', edgecolor='black', label='Residuals e1 (NGmix)')        
+    plt.axvline(0, color='red', linestyle='--', label='Zero Residual g1')
+    #plt.xlim(-0.5, 0.5)    
+    plt.xlabel('Residuals for g1')
+    plt.ylabel('Frequency')
+    plt.title('Residuals Distribution for g1')
+    plt.legend()
+    if path:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        plt.savefig(path + "_g1.png")
+    else:
+        plt.show()
+
+    # Plot residuals for e2
+    plt.figure(figsize=(8, 6))
+
+    mask_e2 = (residuals_e2 >= -0.05) & (residuals_e2 <= 0.05)
+    print(f"Number of objects excluded from g2 NN mask: {np.sum(~mask_e1)}")
+
+    plt.hist(residuals_e2[mask_e2], bins=30, alpha=0.7, color='blue', edgecolor='black', label='Residuals e1')    
+    if mcal:
+        mask_e2_ngmix = (residuals_e2_ngmix >= -0.15) & (residuals_e1_ngmix <= 0.15)
+        print(f"Number of objects excluded from g2 mask: {np.sum(~mask_e2_ngmix)}")
+        plt.hist(residuals_e2_ngmix[mask_e2_ngmix], bins=30, alpha=0.5, color='purple', edgecolor='black', label='Residuals g2 (NGmix)')
+    plt.axvline(0, color='red', linestyle='--', label='Zero Residual g2')
+    plt.xlabel('Residuals for g2')
+    plt.ylabel('Frequency')
+    plt.title('Residuals Distribution for g2')
+    plt.legend()
+    if path:
+        plt.savefig(path + "_g2.png")
+    else:
+        plt.show()
+
+    # Plot residuals for sigma
+    plt.figure(figsize=(8, 6))
+    plt.hist(residuals_sigma, bins=30, alpha=0.7, color='teal', edgecolor='black', label='Residuals sigma (ShearNet)')
+    if mcal:
+        plt.hist(residuals_sigma_ngmix, bins=30, alpha=0.5, color='cyan', edgecolor='black', label='Residuals sigma (NGmix)')
+    plt.axvline(0, color='red', linestyle='--', label='Zero Residual sigma')
+    plt.xlabel('Residuals for sigma')
+    plt.ylabel('Frequency')
+    plt.title('Residuals Distribution for sigma')
+    plt.legend()
+    if path:
+        plt.savefig(path + "_sigma.png")
+    else:
+        plt.show()
+
+    # Plot residuals for flux
+    plt.figure(figsize=(8, 6))
+    plt.hist(residuals_flux, bins=30, alpha=0.7, color='brown', edgecolor='black', label='Residuals flux')
+    if mcal:
+        plt.hist(residuals_flux_ngmix, bins=30, alpha=0.5, color='tan', edgecolor='black', label='Residuals flux (NGmix)')
+    plt.axvline(0, color='red', linestyle='--', label='Zero Residual flux')
+    plt.xlabel('Residuals for flux')
+    plt.ylabel('Frequency')
+    plt.title('Residuals Distribution for flux')
+    plt.legend()
+    if path:
+        plt.savefig(path + "_flux.png")
+    else:
+        plt.show()
+
+
+def plot_true_vs_predicted_v1(true_labels, predicted_labels, path=None, mcal=False, preds_mcal=None):
     """Plot true vs predicted values for both model and MCAL with residuals and error bars."""
     
     def plot_binned(true, predicted, ax, label_true, label_pred, color_pred, plot_true=False, residuals=None):

@@ -1,0 +1,23 @@
+# configs/cnn6_experiment.yaml
+# Configuration matching your exact command:
+# shearnet-train --epochs 10 --batch_size 64 --samples 10000 --psf_sigma 0.25 --save --model_name cnn6 --plot --nn enhanced --patience 20
+
+dataset:
+  samples: 10000
+  psf_sigma: 0.25
+
+model:
+  type: "cnn"
+  
+training:
+  epochs: 10
+  batch_size: 64
+  patience: 20
+  
+output:
+  save: true
+  model_name: "cnn6"
+  
+plotting:
+  plot: true
+  save_loss: true

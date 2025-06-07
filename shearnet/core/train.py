@@ -90,7 +90,7 @@ def train_modelv1(images, labels, rng_key, epochs=10, batch_size=32, nn="simple"
 
 def train_model(images, labels, rng_key, epochs=10, batch_size=32, nn="simple", 
                   save_path=None, model_name="my_model", val_split=0.2, eval_interval=1, 
-                  patience=5, weight_decay=1e-4):
+                  patience=5, lr=1e-3, weight_decay=1e-4):
     """Enhanced training function with validation and early stopping."""
     # Split into train and validation sets
     split_idx = int(len(images) * (1 - val_split))
@@ -108,7 +108,7 @@ def train_model(images, labels, rng_key, epochs=10, batch_size=32, nn="simple",
     
     params = model.init(rng_key, jnp.ones_like(images[0]))  # Initialize model parameters
     lr_schedule = optax.cosine_decay_schedule(
-        init_value=1e-3, 
+        init_value=lr, 
         decay_steps=epochs * (len(train_images) // batch_size)
     )
     tx = optax.adamw(learning_rate=lr_schedule, weight_decay=weight_decay)
@@ -155,9 +155,9 @@ def train_model(images, labels, rng_key, epochs=10, batch_size=32, nn="simple",
             if val_loss < best_val_loss:
                 best_val_loss = val_loss  # Update the best validation loss
                 patience_counter = 0  # Reset patience counter
-                if save_path:  # Save the best model
-                    save_checkpoint(state, step=epoch + 1, checkpoint_dir=save_path, 
-                                  model_name=f"{model_name}_best", overwrite=True)
+                #if save_path:  # Save the best model
+                #    save_checkpoint(state, step=epoch + 1, checkpoint_dir=save_path, 
+                #                  model_name=f"{model_name}_best", overwrite=True)
                 print(f"New best validation loss: {val_loss:.4e}")
             else:
                 patience_counter += 1
@@ -167,9 +167,9 @@ def train_model(images, labels, rng_key, epochs=10, batch_size=32, nn="simple",
                 print("Early stopping triggered.")
                 break
 
-        # Save checkpoint
-        if save_path:
-            save_checkpoint(state, step=epoch + 1, checkpoint_dir=save_path, 
-                          model_name=model_name, overwrite=True)
+    # Save checkpoint
+    if save_path:
+        save_checkpoint(state, step=epoch + 1, checkpoint_dir=save_path, 
+                        model_name=model_name, overwrite=True)
 
     return state, train_losses, val_losses
