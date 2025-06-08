@@ -8,7 +8,7 @@ from ..methods.ngmix import g1_g2_sigma_sample
 psf_fnmae = '/projects/mccleary_group/saha/codes/.empty/psf_cutouts_superbit.npy'
 weight_fname = '/projects/mccleary_group/saha/codes/.empty/weights_cutouts_superbit.npy'
 
-def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', seed=42, return_obs=False):
+def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, return_obs=False):
     images = []
     labels = []
     obs = []
@@ -20,7 +20,7 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp
         #sigma = np.random.uniform(0.5, 1.5)  # Random sigma  
         flux=np.random.uniform(1, 5)  # Random flux
         #psf_sigma = np.random.uniform(0.5, 1.5)
-        nse_sd=1e-5
+        
         obj_obs = sim_func(g1, g2, sigma=sigma, flux=flux, psf_sigma=psf_sigma, nse_sd = nse_sd,  type=type, npix=npix, scale=scale, seed=i, exp=exp)
         images.append(obj_obs.image)
         labels.append(np.array([g1, g2, sigma, flux], dtype=np.float32))

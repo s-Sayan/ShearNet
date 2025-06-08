@@ -72,6 +72,7 @@ class Config:
             'psf_sigma': 'dataset.psf_sigma',
             'exp': 'dataset.exp',
             'seed': 'dataset.seed',
+            'nse_sd': 'dataset.nse_sd',
             
             # Model args
             'nn': 'model.type',

@@ -97,6 +97,7 @@ def main():
         test_samples = args.test_samples if args.test_samples is not None else config.get('evaluation.test_samples')
         nn = config.get('model.type')
         psf_sigma = config.get('dataset.psf_sigma')
+        nse_sd = config.get('dataset.nse_sd')
         exp = config.get('dataset.exp')
         mcal = args.mcal or config.get('comparison.ngmix', False)
         plot = args.plot or config.get('plotting.plot', False)
@@ -109,7 +110,7 @@ def main():
 
     # Generate test data
     test_images, test_labels, test_obs = generate_dataset(
-        test_samples, psf_sigma, exp=exp, seed=seed, return_obs=True
+        test_samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd, return_obs=True
     )
     print(f"Shape of test images: {test_images.shape}")
     print(f"Shape of test labels: {test_labels.shape}")

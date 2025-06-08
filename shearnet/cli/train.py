@@ -54,6 +54,7 @@ Examples:
     parser.add_argument('--samples', type=int, default=None, help='Number of training samples.')
     parser.add_argument('--patience', type=int, default=None, help='Patience for early stopping.')
     parser.add_argument('--psf_sigma', type=float, default=None, help='PSF sigma for simulation.')
+    parser.add_argument('--nse_sd', type=float, default=None, help='noise sd for simulation.')
     parser.add_argument('--exp', type=str, default=None, help='Which experiment to run')
     parser.add_argument('--nn', type=str, default=None, help='Which model to use')
     parser.add_argument('--learning_rate', type=float, default=None, 
@@ -93,6 +94,7 @@ def main():
         'samples': 10000,
         'patience': 10,
         'psf_sigma': 0.25,
+        'nse_sd': 1e-5,
         'exp': 'ideal',
         'nn': 'mlp',
         'learning_rate': 1e-3,
@@ -120,6 +122,7 @@ def main():
         # Get values from config (after overrides applied)
         samples = config.get('dataset.samples')
         psf_sigma = config.get('dataset.psf_sigma')
+        nse_sd = config.get('dataset.nse_sd')
         exp = config.get('dataset.exp')
         seed = config.get('dataset.seed')
         epochs = config.get('training.epochs')
@@ -137,6 +140,7 @@ def main():
         # Use argparse values with defaults (original behavior)
         samples = args.samples if args.samples is not None else DEFAULTS['samples']
         psf_sigma = args.psf_sigma if args.psf_sigma is not None else DEFAULTS['psf_sigma']
+        nse_sd = args.nse_sd if args.nse_sd is not None else DEFAULTS['nse_sd']
         exp = args.exp if args.exp is not None else DEFAULTS['exp']
         seed = args.seed if args.seed is not None else DEFAULTS['seed']
         epochs = args.epochs if args.epochs is not None else DEFAULTS['epochs']
@@ -155,6 +159,7 @@ def main():
         # Update with actual values being used
         config._set_nested('dataset.samples', samples)
         config._set_nested('dataset.psf_sigma', psf_sigma)
+        config._set_nested('dataset.nse_sd', nse_sd)
         config._set_nested('dataset.exp', exp)
         config._set_nested('dataset.seed', seed)
         config._set_nested('model.type', nn)
@@ -180,7 +185,7 @@ def main():
     
     get_device()
 
-    train_images, train_labels = generate_dataset(samples, psf_sigma, exp=exp, seed=seed)
+    train_images, train_labels = generate_dataset(samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd)
     rng_key = random.PRNGKey(seed)
     print(f"Shape of training images: {train_images.shape}")
     print(f"Shape of training labels: {train_labels.shape}")

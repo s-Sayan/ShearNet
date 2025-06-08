@@ -2,6 +2,7 @@
 dataset:
   samples: 100000
   psf_sigma: 0.25
+  nse_sd: 1.0e-2
   exp: "ideal"
   seed: 42
 
@@ -18,7 +19,7 @@ evaluation:
   seed: 58
 
 output:
-  model_name: "cnn8"
+  model_name: "cnn9"
   
 plotting:
   plot: true
