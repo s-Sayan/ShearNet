@@ -42,6 +42,8 @@ Examples:
     
     parser.add_argument('--model_name', type=str, required=True, 
                        help='Name of the model to load.')
+    parser.add_argument('--config', type=str, default=None,
+                       help='Path to configuration file (optional)')
     parser.add_argument('--seed', type=int, default=None, 
                        help='Random seed for test data generation (overrides config).')
     parser.add_argument('--test_samples', type=int, default=None, 
@@ -73,8 +75,17 @@ def main():
     os.makedirs(default_save_path, exist_ok=True)
     os.makedirs(default_plot_path, exist_ok=True)
     
-    # Load model's training config
-    model_config_path = os.path.join(default_plot_path, args.model_name, 'training_config.yaml')
+    if args.model_name is None:
+        if args.config is not None:
+            model_name = Config(args.config).get('output.model_name')
+            if model_name is None:
+                raise ValueError("Model name not found in the configuration file.")
+        else:
+            raise ValueError("Either --model_name or --config must be provided.")
+    else:
+        model_name = args.model_name
+
+    model_config_path = os.path.join(default_plot_path, model_name, 'training_config.yaml')
     
     if os.path.exists(model_config_path):
         print(f"\nLoading model config from: {model_config_path}")
@@ -121,10 +132,10 @@ def main():
         apply_fn=model.apply, params=init_params, tx=optax.adam(1e-3)
     )
 
-    # Check for directories that start with args.model_name
+    # Check for directories that start with model_name
     matching_dirs = [
         d for d in os.listdir(load_path) 
-        if os.path.isdir(os.path.join(load_path, d)) and d.startswith(args.model_name)
+        if os.path.isdir(os.path.join(load_path, d)) and d.startswith(model_name)
     ]
 
     # Print the number of matching directories
@@ -132,7 +143,7 @@ def main():
 
     # Handle the case when no matching directories are found
     if not matching_dirs:
-        raise FileNotFoundError(f"No directory found in {load_path} starting with '{args.model_name}'.")
+        raise FileNotFoundError(f"No directory found in {load_path} starting with '{model_name}'.")
 
     # Print the list of matching directories
     for idx, directory in enumerate(matching_dirs, start=1):
@@ -162,7 +173,7 @@ def main():
     if plot:
         predicted_labels = state.apply_fn(state.params, test_images, deterministic=True)
         
-        df_plot_path = os.path.join(plot_path, args.model_name)
+        df_plot_path = os.path.join(plot_path, model_name)
         os.makedirs(df_plot_path, exist_ok=True)
         
         print("\nGenerating plots...")
@@ -194,7 +205,7 @@ def main():
         epochs = np.arange(1, 101)  # Assuming 100 epochs
         animate_model_epochs(
             test_labels, load_path, plot_path, epochs, 
-            state=state, model_name=args.model_name, 
+            state=state, model_name=model_name, 
             mcal=mcal, preds_mcal=ngmix_results['preds'] if ngmix_results else None
         )
     
