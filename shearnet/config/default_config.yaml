@@ -4,13 +4,13 @@
 # Dataset configuration
 dataset:
   samples: 10000
-  psf_sigma: 1.0  # PSF sigma
+  psf_sigma: 0.25
   exp: "ideal"
   seed: 42
 
 # Model configuration  
 model:
-  type: "mlp"  # Options: simple, enhanced, resnet
+  type: "cnn"  # Options: mlp, cnn, resnet
   
 # Training configuration
 training:
@@ -29,7 +29,6 @@ evaluation:
   
 # Output configuration
 output:
-  save: true  # Whether to save model
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
   model_name: "my_model"
@@ -37,11 +36,10 @@ output:
 # Plotting configuration
 plotting:
   plot: true  # Whether to plot learning curves
-  save_loss: true  # Whether to save loss arrays
   
 # Comparison methods
 comparison:
-  mcal: false
+  mcal: true
   ngmix: true
   psf_model: "gauss"
   gal_model: "gauss"

@@ -8,7 +8,6 @@ import numpy as np
 import optax
 from flax.training import checkpoints, train_state
 
-from ..config.config_handler import Config
 from ..core.dataset import generate_dataset
 from ..core.models import SimpleGalaxyNN, EnhancedGalaxyNN, GalaxyResNet
 from ..utils.metrics import eval_model, eval_ngmix, eval_mcal
@@ -19,99 +18,53 @@ from ..utils.plot_helpers import (
     animate_model_epochs
 )
 
-def create_parser():
-    """Create argument parser for evaluation."""
-    parser = argparse.ArgumentParser(
-        description="Evaluate a trained galaxy shear estimation model.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Evaluate using saved model config
-  shearnet-eval --model_name cnn6
-  
-  # Override test samples
-  shearnet-eval --model_name cnn6 --test_samples 5000
-  
-  # Enable comparison methods and plotting
-  shearnet-eval --model_name cnn6 --mcal --plot
-  
-  # Override random seed for different test set
-  shearnet-eval --model_name cnn6 --seed 123 --plot
-        """
-    )
-    
-    parser.add_argument('--model_name', type=str, required=True, 
-                       help='Name of the model to load.')
-    parser.add_argument('--seed', type=int, default=None, 
-                       help='Random seed for test data generation (overrides config).')
-    parser.add_argument('--test_samples', type=int, default=None, 
-                       help='Number of test samples (overrides config).')
-    parser.add_argument('--mcal', action='store_true', 
-                       help='Compare with metacalibration and NGmix')
-    parser.add_argument('--plot', action='store_true', 
-                       help='Generate all plots')
-    parser.add_argument('--plot_animation', action='store_true', 
-                       help='Plot animation of scatter plot.')
-    
-    return parser
-
 
 def main():
     """Main function for model evaluation."""
-    # Parse arguments
-    parser = create_parser()
-    args = parser.parse_args()
-    
     # Get the SHEARNET_DATA_PATH environment variable
     data_path = os.getenv('SHEARNET_DATA_PATH', os.path.abspath('.'))
     
-    # Set default paths
+    # Set default save_path and plot_path
     default_save_path = os.path.join(data_path, 'model_checkpoint')
     default_plot_path = os.path.join(data_path, 'plots')
 
     # Ensure the directories exist
     os.makedirs(default_save_path, exist_ok=True)
     os.makedirs(default_plot_path, exist_ok=True)
+
+    parser = argparse.ArgumentParser(description="Evaluate a trained galaxy shear estimation model.")
+    parser.add_argument('--seed', type=int, default=58, help='Random seed for reproducibility.')
+    parser.add_argument('--load_path', type=str, default=default_save_path, help='Path to load the model parameters.')
+    parser.add_argument('--nn', type=str, default='mlp', choices=['mlp', 'cnn', 'resnet'], 
+                        help='Neural network architecture to use.')
+    parser.add_argument('--model_name', type=str, default='my_model', help='Name of the model to load.')
+    parser.add_argument('--test_samples', type=int, default=1000, help='Number of test samples.')
+    parser.add_argument('--psf_sigma', type=float, default=1.0, help='PSF FWHM for simulation.')
+    parser.add_argument('--exp', type=str, default='ideal', help='Which experiment to run')
+    parser.add_argument('--mcal', action='store_true', help='Compare with metacalibration and NGmix')
+    parser.add_argument('--plot', action='store_true', help='Generate all plots')
+    parser.add_argument('--plot_path', type=str, default=default_plot_path, help='Path to save plots.')
+    parser.add_argument('--plot_animation', action='store_true', help='Plot animation of scatter plot.')
     
-    # Load model's training config
-    model_config_path = os.path.join(default_plot_path, args.model_name, 'training_config.yaml')
-    
-    if os.path.exists(model_config_path):
-        print(f"\nLoading model config from: {model_config_path}")
-        config = Config(model_config_path)
-        config.print_eval_config()
-        
-        # Get values from config
-        seed = args.seed if args.seed is not None else config.get('evaluation.seed')
-        test_samples = args.test_samples if args.test_samples is not None else config.get('evaluation.test_samples')
-        nn = config.get('model.type')
-        psf_sigma = config.get('dataset.psf_sigma')
-        exp = config.get('dataset.exp')
-        mcal = args.mcal or config.get('comparison.ngmix', False)
-        plot = args.plot or config.get('plotting.plot', False)
-        plot_animation = args.plot_animation or config.get('plotting.animation', False)
-    else:
-        raise FileNotFoundError(f"No training config found at {model_config_path}")
-    
-    load_path = os.path.abspath(default_save_path)
-    plot_path = os.path.abspath(default_plot_path)
+    args = parser.parse_args()
+    load_path = os.path.abspath(args.load_path)
 
     # Generate test data
     test_images, test_labels, test_obs = generate_dataset(
-        test_samples, psf_sigma, exp=exp, seed=seed, return_obs=True
+        args.test_samples, args.psf_sigma, exp=args.exp, seed=args.seed, return_obs=True
     )
     print(f"Shape of test images: {test_images.shape}")
     print(f"Shape of test labels: {test_labels.shape}")
 
     # Initialize the model and its parameters
-    rng_key = random.PRNGKey(seed)
+    rng_key = random.PRNGKey(args.seed)
     
     # Model selection
-    if nn == "mlp":
+    if args.nn == "mlp":
         model = SimpleGalaxyNN()
-    elif nn == "cnn":
+    elif args.nn == "cnn":
         model = EnhancedGalaxyNN()
-    elif nn == "resnet":
+    elif args.nn == "resnet":
         model = GalaxyResNet() 
     else:
         raise ValueError("Invalid model type specified.")
@@ -153,52 +106,48 @@ def main():
     nn_results = eval_model(state, test_images, test_labels)
 
     # Compare with other methods if requested
-    ngmix_results = None
-    if mcal:
+    if args.mcal:
         ngmix_results = eval_ngmix(test_obs, test_labels, seed=1234, psf_model='gauss', gal_model='gauss')
-        mcal_results = eval_mcal(test_images, test_labels, psf_sigma)
+        mcal_results = eval_mcal(test_images, test_labels, args.psf_sigma)
 
     # Generate plots if requested
-    if plot:
+    if args.plot:
         predicted_labels = state.apply_fn(state.params, test_images, deterministic=True)
         
-        df_plot_path = os.path.join(plot_path, args.model_name)
+        df_plot_path = os.path.join(args.plot_path, args.model_name)
         os.makedirs(df_plot_path, exist_ok=True)
         
-        print("\nGenerating plots...")
         print("Plotting residuals...")
-        residuals_path = os.path.join(df_plot_path, "residuals")
+        residuals_path = os.path.join(df_plot_path, "residuals") if args.plot_path else None
         plot_residuals(
             test_labels,
             predicted_labels,
             path=residuals_path,
-            mcal=mcal,
-            preds_ngmix=ngmix_results['preds'] if ngmix_results else None
+            mcal=args.mcal,
+            preds_ngmix=ngmix_results['preds']
         )
 
         print("Plotting samples...")
-        samples_path = os.path.join(df_plot_path, "samples_plot.png")
+        samples_path = os.path.join(df_plot_path, "samples_plot.png") if args.plot_path else None
         visualize_samples(test_images, test_labels, predicted_labels, path=samples_path)
 
         print("Plotting scatter plots...")
-        scatter_path = os.path.join(df_plot_path, "scatters")
-        preds_ngmix = ngmix_results['preds'] if ngmix_results else None
+        scatter_path = os.path.join(df_plot_path, "scatters") if args.plot_path else None
+        preds_ngmix = ngmix_results['preds'] if args.mcal else None
         plot_true_vs_predicted(
             test_labels, predicted_labels, path=scatter_path, 
-            mcal=mcal, preds_mcal=preds_ngmix
+            mcal=args.mcal, preds_mcal=preds_ngmix
         )
 
-    if plot_animation:
-        print("\nGenerating animation...")
-        animation_path = os.path.join(df_plot_path, "animation_plot")
+    if args.plot_animation:
+        # Under development
+        animation_path = os.path.join(df_plot_path, "animation_plot") if args.plot_path else None
         epochs = np.arange(1, 101)  # Assuming 100 epochs
         animate_model_epochs(
-            test_labels, load_path, plot_path, epochs, 
+            test_labels, load_path, args.plot_path, epochs, 
             state=state, model_name=args.model_name, 
-            mcal=mcal, preds_mcal=ngmix_results['preds'] if ngmix_results else None
+            mcal=args.mcal, preds_mcal=preds_ngmix if args.mcal else None
         )
-    
-    print("\nEvaluation complete!")
 
 
 if __name__ == "__main__":

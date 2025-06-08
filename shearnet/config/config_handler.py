@@ -69,7 +69,7 @@ class Config:
         return {
             # Dataset args
             'samples': 'dataset.samples',
-            'psf_sigma': 'dataset.psf_sigma',  # Your actual parameter name
+            'psf_sigma': 'dataset.psf_sigma',
             'exp': 'dataset.exp',
             'seed': 'dataset.seed',
             
@@ -84,13 +84,12 @@ class Config:
             'patience': 'training.patience',
             
             # Output args
-            'save': 'output.save',  # Maps --save flag to output.save
             'save_path': 'output.save_path',
             'plot_path': 'output.plot_path',
             'model_name': 'output.model_name',
             
             # Plotting args
-            'plot': 'plotting.plot',  # Maps --plot flag to plotting.plot
+            'plot': 'plotting.plot',
         }
     
     def _set_nested(self, path: str, value: Any) -> None:
@@ -130,6 +129,22 @@ class Config:
         print("="*50)
         
         for section in ['dataset', 'model', 'training', 'output', 'plotting']:
+            if section in self.config:
+                print(f"\n{section}:")
+                for key, value in self.config[section].items():
+                    print(f"  {key}: {value}")
+        print("="*50 + "\n")
+
+    def print_eval_config(self) -> None:
+        """Print only evaluation-relevant configuration."""
+        print("\n" + "="*50)
+        print("Evaluation Configuration")
+        print("="*50)
+        
+        # Only print relevant sections for evaluation
+        sections_to_print = ['evaluation', 'model', 'plotting', 'comparison']
+        
+        for section in sections_to_print:
             if section in self.config:
                 print(f"\n{section}:")
                 for key, value in self.config[section].items():

@@ -1,23 +1,30 @@
 # configs/cnn6_experiment.yaml
-# Configuration matching your exact command:
-# shearnet-train --epochs 10 --batch_size 64 --samples 10000 --psf_sigma 0.25 --save --model_name cnn6 --plot --nn enhanced --patience 20
-
 dataset:
-  samples: 10000
+  samples: 100000
   psf_sigma: 0.25
+  exp: "ideal"
+  seed: 42
 
 model:
   type: "cnn"
   
 training:
-  epochs: 10
-  batch_size: 64
+  epochs: 300
+  batch_size: 128
   patience: 20
-  
+
+evaluation:
+  test_samples: 5000
+  seed: 58
+
 output:
-  save: true
-  model_name: "cnn6"
+  model_name: "cnn8"
   
 plotting:
   plot: true
-  save_loss: true
+
+# Comparison methods
+comparison:
+  ngmix: true
+  psf_model: "gauss"
+  gal_model: "gauss"
