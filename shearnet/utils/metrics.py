@@ -18,6 +18,51 @@ CYAN = '\033[96m'
 GREEN = '\033[92m'
 END = '\033[0m'
 
+def remove_nan_preds_multi(pred1: np.ndarray, pred2: np.ndarray, labels: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Remove rows where either pred1 or pred2 contains NaNs.
+
+    Parameters
+    ----------
+    pred1 : np.ndarray
+        First prediction array (e.g., model predictions), shape (N, D)
+    pred2 : np.ndarray
+        Second prediction array (e.g., ngmix predictions), shape (N, D)
+    labels : np.ndarray
+        Ground truth labels, shape (N, D)
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray, np.ndarray]
+        (filtered_pred1, filtered_pred2, filtered_labels)
+    """
+    mask = ~np.any(np.isnan(pred1) | np.isnan(pred2), axis=1)
+    num_removed = np.sum(~mask)
+    if num_removed > 0:
+        print(f"[NaN Filter] Removed {num_removed} rows with NaNs in predictions.")
+    return pred1[mask], pred2[mask], labels[mask]
+
+def remove_nan_preds(preds: np.ndarray, labels: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Remove rows where preds contain NaNs.
+
+    Parameters
+    ----------
+    preds : np.ndarray
+        Array of predicted values, shape (N, D)
+    labels : np.ndarray
+        Array of true values, shape (N, D)
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        Tuple of (filtered_preds, corresponding_labels)
+    """
+    mask = ~np.any(np.isnan(preds), axis=1)
+    num_removed = np.sum(~mask)
+    if num_removed > 0:
+        print(f"[NaN Filter] Removed {num_removed} rows with NaNs in predictions.")
+    return preds[mask], labels[mask]
 
 def loss_fn_mcal(images, labels, psf_fwhm):
     """Calculate the loss for the MCAL model.
