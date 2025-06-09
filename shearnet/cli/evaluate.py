@@ -11,7 +11,7 @@ from flax.training import checkpoints, train_state
 from ..config.config_handler import Config
 from ..core.dataset import generate_dataset
 from ..core.models import SimpleGalaxyNN, EnhancedGalaxyNN, GalaxyResNet
-from ..utils.metrics import eval_model, eval_ngmix, eval_mcal
+from ..utils.metrics import eval_model, eval_ngmix, eval_mcal, remove_nan_preds_multi
 from ..utils.plot_helpers import (
     plot_residuals, 
     visualize_samples, 
@@ -169,11 +169,13 @@ def main():
     if mcal:
         ngmix_results = eval_ngmix(test_obs, test_labels, seed=1234, psf_model='gauss', gal_model='gauss')
         mcal_results = eval_mcal(test_images, test_labels, psf_sigma)
+        ngmix_preds = ngmix_results['preds']
 
     # Generate plots if requested
     if plot:
         predicted_labels = state.apply_fn(state.params, test_images, deterministic=True)
-        
+        predicted_labels, ngmix_preds, test_labels = remove_nan_preds_multi(predicted_labels, ngmix_preds, test_labels)
+
         df_plot_path = os.path.join(plot_path, model_name)
         os.makedirs(df_plot_path, exist_ok=True)
         
@@ -185,7 +187,7 @@ def main():
             predicted_labels,
             path=residuals_path,
             mcal=mcal,
-            preds_ngmix=ngmix_results['preds'] if ngmix_results else None
+            preds_ngmix=ngmix_preds if ngmix_results else None
         )
 
         print("Plotting samples...")
@@ -194,7 +196,7 @@ def main():
 
         print("Plotting scatter plots...")
         scatter_path = os.path.join(df_plot_path, "scatters")
-        preds_ngmix = ngmix_results['preds'] if ngmix_results else None
+        preds_ngmix = ngmix_preds if ngmix_results else None
         plot_true_vs_predicted(
             test_labels, predicted_labels, path=scatter_path, 
             mcal=mcal, preds_mcal=preds_ngmix
