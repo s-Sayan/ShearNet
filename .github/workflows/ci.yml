@@ -42,3 +42,10 @@ jobs:
           shearnet-train --config configs/dry_run.yaml
         env:
           SHEARNET_DATA_PATH: ${{ runner.temp }}/shearnet_data
+
+
+      - name: Run shearnet-eval (dry run)
+        env:
+          SHEARNET_DATA_PATH: ${{ runner.temp }}/shearnet_data
+        run: |
+          shearnet-eval --model_name dry_run      

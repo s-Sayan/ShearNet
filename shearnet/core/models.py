@@ -77,6 +77,7 @@ class GalaxyResNet(nn.Module):
         if x.ndim == 2:  # If batch dimension is missing
             x = jnp.expand_dims(x, axis=0)
         assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
+        x = jnp.expand_dims(x, axis=-1)
         x = nn.Conv(32, (3, 3))(x)  # First convolution (32 filters)
         x = nn.leaky_relu(x, negative_slope=0.01)
         print(f"Shape before resnet: {x.shape}")
