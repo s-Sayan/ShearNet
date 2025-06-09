@@ -1,0 +1,44 @@
+name: ShearNet CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shearnet-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies from pyproject
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      - name: Install ngmix from GitHub
+        run: |
+          pip install git+https://github.com/esheldon/ngmix.git
+
+      - name: Set environment variable and run post install
+        run: |
+          export SHEARNET_DATA_PATH="$HOME/shearnet_data"
+          mkdir -p "$SHEARNET_DATA_PATH"
+          echo "Mock user input: $SHEARNET_DATA_PATH"
+          yes "$SHEARNET_DATA_PATH" | python scripts/post_installation.py
+        env:
+          SHEARNET_DATA_PATH: ${{ runner.temp }}/shearnet_data
+
+      - name: Run training (dry run or short config)
+        run: |
+          shearnet-train --config configs/dry_run.yaml
+        env:
+          SHEARNET_DATA_PATH: ${{ runner.temp }}/shearnet_data
