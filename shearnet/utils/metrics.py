@@ -133,20 +133,31 @@ def loss_fn_ngmix(obs_list, labels, seed=1234, psf_model='gauss', gal_model='gau
     rng = np.random.RandomState(seed)
     datalist = mp_fit_one(obs_list, prior, rng, psf_model=psf_model, gal_model=gal_model)
     preds = ngmix_pred(datalist)
+
+    pred_filtered, labels_filtered = remove_nan_preds(preds, labels)
     
     # Combined loss
-    loss = optax.l2_loss(preds, labels).mean()
-    
+    loss = optax.l2_loss(pred_filtered, labels_filtered).mean()
+    bias = (pred_filtered - labels_filtered).mean()
     # Per-label losses
     loss_per_label = {
-        'g1': optax.l2_loss(preds[:, 0], labels[:, 0]).mean(),
-        'g2': optax.l2_loss(preds[:, 1], labels[:, 1]).mean(),
-        'g1g2_combined': optax.l2_loss(preds[:, :2], labels[:, :2]).mean(),  # Combined g1,g2
-        'sigma': optax.l2_loss(preds[:, 2], labels[:, 2]).mean(),
-        'flux': optax.l2_loss(preds[:, 3], labels[:, 3]).mean()
+        'g1': optax.l2_loss(pred_filtered[:, 0], labels_filtered[:, 0]).mean(),
+        'g2': optax.l2_loss(pred_filtered[:, 1], labels_filtered[:, 1]).mean(),
+        'g1g2_combined': optax.l2_loss(pred_filtered[:, :2], labels_filtered[:, :2]).mean(),  # Combined g1,g2
+        'sigma': optax.l2_loss(pred_filtered[:, 2], labels_filtered[:, 2]).mean(),
+        'flux': optax.l2_loss(pred_filtered[:, 3], labels_filtered[:, 3]).mean()
     }
 
-    return loss, preds, loss_per_label
+    # Per-label biases
+    bias_per_label = {
+        'g1': (pred_filtered[:, 0] - labels_filtered[:, 0]).mean(),
+        'g2': (pred_filtered[:, 1] - labels_filtered[:, 1]).mean(),
+        'g1g2_combined': (pred_filtered[:, :2] - labels_filtered[:, :2]).mean(),  # Average bias for g1,g2
+        'sigma': (pred_filtered[:, 2] - labels_filtered[:, 2]).mean(),
+        'flux': (pred_filtered[:, 3] - labels_filtered[:, 3]).mean()
+    }
+
+    return loss, preds, loss_per_label, bias, bias_per_label
 
 
 def loss_fn_eval(state, params, images, labels):
@@ -274,20 +285,8 @@ def eval_ngmix(test_obs, test_labels, seed=1234, psf_model='gauss', gal_model='g
     """
     start_time = time.time()
 
-    loss, preds, loss_per_label = loss_fn_ngmix(test_obs, test_labels, seed, 
+    loss, preds, loss_per_label, bias, bias_per_label = loss_fn_ngmix(test_obs, test_labels, seed, 
                                                 psf_model=psf_model, gal_model=gal_model)
-    
-    # Combined metrics
-    bias = (preds - test_labels).mean()
-    
-    # Per-label biases
-    bias_per_label = {
-        'g1': (preds[:, 0] - test_labels[:, 0]).mean(),
-        'g2': (preds[:, 1] - test_labels[:, 1]).mean(),
-        'g1g2_combined': (preds[:, :2] - test_labels[:, :2]).mean(),  # Average bias for g1,g2
-        'sigma': (preds[:, 2] - test_labels[:, 2]).mean(),
-        'flux': (preds[:, 3] - test_labels[:, 3]).mean()
-    }
     
     total_time = time.time() - start_time
     
