@@ -37,13 +37,15 @@ python scripts/post_installation.py
 ```bash
 shearnet-train --epochs 10 --batch_size 64 --samples 10000  --psf_sigma 0.25 --model_name cnn1 --plot --nn cnn --patience 20
 ```
-
+or
+```bash
+shearnet-train --config ./configs/cnn6_experiment.yaml
+```
 ### Evaluate a model
 
 ```bash
-shearnet-eval --model_name cnn1 --test_samples 1000 --psf_sigma 0.25 --plot --mcal --nn cnn
+shearnet-eval --model_name cnn6 --test_samples 1000
 ```
-
 Key options:
 
 - `-nn`: Model type (`mlp`, `cnn`, or `resnet`)
