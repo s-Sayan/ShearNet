@@ -10,12 +10,12 @@ model:
   type: "cnn"
   
 training:
-  epochs: 1
+  epochs: 10
   batch_size: 16
   patience: 20
 
 evaluation:
-  test_samples: 5000
+  test_samples: 10
   seed: 58
 
 output:
