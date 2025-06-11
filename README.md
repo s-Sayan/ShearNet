@@ -27,7 +27,6 @@ conda activate shearnet
 pip install -e .# or pip install -e ".[gpu]" for GPU
 pip install git+https://github.com/esheldon/ngmix.git
 python scripts/post_installation.py
-
 ```
 
 ## Usage
@@ -39,12 +38,12 @@ shearnet-train --epochs 10 --batch_size 64 --samples 10000  --psf_sigma 0.25 --m
 ```
 or
 ```bash
-shearnet-train --config ./configs/cnn6_experiment.yaml
+shearnet-train --config ./configs/example.yaml
 ```
 ### Evaluate a model
 
 ```bash
-shearnet-eval --model_name cnn6 --test_samples 1000
+shearnet-eval --model_name cnn1 --test_samples 5000
 ```
 Key options:
 
