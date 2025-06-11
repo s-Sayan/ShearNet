@@ -80,7 +80,7 @@ class GalaxyResNet(nn.Module):
         x = jnp.expand_dims(x, axis=-1)
         x = nn.Conv(32, (3, 3))(x)  # First convolution (32 filters)
         x = nn.leaky_relu(x, negative_slope=0.01)
-        print(f"Shape before resnet: {x.shape}")
+        #print(f"Shape before resnet: {x.shape}")
         # Use ResidualBlocks for feature extraction
         x = ResidualBlock(64)(x)  # First residual block with 64 filters
         x = ResidualBlock(128)(x)  # Second residual block with 128 filters
@@ -97,7 +97,7 @@ class GalaxyResNet(nn.Module):
        
         # Flatten the output of the conv layers for the fully connected layers
         x = jnp.reshape(x, (x.shape[0], -1))
-        print(f"Shape after resnet: {x.shape}")
+        #print(f"Shape after resnet: {x.shape}")
 
         # Ensure that the flattened dimension does not exceed ~200
         #assert x.shape[1] <= 200, f"Flattened dimension is too large: {x.shape[1]}"
