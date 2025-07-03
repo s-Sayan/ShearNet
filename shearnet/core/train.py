@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import optax
 from flax.training import train_state, checkpoints
-from .models import SimpleGalaxyNN, EnhancedGalaxyNN, GalaxyResNet
+from .models import OriginalGalaxyNN, EnhancedGalaxyNN, OriginalGalaxyResNet, GalaxyResNet, ResearchBackedGalaxyResNet
 
 
 def save_checkpoint(state, step, checkpoint_dir, model_name, overwrite=True):
@@ -44,50 +44,6 @@ def eval_step(state, images, labels):
     return loss
 
 
-def train_modelv1(images, labels, rng_key, epochs=10, batch_size=32, nn="simple", save_path=None, model_name="my_model"):
-    """Original training function without validation."""
-    if nn == "simple":
-        model = SimpleGalaxyNN()  # Initialize the model
-    elif nn == "enhanced":
-        model = EnhancedGalaxyNN()  # Initialize the complex model
-    elif nn == "resnet":
-        model = GalaxyResNet()  # Initialize the ResNet model
-    else:
-        raise ValueError("Invalid model type specified.")
-    
-    params = model.init(rng_key, jnp.ones_like(images[0]))  # Initialize model parameters
-    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=optax.adam(1e-3))
-    
-    epoch_losses = []
-    for epoch in range(epochs):
-        print(f"Epoch {epoch + 1}/{epochs}")
-        # Shuffle the data at the beginning of each epoch
-        rng_key, subkey = jax.random.split(rng_key)
-        perm = jax.random.permutation(subkey, len(images))  # Create a permutation of indices
-        shuffled_images = images[perm]  # Apply the permutation to images
-        shuffled_labels = labels[perm]  # Apply the same permutation to labels
-        epoch_loss = 0
-        count = 0
-
-        with tqdm(total=len(images) // batch_size) as pbar:
-            for i in range(0, len(images), batch_size):
-                batch_images = shuffled_images[i:i + batch_size]
-                batch_labels = shuffled_labels[i:i + batch_size]
-                state, loss = train_step(state, batch_images, batch_labels)  
-                epoch_loss += loss
-                count += 1
-                pbar.update(1)
-        print(f"Loss: {loss.item()}")
-        epoch_loss /= count
-        epoch_losses.append(epoch_loss)
-
-        # Save the model after every epoch if a save path is provided
-        if save_path:
-            save_checkpoint(state, step=epoch + 1, checkpoint_dir=save_path, model_name=model_name, overwrite=True)
-    
-    return state, epoch_losses
-
-
 def train_model(images, labels, rng_key, epochs=10, batch_size=32, nn="simple", 
                   save_path=None, model_name="my_model", val_split=0.2, eval_interval=1, 
                   patience=5, lr=1e-3, weight_decay=1e-4):
@@ -97,12 +53,16 @@ def train_model(images, labels, rng_key, epochs=10, batch_size=32, nn="simple",
     train_images, val_images = images[:split_idx], images[split_idx:]
     train_labels, val_labels = labels[:split_idx], labels[split_idx:]
 
-    if nn == "mlp":
-        model = SimpleGalaxyNN()  # Initialize the model
-    elif nn == "cnn":
-        model = EnhancedGalaxyNN()  # Initialize the complex model
+    if nn == "cnn":
+        model = OriginalGalaxyNN()
+    elif nn == "dev_cnn":
+        model = EnhancedGalaxyNN()
     elif nn == "resnet":
-        model = GalaxyResNet()  # Initialize the ResNet model
+        model = OriginalGalaxyResNet()
+    elif nn == "dev_resnet":
+        model = GalaxyResNet()
+    elif nn == "research_backed":
+        model = ResearchBackedGalaxyResNet()
     else:
         raise ValueError("Invalid model type specified.")
     
