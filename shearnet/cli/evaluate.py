@@ -10,7 +10,7 @@ from flax.training import checkpoints, train_state
 
 from ..config.config_handler import Config
 from ..core.dataset import generate_dataset
-from ..core.models import SimpleGalaxyNN, EnhancedGalaxyNN, GalaxyResNet
+from ..core.models import OriginalGalaxyNN, EnhancedGalaxyNN, OriginalGalaxyResNet, GalaxyResNet, ResearchBackedGalaxyResNet
 from ..utils.metrics import eval_model, eval_ngmix, eval_mcal, remove_nan_preds_multi
 from ..utils.plot_helpers import (
     plot_residuals, 
@@ -119,12 +119,16 @@ def main():
     rng_key = random.PRNGKey(seed)
     
     # Model selection
-    if nn == "mlp":
-        model = SimpleGalaxyNN()
-    elif nn == "cnn":
+    if nn == "cnn":
+        model = OriginalGalaxyNN()
+    elif nn == "dev_cnn":
         model = EnhancedGalaxyNN()
     elif nn == "resnet":
-        model = GalaxyResNet() 
+        model = OriginalGalaxyResNet()
+    elif nn == "dev_resnet":
+        model = GalaxyResNet()
+    elif nn == "research_backed":
+        model = ResearchBackedGalaxyResNet()
     else:
         raise ValueError("Invalid model type specified.")
         

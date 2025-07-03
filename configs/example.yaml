@@ -3,12 +3,12 @@ dataset:
   samples: 100000
   psf_sigma: 0.25
   exp: "ideal"
-  nse_sd: 1.0e-5
+  nse_sd: 1.0e-3
   seed: 42
 
 # Model configuration  
 model:
-  type: "cnn"  # Options: mlp, cnn, resnet
+  type: "cnn"  # Options: cnn, dev_cnn, resnet, dev_resnet
   
 # Training configuration
 training:
@@ -29,7 +29,7 @@ evaluation:
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "cnn1"
+  model_name: "control_cnn_high_noise"
   
 # Plotting configuration
 plotting:
