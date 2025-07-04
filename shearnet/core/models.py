@@ -1,6 +1,28 @@
 import flax.linen as nn
 import jax.numpy as jnp
 
+def handleInput(x):
+    """Convert input to standardized 4D format with 2 channels."""
+    # Handle batch dimension
+    if x.ndim == 2:
+        x = jnp.expand_dims(x, axis=0)
+    if x.ndim == 3:
+        x = jnp.expand_dims(x, axis=-1)
+    
+    assert x.ndim == 4, f"Expected 4D input, got {x.shape}"
+    
+    # Handle channel dimension
+    if x.shape[-1] == 1:
+        # Single channel - duplicate for PSF compatibility
+        x = jnp.concatenate([x, x], axis=-1)
+    elif x.shape[-1] == 2:
+        # Two channels - use as-is
+        pass
+    else:
+        raise ValueError(f"Expected 1 or 2 input channels, got {x.shape[-1]}")
+        
+    return x
+
 class ResidualBlock(nn.Module):
     filters: int
     kernel_size: tuple = (3, 3)
@@ -55,13 +77,7 @@ class MultiScaleResidualBlock(nn.Module):
 class OriginalGalaxyNN(nn.Module):
     @nn.compact
     def __call__(self, x, deterministic: bool = False):
-        # Input handling 
-        if x.ndim == 2:
-            x = jnp.expand_dims(x, axis=0)
-        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
-        
-        x = jnp.expand_dims(x, axis=-1)
-        
+        x = handleInput(x)\
         # Simple conv stack with pooling
         x = nn.Conv(16, (3, 3), padding='SAME')(x)
         x = nn.relu(x)
@@ -90,12 +106,7 @@ class EnhancedGalaxyNN(nn.Module):
     """
     @nn.compact
     def __call__(self, x, deterministic: bool = False):
-        # Input handling - same as original
-        if x.ndim == 2:
-            x = jnp.expand_dims(x, axis=0)
-        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
-
-        x = jnp.expand_dims(x, axis=-1)
+        x = handleInput(x)\
 
         # Multi-scale first layer instead of single 3x3
         x_fine = nn.Conv(32, (3, 3), padding='SAME')(x)     # Fine features (original)
@@ -135,10 +146,7 @@ class EnhancedGalaxyNN(nn.Module):
 class OriginalGalaxyResNet(nn.Module):
     @nn.compact
     def __call__(self, x, deterministic: bool = False):
-        if x.ndim == 2:  # If batch dimension is missing
-            x = jnp.expand_dims(x, axis=0)
-        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
-        x = jnp.expand_dims(x, axis=-1)
+        x = handleInput(x)
         x = nn.Conv(32, (3, 3))(x)  # First convolution (32 filters)
         x = nn.leaky_relu(x, negative_slope=0.01)
         #print(f"Shape before resnet: {x.shape}")
@@ -181,11 +189,7 @@ class GalaxyResNet(nn.Module):
     @nn.compact
     def __call__(self, x, deterministic: bool = False):
     
-        if x.ndim == 2:
-            x = jnp.expand_dims(x, axis=0)
-        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
-
-        x = jnp.expand_dims(x, axis=-1)
+        x = handleInput(x)
 
         # Fewer scales, smaller filters, but with residuals
         x = MultiScaleResidualBlock(filters_per_scale=16, scales=(3, 9, 21))(x)  # 48 total
@@ -337,13 +341,7 @@ class ResearchBackedGalaxyResNet(nn.Module):
         # ==================== INPUT HANDLING ====================
         # CITATION: Standard practice in computer vision, established in LeNet-5 (LeCun et al., 1998)
         # RATIONALE: Ensures consistent tensor dimensions for batch processing
-        if x.ndim == 2:
-            x = jnp.expand_dims(x, axis=0)
-        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
-
-        # CITATION: "ImageNet Classification with Deep Convolutional Neural Networks" (Krizhevsky et al., NIPS 2012)
-        # RATIONALE: Convert grayscale to single-channel format expected by CNNs
-        x = jnp.expand_dims(x, axis=-1)
+        x = handleInput(x)
 
         # ==================== INITIAL FEATURE EXTRACTION ====================
         # CITATION: "Very Deep Convolutional Networks for Large-Scale Image Recognition" (Simonyan & Zisserman, ICLR 2015)
