@@ -115,6 +115,13 @@ def main():
     print(f"Shape of test images: {test_images.shape}")
     print(f"Shape of test labels: {test_labels.shape}")
 
+    # Extract PSF images and create 2-channel input for all models
+    print("Creating 2-channel input (galaxy + PSF)...")
+    psf_images = np.array([obs.psf.image for obs in test_obs])
+    test_images_2channel = np.stack([test_images, psf_images], axis=-1)
+    print(f"Shape of 2-channel test images: {test_images_2channel.shape}")
+    model_input = test_images_2channel
+
     # Initialize the model and its parameters
     rng_key = random.PRNGKey(seed)
     
@@ -132,7 +139,7 @@ def main():
     else:
         raise ValueError("Invalid model type specified.")
         
-    init_params = model.init(rng_key, jnp.ones_like(test_images[0]))
+    init_params = model.init(rng_key, jnp.ones_like(model_input[0]))
     state = train_state.TrainState.create(
         apply_fn=model.apply, params=init_params, tx=optax.adam(1e-3)
     )
@@ -166,7 +173,7 @@ def main():
     print("Model checkpoint loaded successfully.")
 
     # Evaluate the model
-    nn_results = eval_model(state, test_images, test_labels)
+    nn_results = eval_model(state, model_input, test_labels)
 
     # Compare with other methods if requested
     ngmix_results = None
@@ -177,7 +184,7 @@ def main():
 
     # Generate plots if requested
     if plot:
-        predicted_labels = state.apply_fn(state.params, test_images, deterministic=True)
+        predicted_labels = state.apply_fn(state.params, model_input, deterministic=True)
         predicted_labels, ngmix_preds, test_labels = remove_nan_preds_multi(predicted_labels, ngmix_preds, test_labels)
 
         df_plot_path = os.path.join(plot_path, model_name)
@@ -196,6 +203,7 @@ def main():
 
         print("Plotting samples...")
         samples_path = os.path.join(df_plot_path, "samples_plot.png")
+        # Use original test_images for visualization (single channel)
         visualize_samples(test_images, test_labels, predicted_labels, path=samples_path)
 
         print("Plotting scatter plots...")
