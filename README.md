@@ -1,147 +1,39 @@
 # Dev Notes
 
-## My Model vs Main Branch Model 
+Here I will impliment psf images into the training data. This will change the initial shape from (batch_size, 53, 53) to (batch_size, 53, 53, 2).
+Training on this should only increase the accuracy of ShearNet, and adding both psf and noise images will put it on even ground with NGMix.  
+Note, after reading [Zhang et. al.](https://arxiv.org/abs/2301.02986) I have realized that this will be considered an "early-fusion" approach. This means that I will combine the galaxy and psf images into essentially a single data set that a network then is trained on, rather than Forklens' fork-like approach of having two netwroks, a heavier one for learning the galaxy images and a lighter one for the psf images, then concatinating the results at the end, hence the "late-fusion" of this fork-like structure.  
 
-I tweaked the model at [this link](https://github.com/s-Sayan/ShearNet/blob/main/shearnet/core/models.py#L43) based of numerous research papers. The model I refer to is [here](./shearnet/core/models.py#L323). Plotted here is the comparison of the original model vs my new model.
+## Results
 
-### Low Noise (nse_sd = 1e-5)
+The introduction of psf images in the training data seems to introduce some type of bias, specifically in the flux and sigma predictions. Here are the results of my benchmarks.
 
-The comparison is also housed at [this directory](./notebooks/research_vs_control_low_noise/).
+# Original Galaxy NN
 
-Here is the comparions plots:
+![learning_curves](./notebooks/psf_vs_not_control/learning_curves_comparison_20250703_135816.png)
 
-![learning curve](./notebooks/research_vs_control_low_noise/learning_curves_comparison_20250702_172032.png)
+![residuals](./notebooks/psf_vs_not_control/residuals_comparison_20250703_135842.png)
 
-![residuals comparison](./notebooks/research_vs_control_low_noise/residuals_comparison_20250702_172126.png)
+![predictions](./notebooks/psf_vs_not_control/prediction_comparison_20250703_135829.png)
 
-![scatter comparison](./notebooks/research_vs_control_low_noise/prediction_comparison_20250702_172119.png)
+# Research Based Galaxy ResNet
 
-### High Noise (nse_sd = 1e-3)
+![learning_curves](./notebooks/psf_vs_not_research_resnet/learning_curves_comparison_20250704_005709.png)
 
-The comparison is also housed at [this directory](./notebooks/research_vs_control_high_noise/).
+![residuals](./notebooks/psf_vs_not_research_resnet/residuals_comparison_20250704_005751.png)
 
-Here is the comparions plots:
+![predictions](./notebooks/psf_vs_not_research_resnet/prediction_comparison_20250704_005741.png)
 
-![learning curve](./notebooks/research_vs_control_high_noise/learning_curves_comparison_20250702_191955.png)
 
-![residuals comparison](./notebooks/research_vs_control_high_noise/prediction_comparison_20250702_192242.png)
+## Analysis
 
-![scatter comparison](./notebooks/research_vs_control_high_noise/residuals_comparison_20250702_192253.png)
+I think the biggest alarm bell in these results is the introduction of a right skew in the residual plots of sigma and flux.  
+More generally, there is an introduction of bias in the research based model.  
+I think that the introduction of these psf images increased the complexity a lot and caused the research based model to struggle. The original NN weirdly enough seems almost unchanged after the introduction to psf.  
 
 ## Next Steps
 
-My next steps are to impliment psf images into the training data. This will chage the initial shape from (batch_size, 53, 53) to (batch_size, 53, 53, 2). I hope to also get noise images eventually as well. 
-
-Training on this should only increase the accuracy of ShearNet, and adding both psf and noise images will put it on even ground with NGMix.
-
-# ShearNet
-
-A JAX-based neural network implementation for galaxy shear estimation.
-
-## Installation
-
-### Quick Install
-
-```bash
-git clone https://github.com/s-Sayan/ShearNet.git
-cd ShearNet
-
-# CPU version
-make install
-
-# GPU version (CUDA 12)
-make install-gpu
-
-# Activate environment
-conda activate shearnet  # or shearnet_gpu for GPU
-```
-### Manual Install
-
-```bash
-conda create -n shearnet python=3.11
-conda activate shearnet
-pip install -e .# or pip install -e ".[gpu]" for GPU
-pip install git+https://github.com/esheldon/ngmix.git
-python scripts/post_installation.py
-```
-
-## Usage
-
-### Train a model
-
-```bash
-shearnet-train --epochs 10 --batch_size 64 --samples 10000  --psf_sigma 0.25 --model_name cnn1 --plot --nn cnn --patience 20
-```
-or
-```bash
-shearnet-train --config ./configs/example.yaml
-```
-### Evaluate a model
-
-```bash
-shearnet-eval --model_name cnn1 --test_samples 5000
-```
-Key options:
-
-- `-nn`: Model type (`mlp`, `cnn`, or `resnet`)
-- `-mcal`: Compare with metacalibration and NGmix
-- `-plot`: Generate plots
-
-## Example Results
-
-ShearNet provides shear estimates for g1, g2, sigma, and flux parameters. Example performance on test data:
-
-### Comparison of predictions
-<!-- <img src="./notebooks/scatter_plot_e1_scatter.png" alt="Comparison of Predictions" width="600"/> -->
-
-```
-| Method          | MSE (g1, g2) | Time  |
-|-----------------|--------------|-------|
-| ShearNet        | ~6e-4        | <1s   |
-| Moment-based    | ~1e-2        | ~7s   |
-```
-
-## Requirements
-
-- Python 3.8+
-- JAX (CPU/GPU)
-- Flax, Optax
-- GalSim, NGmix
-- NumPy, SciPy, Matplotlib
-
-See `pyproject.toml` for complete list.
-
-## Repository Structure
-
-```
-ShearNet/
-├── shearnet/
-│   ├── core/       # Models, training, dataset
-│   ├── methods/    # NGmix, moment-based
-│   ├── utils/      # Metrics, plotting
-│   └── cli/        # Command-line tools
-├── scripts/        # Setup scripts
-├── Makefile        # Installation
-└── pyproject.toml  # Dependencies
-
-```
-
-## Python API
-
-```python
-from shearnet.core.dataset import generate_dataset
-from shearnet.core.train import train_modelv2
-import jax.random as random
-
-# Generate data
-images, labels = generate_dataset(10000, psf_fwhm=0.8)
-
-# Train
-rng_key = random.PRNGKey(42)
-state, train_losses, val_losses = train_model(
-    images, labels, rng_key, epochs=50, nn='cnn'
-)
-```
+I look forward to implementing the fork-like structure bsaed on Forklens soon. Seeing the performance of the model under this structure will be insightful, since the Forklens paper provided no benchmarks to justify their fork stucture.  
 
 ## License
 
