@@ -22,7 +22,10 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp
         #psf_sigma = np.random.uniform(0.5, 1.5)
         
         obj_obs = sim_func(g1, g2, sigma=sigma, flux=flux, psf_sigma=psf_sigma, nse_sd = nse_sd,  type=type, npix=npix, scale=scale, seed=i, exp=exp)
-        images.append(obj_obs.image)
+        galaxy_image = obj_obs.image  # This is the convolved galaxy image with noise
+        psf_image = obj_obs.psf.image  # This is the PSF image
+        stacked_image = np.stack([galaxy_image, psf_image], axis=-1)
+        images.append(stacked_image)
         labels.append(np.array([g1, g2, sigma, flux], dtype=np.float32))
         obs.append(obj_obs)
     
