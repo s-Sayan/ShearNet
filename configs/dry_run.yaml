@@ -1,4 +1,4 @@
-# configs/cnn6_experiment.yaml
+# configs/dry_run.yaml
 dataset:
   samples: 100
   psf_sigma: 0.25
@@ -7,12 +7,21 @@ dataset:
   seed: 42
 
 model:
-  type: "cnn"
+  type: "forklike"
+  galaxy:
+    type: "cnn"
+    learning_rate: 1.0e-3
+    patience: 20
+  psf:
+    type: "cnn"
+    learning_rate: 1.0e-3
+    patience: 20
   
 training:
   epochs: 10
   batch_size: 16
   patience: 20
+  use_galaxy_preferences: true  # true = use galaxy model's LR/patience, false = use PSF model's
 
 evaluation:
   test_samples: 10

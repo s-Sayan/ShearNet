@@ -10,26 +10,25 @@ weight_fname = '/projects/mccleary_group/saha/codes/.empty/weights_cutouts_super
 
 def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, return_obs=False):
     images = []
+    psf_images = []  # NEW: collect PSF images
     labels = []
     obs = []
     g1_list, g2_list, sigma_list = g1_g2_sigma_sample(num_samples=samples, seed=seed)
     for i in tqdm(range(samples)):
         g1, g2 = g1_list[i], g2_list[i]
         sigma = sigma_list[i]
-        #g1, g2 = np.random.uniform(-0.5, 0.5, size=2)  # Random shears
-        #sigma = np.random.uniform(0.5, 1.5)  # Random sigma  
         flux=np.random.uniform(1, 5)  # Random flux
-        #psf_sigma = np.random.uniform(0.5, 1.5)
         
         obj_obs = sim_func(g1, g2, sigma=sigma, flux=flux, psf_sigma=psf_sigma, nse_sd = nse_sd,  type=type, npix=npix, scale=scale, seed=i, exp=exp)
         images.append(obj_obs.image)
+        psf_images.append(obj_obs.psf.image)  # NEW: extract PSF image
         labels.append(np.array([g1, g2, sigma, flux], dtype=np.float32))
         obs.append(obj_obs)
     
     if return_obs:
-        return np.array(images), np.array(labels), obs    
+        return np.array(images), np.array(psf_images), np.array(labels), obs    
     
-    return np.array(images), np.array(labels)
+    return np.array(images), np.array(psf_images), np.array(labels)
 
 def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", superbit_psf_fname=psf_fnmae):
 

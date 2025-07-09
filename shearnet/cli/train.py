@@ -136,6 +136,19 @@ def main():
         val_split = config.get('training.val_split')
         eval_interval = config.get('training.eval_interval')
         
+        # Get ForkLike-specific parameters
+        galaxy_model_type = config.get('model.galaxy.type', 'cnn')
+        psf_model_type = config.get('model.psf.type', 'cnn')
+        use_galaxy_preferences = config.get('training.use_galaxy_preferences', True)
+        
+        # Apply preference logic for learning rate and patience
+        if use_galaxy_preferences:
+            lr = config.get('model.galaxy.learning_rate', lr)
+            patience = config.get('model.galaxy.patience', patience)
+        else:
+            lr = config.get('model.psf.learning_rate', lr)
+            patience = config.get('model.psf.patience', patience)
+        
     else:
         # Use argparse values with defaults (original behavior)
         samples = args.samples if args.samples is not None else DEFAULTS['samples']
@@ -163,6 +176,8 @@ def main():
         config._set_nested('dataset.exp', exp)
         config._set_nested('dataset.seed', seed)
         config._set_nested('model.type', nn)
+        config._set_nested('model.galaxy.type', 'cnn')  # Default values for non-config mode
+        config._set_nested('model.psf.type', 'cnn')
         config._set_nested('training.epochs', epochs)
         config._set_nested('training.batch_size', batch_size)
         config._set_nested('training.learning_rate', lr)
@@ -170,10 +185,15 @@ def main():
         config._set_nested('training.patience', patience)
         config._set_nested('training.val_split', val_split)
         config._set_nested('training.eval_interval', eval_interval)
+        config._set_nested('training.use_galaxy_preferences', True)
         config._set_nested('output.model_name', model_name)
         config._set_nested('output.save_path', args.save_path)
         config._set_nested('output.plot_path', args.plot_path)
         config._set_nested('plotting.plot', plot_flag)
+        
+        # Extract ForkLike-specific parameters (same as config mode)
+        galaxy_model_type = config.get('model.galaxy.type', 'cnn')
+        psf_model_type = config.get('model.psf.type', 'cnn')
 
     config.print_config()    
     # Rest of the code remains the same...
@@ -185,11 +205,12 @@ def main():
     
     get_device()
 
-    train_images, train_labels = generate_dataset(samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd)
+    train_galaxy_images, train_psf_images, train_labels = generate_dataset(samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd)
     rng_key = random.PRNGKey(seed)
-    print(f"Shape of training images: {train_images.shape}")
+    print(f"Shape of training galaxy images: {train_galaxy_images.shape}")
+    print(f"Shape of training PSF images: {train_psf_images.shape}")
     print(f"Shape of training labels: {train_labels.shape}")
-    
+
     model_dir = os.path.join(plot_path, model_name)
     os.makedirs(model_dir, exist_ok=True)
     config_path = os.path.join(model_dir, 'training_config.yaml')
@@ -197,7 +218,8 @@ def main():
     print(f"\nTraining configuration saved to: {config_path}")
 
     state, train_loss, val_loss = train_model(
-                                    train_images,
+                                    train_galaxy_images,
+                                    train_psf_images,
                                     train_labels,
                                     rng_key,
                                     epochs=epochs,
@@ -208,7 +230,9 @@ def main():
                                     val_split=val_split, # validation split fraction
                                     eval_interval=eval_interval, 
                                     patience=patience, #for early stopping
-                                    lr=lr, weight_decay=weight_decay #optimizer details
+                                    lr=lr, weight_decay=weight_decay, #optimizer details
+                                    galaxy_model_type=galaxy_model_type,
+                                    psf_model_type=psf_model_type
                                 )
 
     if plot_flag:
