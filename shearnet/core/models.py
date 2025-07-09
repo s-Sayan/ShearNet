@@ -400,39 +400,40 @@ class ForkLike(nn.Module):
 
     This should basically mimimic the forklens structure here https://github.com/zhangzzk/forklens/.
     """
+    galaxy_model_type: str = "cnn"  # Default to OriginalGalaxyNN
+    psf_model_type: str = "cnn"     # Default to OriginalGalaxyNN
+
+    def setup(self):
+        """Initialize the sub-models during setup."""
+        self.galaxy_model = self._get_model(self.galaxy_model_type)
+        self.psf_model = self._get_model(self.psf_model_type)
+
+    def _get_model(self, model_type):
+        """Helper function to get model instance from type string."""
+        if model_type == "cnn":
+            return OriginalGalaxyNN()
+        elif model_type == "dev_cnn":
+            return EnhancedGalaxyNN()
+        elif model_type == "resnet":
+            return OriginalGalaxyResNet()
+        elif model_type == "dev_resnet":
+            return GalaxyResNet()
+        elif model_type == "research_backed":
+            return ResearchBackedGalaxyResNet()
+        else:
+            raise ValueError(f"Invalid model type specified: {model_type}")
 
     @nn.compact
-    def __call__(self, galaxy_nn_model, galaxy_image, psf_nn_model, psf_image, deterministic: bool = False):
-
-        def get_model(nn):
-            if nn == "cnn":
-                return OriginalGalaxyNN()
-            elif nn == "dev_cnn":
-                return EnhancedGalaxyNN()
-            elif nn == "resnet":
-                return OriginalGalaxyResNet()
-            elif nn == "dev_resnet":
-                return GalaxyResNet()
-            elif nn == "research_backed":
-                return ResearchBackedGalaxyResNet()
-            else:
-                raise ValueError("Invalid model type specified.")
-
+    def __call__(self, galaxy_image, psf_image, deterministic: bool = False):
+        
         # This model will learn from galaxy images
-        galaxy_features = get_model(galaxy_nn_model)(
-            galaxy_image, deterministic=deterministic
-        )
+        galaxy_features = self.galaxy_model(galaxy_image, deterministic=deterministic)
         
         # This model will learn from psf images
-        psf_features = get_model(psf_nn_model)(
-            psf_image, deterministic=deterministic
-        )
+        psf_features = self.psf_model(psf_image, deterministic=deterministic)
         
         # Combines features from the two separate models above trained on different types of images to represent them in one feature layer
         combined_features = jnp.concatenate([galaxy_features, psf_features], axis=-1)
-        print(f"Galaxy features shape: {galaxy_features.shape}")
-        print(f"PSF features shape: {psf_features.shape}")
-        print(f"Combined features shape: {combined_features.shape}")
 
         # The fully connected layers
         x = nn.Dense(128)(combined_features)

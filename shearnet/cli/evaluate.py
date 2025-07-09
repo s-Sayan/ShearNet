@@ -10,7 +10,7 @@ from flax.training import checkpoints, train_state
 
 from ..config.config_handler import Config
 from ..core.dataset import generate_dataset
-from ..core.models import OriginalGalaxyNN, EnhancedGalaxyNN, OriginalGalaxyResNet, GalaxyResNet, ResearchBackedGalaxyResNet
+from ..core.models import ForkLike
 from ..utils.metrics import eval_model, eval_ngmix, eval_mcal, remove_nan_preds_multi
 from ..utils.plot_helpers import (
     plot_residuals, 
@@ -102,6 +102,9 @@ def main():
         mcal = args.mcal or config.get('comparison.ngmix', False)
         plot = args.plot or config.get('plotting.plot', False)
         plot_animation = args.plot_animation or config.get('plotting.animation', False)
+        # Get ForkLike-specific parameters
+        galaxy_model_type = config.get('model.galaxy.type', 'cnn')
+        psf_model_type = config.get('model.psf.type', 'cnn')
     else:
         raise FileNotFoundError(f"No training config found at {model_config_path}")
     
@@ -109,30 +112,23 @@ def main():
     plot_path = os.path.abspath(default_plot_path)
 
     # Generate test data
-    test_images, test_labels, test_obs = generate_dataset(
+    test_galaxy_images, test_psf_images, test_labels, test_obs = generate_dataset(
         test_samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd, return_obs=True
     )
-    print(f"Shape of test images: {test_images.shape}")
+    print(f"Shape of test galaxy images: {test_galaxy_images.shape}")
+    print(f"Shape of test PSF images: {test_psf_images.shape}")
     print(f"Shape of test labels: {test_labels.shape}")
 
     # Initialize the model and its parameters
     rng_key = random.PRNGKey(seed)
     
     # Model selection
-    if nn == "cnn":
-        model = OriginalGalaxyNN()
-    elif nn == "dev_cnn":
-        model = EnhancedGalaxyNN()
-    elif nn == "resnet":
-        model = OriginalGalaxyResNet()
-    elif nn == "dev_resnet":
-        model = GalaxyResNet()
-    elif nn == "research_backed":
-        model = ResearchBackedGalaxyResNet()
+    if nn == "forklike":
+        model = ForkLike(galaxy_model_type=galaxy_model_type, psf_model_type=psf_model_type)
     else:
-        raise ValueError("Invalid model type specified.")
+        raise ValueError("Only 'forklike' model type is supported.")
         
-    init_params = model.init(rng_key, jnp.ones_like(test_images[0]))
+    init_params = model.init(rng_key, jnp.ones_like(test_galaxy_images[0]), jnp.ones_like(test_psf_images[0]))
     state = train_state.TrainState.create(
         apply_fn=model.apply, params=init_params, tx=optax.adam(1e-3)
     )
@@ -166,18 +162,18 @@ def main():
     print("Model checkpoint loaded successfully.")
 
     # Evaluate the model
-    nn_results = eval_model(state, test_images, test_labels)
+    nn_results = eval_model(state, test_galaxy_images, test_psf_images, test_labels)
 
     # Compare with other methods if requested
     ngmix_results = None
     if mcal:
         ngmix_results = eval_ngmix(test_obs, test_labels, seed=1234, psf_model='gauss', gal_model='gauss')
-        mcal_results = eval_mcal(test_images, test_labels, psf_sigma)
+        mcal_results = eval_mcal(test_galaxy_images, test_labels, psf_sigma)
         ngmix_preds = ngmix_results['preds']
 
     # Generate plots if requested
     if plot:
-        predicted_labels = state.apply_fn(state.params, test_images, deterministic=True)
+        predicted_labels = state.apply_fn(state.params, test_galaxy_images, test_psf_images, deterministic=True)
         predicted_labels, ngmix_preds, test_labels = remove_nan_preds_multi(predicted_labels, ngmix_preds, test_labels)
 
         df_plot_path = os.path.join(plot_path, model_name)
@@ -196,7 +192,7 @@ def main():
 
         print("Plotting samples...")
         samples_path = os.path.join(df_plot_path, "samples_plot.png")
-        visualize_samples(test_images, test_labels, predicted_labels, path=samples_path)
+        visualize_samples(test_galaxy_images, test_labels, predicted_labels, path=samples_path)
 
         print("Plotting scatter plots...")
         scatter_path = os.path.join(df_plot_path, "scatters")

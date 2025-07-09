@@ -5,21 +5,30 @@ dataset:
   nse_sd: 0.001
   seed: 42
 model:
-  type: research_backed
+  type: forklike
+  galaxy:
+    type: research_backed
+    learning_rate: 0.002
+    patience: 50
+  psf:
+    type: cnn
+    learning_rate: 0.001
+    patience: 20
 training:
   epochs: 300
   batch_size: 128
-  learning_rate: 0.002
+  learning_rate: 0.001
   weight_decay: 0.0001
-  patience: 50
+  patience: 20
   val_split: 0.2
   eval_interval: 1
+  use_galaxy_preferences: true
 evaluation:
   test_samples: 5000
   seed: 58
 output:
-  save_path: /home/adfield/ShearNet_Dev/model_checkpoint
-  plot_path: /home/adfield/ShearNet_Dev/plots
+  save_path: /home/adfield/ShearNet/model_checkpoint
+  plot_path: /home/adfield/ShearNet/plots
   model_name: research_backed_galaxy_resnet_high_noise
 plotting:
   plot: true

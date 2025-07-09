@@ -83,6 +83,8 @@ class Config:
             'learning_rate': 'training.learning_rate',
             'weight_decay': 'training.weight_decay',
             'patience': 'training.patience',
+            'val_split': 'training.val_split',
+            'eval_interval': 'training.eval_interval',
             
             # Output args
             'save_path': 'output.save_path',
@@ -133,7 +135,12 @@ class Config:
             if section in self.config:
                 print(f"\n{section}:")
                 for key, value in self.config[section].items():
-                    print(f"  {key}: {value}")
+                    if isinstance(value, dict):
+                        print(f"  {key}:")
+                        for sub_key, sub_value in value.items():
+                            print(f"    {sub_key}: {sub_value}")
+                    else:
+                        print(f"  {key}: {value}")
         print("="*50 + "\n")
 
     def print_eval_config(self) -> None:
