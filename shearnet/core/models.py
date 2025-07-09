@@ -72,15 +72,7 @@ class OriginalGalaxyNN(nn.Module):
         x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))  # 14x14x32
         
         # Flatten: 14*14*32 = 6,272 features
-        x = x.reshape((x.shape[0], -1))
-        
-        # Dense layers similar to working FNN
-        x = nn.Dense(128)(x)
-        x = nn.relu(x)
-        #x = nn.Dropout(0.5)(x, deterministic=deterministic)  # Dropout applied only if deterministic=False
-        x = nn.Dense(4)(x)
-        #x = 0.5*nn.tanh(x)
-        return x
+        return x.reshape((x.shape[0], -1))
         
 class EnhancedGalaxyNN(nn.Module):
     """
@@ -123,14 +115,7 @@ class EnhancedGalaxyNN(nn.Module):
         x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))  # ~14x14x96
 
         # Flatten: 14x14x320 = 62,720 features
-        x = x.reshape((x.shape[0], -1))
-
-        # Dense layers
-        x = nn.Dense(128)(x)
-        x = nn.relu(x)
-        x = nn.Dense(4)(x)
-
-        return x
+        return x.reshape((x.shape[0], -1))
         
 class OriginalGalaxyResNet(nn.Module):
     @nn.compact
@@ -157,21 +142,7 @@ class OriginalGalaxyResNet(nn.Module):
         print(f"After pooling: {x.shape}")'''
        
         # Flatten the output of the conv layers for the fully connected layers
-        x = jnp.reshape(x, (x.shape[0], -1))
-        #print(f"Shape after resnet: {x.shape}")
-
-        # Ensure that the flattened dimension does not exceed ~200
-        #assert x.shape[1] <= 200, f"Flattened dimension is too large: {x.shape[1]}"
-
-        # Fully connected layers        
-        x = nn.Dense(128)(x)
-        x = nn.leaky_relu(x, negative_slope=0.01)
-        # x = nn.Dropout(0.5, deterministic=deterministic)(x)  # Dropout for regularization
-        x = nn.Dense(64)(x)
-        x = nn.leaky_relu(x, negative_slope=0.01)
-        x = nn.Dense(2)(x)  # Output e1, e2
-        x = nn.tanh(x)
-        return x
+        return jnp.reshape(x, (x.shape[0], -1))
         
 class GalaxyResNet(nn.Module):
     """
@@ -194,11 +165,7 @@ class GalaxyResNet(nn.Module):
         x = MultiScaleResidualBlock(filters_per_scale=32, scales=(3, 9, 21))(x)  # 96 total  
         x = nn.avg_pool(x, (2, 2), (2, 2))
 
-        x = x.reshape((x.shape[0], -1))  # 16,224 features (13×13×96)
-        x = nn.Dense(128)(x)
-        x = nn.relu(x)
-        x = nn.Dense(4)(x)
-        return x
+        return x.reshape((x.shape[0], -1))  # 16,224 features (13×13×96)
 
 class CBAM_Attention(nn.Module):
     """
@@ -389,6 +356,9 @@ class ResearchBackedGalaxyResNet(nn.Module):
             use_dilated=True
         )(x, deterministic=deterministic)
 
+        return jnp.mean(x, axis=(1, 2))
+
+        '''
         # ==================== GLOBAL AVERAGE POOLING ====================
         # CITATION: "Network In Network" (Lin, Chen & Yan, ICLR 2014)
         # QUOTE: "more robust to spatial translations of the input"
@@ -421,4 +391,54 @@ class ResearchBackedGalaxyResNet(nn.Module):
         # RATIONALE: Linear layer for regression output, no activation for unbounded predictions
         x = nn.Dense(4)(x)
 
+        return x
+        '''
+
+class ForkLike(nn.Module):
+    """
+    This class is meant to take two of the above models, train one on galaxy images and another on psf images, then concatenate the results and do the dense/fully connected layers.
+
+    This should basically mimimic the forklens structure here https://github.com/zhangzzk/forklens/.
+    """
+
+    @nn.compact
+    def __call__(self, galaxy_nn_model, galaxy_image, psf_nn_model, psf_image, deterministic: bool = False):
+
+        def get_model(nn):
+            if nn == "cnn":
+                return OriginalGalaxyNN()
+            elif nn == "dev_cnn":
+                return EnhancedGalaxyNN()
+            elif nn == "resnet":
+                return OriginalGalaxyResNet()
+            elif nn == "dev_resnet":
+                return GalaxyResNet()
+            elif nn == "research_backed":
+                return ResearchBackedGalaxyResNet()
+            else:
+                raise ValueError("Invalid model type specified.")
+
+        # This model will learn from galaxy images
+        galaxy_features = get_model(galaxy_nn_model)(
+            galaxy_image, deterministic=deterministic
+        )
+        
+        # This model will learn from psf images
+        psf_features = get_model(psf_nn_model)(
+            psf_image, deterministic=deterministic
+        )
+        
+        # Combines features from the two separate models above trained on different types of images to represent them in one feature layer
+        combined_features = jnp.concatenate([galaxy_features, psf_features], axis=-1)
+        print(f"Galaxy features shape: {galaxy_features.shape}")
+        print(f"PSF features shape: {psf_features.shape}")
+        print(f"Combined features shape: {combined_features.shape}")
+
+        # The fully connected layers
+        x = nn.Dense(128)(combined_features)
+        x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+        x = nn.relu(x)
+
+        # Final predictions of [g1, g2, sigma, flux]
+        x = nn.Dense(4)(x)
         return x
