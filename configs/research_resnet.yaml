@@ -19,14 +19,32 @@ dataset:
   # Citation: Signal-to-noise considerations for precision shape measurement
   # Rationale: Low noise (1e-5) ensures algorithm performance dominates over measurement noise
   # Comparable to space-based surveys like HST/JWST noise levels
-  nse_sd: 1.0e-3
+  nse_sd: 1.0e-5
   
   # Reproducibility: Fixed seed for consistent train/val splits and initialization
   seed: 42
 
 model:
-  # Custom model with research-backed enhancements
-  type: "research_backed"
+  type: "forklike"
+  galaxy:
+    # Custom model with research-backed enhancements
+    type: "research_backed"
+    # BREAKTHROUGH: Batch Normalization enables higher learning rates
+    # Citation: Ioffe & Szegedy (ICML 2015) - "allows us to use much higher learning rates"
+    # Evidence: "14× faster training" demonstrated in paper
+    # Conservative Increase: 2e-3 vs standard 1e-3 (2× increase)
+    learning_rate: 2.0e-3
+    # Training Stability from Batch Normalization
+    # Citation: Ioffe & Szegedy showed BN reduces training variance and improves stability
+    # Rationale: More patience (50 vs typical 10-20) because stable training expected
+    # Conservative: Allows for slower but more reliable convergence
+    patience: 50
+  psf:
+    # Simpler model for PSF processing - PSFs are typically well-behaved
+    type: "dev_cnn"
+    # Conservative learning rate for simpler model
+    learning_rate: 1.0e-3
+    patience: 20
 
 training:
   # Citation: "Empirical Evaluation of Generic Convolutional and Recurrent Networks" (Brock et al., 2017)
@@ -39,22 +57,16 @@ training:
   # BatchNorm Synergy: Larger batches improve BatchNorm statistics quality
   batch_size: 128
   
-  # BREAKTHROUGH: Batch Normalization enables higher learning rates
-  # Citation: Ioffe & Szegedy (ICML 2015) - "allows us to use much higher learning rates"
-  # Evidence: "14× faster training" demonstrated in paper
-  # Conservative Increase: 2e-3 vs standard 1e-3 (2× increase)
-  learning_rate: 2.0e-3
+  # These will be overridden by model-specific values based on use_galaxy_preferences
+  learning_rate: 1.0e-3
   
   # Citation: "Fixing Weight Decay Regularization in Adam" (Loshchilov & Hutter, ICLR 2017)
   # Standard Practice: 1e-4 provides good regularization without over-constraining
   # Decoupled from learning rate in AdamW optimizer
   weight_decay: 1.0e-4
   
-  # Training Stability from Batch Normalization
-  # Citation: Ioffe & Szegedy showed BN reduces training variance and improves stability
-  # Rationale: More patience (50 vs typical 10-20) because stable training expected
-  # Conservative: Allows for slower but more reliable convergence
-  patience: 50
+  # This will be overridden by model-specific values based on use_galaxy_preferences
+  patience: 20
   
   # Citation: "Dropout: A Simple Way to Prevent Neural Networks from Overfitting" (Srivastava et al., 2014)
   # Standard Practice: 80/20 train/validation split provides robust performance estimation
@@ -64,6 +76,9 @@ training:
   # Computational Efficiency: Evaluate every epoch for close monitoring
   # Justification: Stable training from BatchNorm allows frequent evaluation without overhead concerns
   eval_interval: 1
+  
+  # Use galaxy model preferences since it's the more sophisticated model
+  use_galaxy_preferences: false  # true = use galaxy model's LR/patience, false = use PSF model's
 
 evaluation:
   # Statistical Power: 5k test samples provides robust performance estimates
@@ -79,7 +94,7 @@ output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
   
-  model_name: "research_backed_galaxy_resnet_high_noise"
+  model_name: "research_backed_galaxy_resnet_multi-scale_psf_2"
 
 plotting:
   # Scientific Communication: Visual validation crucial for astronomical applications

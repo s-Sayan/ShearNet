@@ -12,7 +12,7 @@ import logging
 logging.getLogger('absl').setLevel(logging.ERROR)
 # Import main functionality for easy access
 from .core.dataset import generate_dataset
-from .core.models import OriginalGalaxyNN, EnhancedGalaxyNN, OriginalGalaxyResNet, GalaxyResNet, ResearchBackedGalaxyResNet
+from .core.models import OriginalGalaxyNN, EnhancedGalaxyNN, OriginalGalaxyResNet, GalaxyResNet, ResearchBackedGalaxyResNet, ForkLike
 from .core.train import train_model
 
 __all__ = [
@@ -21,7 +21,8 @@ __all__ = [
     "EnhancedGalaxyNN", 
     "OriginalGalaxyResNet",
     "GalaxyResNet",
-    "ResearchBackedGalaxyResNet"
+    "ResearchBackedGalaxyResNet",
+    "ForkLike",
     "train_model",
     "__version__",
 ]

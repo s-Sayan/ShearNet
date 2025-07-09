@@ -11,7 +11,15 @@ dataset:
 
 # Model configuration  
 model:
-  type: "cnn"  # Options: mlp, cnn, resnet
+  type: "forklike"
+  galaxy:
+    type: "cnn"  # Options: cnn, dev_cnn, resnet, dev_resnet, research_backed
+    learning_rate: 1.0e-3
+    patience: 20
+  psf:
+    type: "cnn"  # Options: cnn, dev_cnn, resnet, dev_resnet, research_backed
+    learning_rate: 1.0e-3
+    patience: 20
   
 # Training configuration
 training:
@@ -19,9 +27,10 @@ training:
   batch_size: 32
   learning_rate: 1.0e-3
   weight_decay: 1.0e-4
-  patience: 10
+  patience: 20
   val_split: 0.2
   eval_interval: 1
+  use_galaxy_preferences: true  # true = use galaxy model's LR/patience, false = use PSF model's
   
 # Evaluation configuration
 evaluation:

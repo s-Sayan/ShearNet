@@ -160,28 +160,9 @@ def loss_fn_ngmix(obs_list, labels, seed=1234, psf_model='gauss', gal_model='gau
     return loss, preds, loss_per_label, bias, bias_per_label
 
 
-def loss_fn_eval(state, params, images, labels):
-    """Calculate evaluation loss for neural network predictions.
-    
-    Parameters
-    ----------
-    state : train_state.TrainState
-        The training state object
-    params : dict
-        Model parameters
-    images : jnp.ndarray
-        Input images
-    labels : jnp.ndarray
-        True labels (g1, g2, sigma, flux)
-        
-    Returns
-    -------
-    loss : float
-        Combined mean squared error
-    loss_per_label : dict
-        Per-label MSE values
-    """
-    preds = state.apply_fn(params, images)
+def loss_fn_eval(state, params, galaxy_images, psf_images, labels):
+    """Calculate evaluation loss for neural network predictions."""
+    preds = state.apply_fn(params, galaxy_images, psf_images)
     
     # Combined loss (assuming preds shape matches labels shape)
     loss = optax.l2_loss(preds, labels).mean()
@@ -314,31 +295,10 @@ def eval_ngmix(test_obs, test_labels, seed=1234, psf_model='gauss', gal_model='g
 
 
 @jax.jit
-def eval_step(state, images, labels):
-    """Evaluate the model on a single batch (JIT compiled).
-    
-    Parameters
-    ----------
-    state : train_state.TrainState
-        The training state object
-    images : jnp.ndarray
-        Batch of input images
-    labels : jnp.ndarray
-        Batch of true labels
-        
-    Returns
-    -------
-    loss : float
-        Batch loss
-    preds : jnp.ndarray
-        Predictions
-    loss_per_label : dict
-        Per-label losses
-    bias_per_label : dict
-        Per-label biases
-    """
-    loss, loss_per_label = loss_fn_eval(state, state.params, images, labels)
-    preds = state.apply_fn(state.params, images, deterministic=True)
+def eval_step(state, galaxy_images, psf_images, labels):
+    """Evaluate the model on a single batch (JIT compiled)."""
+    loss, loss_per_label = loss_fn_eval(state, state.params, galaxy_images, psf_images, labels)
+    preds = state.apply_fn(state.params, galaxy_images, psf_images, deterministic=True)
     
     # Calculate per-label biases
     bias_per_label = {
@@ -352,7 +312,7 @@ def eval_step(state, images, labels):
     return loss, preds, loss_per_label, bias_per_label
 
 
-def eval_model(state, test_images, test_labels, batch_size=32) -> Dict[str, Any]:
+def eval_model(state, test_galaxy_images, test_psf_images, test_labels, batch_size=32) -> Dict[str, Any]:
     """Evaluate the neural network model on the entire test set.
     
     Parameters
@@ -387,15 +347,16 @@ def eval_model(state, test_images, test_labels, batch_size=32) -> Dict[str, Any]
     
     all_preds = []
 
-    for i in range(0, len(test_images), batch_size):
-        batch_images = test_images[i:i + batch_size]
+    for i in range(0, len(test_galaxy_images), batch_size):
+        batch_galaxy_images = test_galaxy_images[i:i + batch_size]
+        batch_psf_images = test_psf_images[i:i + batch_size]
         batch_labels = test_labels[i:i + batch_size]
-        loss, preds, loss_per_label, bias_per_label = eval_step(state, batch_images, batch_labels)
+        loss, preds, loss_per_label, bias_per_label = eval_step(state, batch_galaxy_images, batch_psf_images, batch_labels)
         
         all_preds.append(preds)
         
         batch_bias = (preds - batch_labels).mean()
-        batch_size_actual = len(batch_images)
+        batch_size_actual = len(batch_galaxy_images)
         
         # Accumulate combined metrics
         total_loss += loss * batch_size_actual
