@@ -10,7 +10,7 @@ import jax.numpy as jnp
 
 from ..config.config_handler import Config
 from ..core.train import train_model
-from ..core.dataset import generate_dataset
+from ..core.dataset import generate_dataset, split_combined_images
 from ..utils.device import get_device
 from ..utils.plot_helpers import plot_learning_curve
 
@@ -205,7 +205,12 @@ def main():
     
     get_device()
 
-    train_galaxy_images, train_psf_images, train_labels = generate_dataset(samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd)
+    # Generate combined images
+    combined_images, train_labels = generate_dataset(samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd)
+    
+    # Split into separate galaxy and PSF arrays
+    train_galaxy_images, train_psf_images = split_combined_images(combined_images)
+    
     rng_key = random.PRNGKey(seed)
     print(f"Shape of training galaxy images: {train_galaxy_images.shape}")
     print(f"Shape of training PSF images: {train_psf_images.shape}")
@@ -227,10 +232,10 @@ def main():
                                     nn=nn,
                                     save_path=save_path,
                                     model_name=model_name,
-                                    val_split=val_split, # validation split fraction
+                                    val_split=val_split,
                                     eval_interval=eval_interval, 
-                                    patience=patience, #for early stopping
-                                    lr=lr, weight_decay=weight_decay, #optimizer details
+                                    patience=patience,
+                                    lr=lr, weight_decay=weight_decay,
                                     galaxy_model_type=galaxy_model_type,
                                     psf_model_type=psf_model_type
                                 )

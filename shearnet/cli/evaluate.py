@@ -9,7 +9,7 @@ import optax
 from flax.training import checkpoints, train_state
 
 from ..config.config_handler import Config
-from ..core.dataset import generate_dataset
+from ..core.dataset import generate_dataset, split_combined_images
 from ..core.models import ForkLike
 from ..utils.metrics import eval_model, eval_ngmix, eval_mcal, remove_nan_preds_multi
 from ..utils.plot_helpers import (
@@ -111,10 +111,14 @@ def main():
     load_path = os.path.abspath(default_save_path)
     plot_path = os.path.abspath(default_plot_path)
 
-    # Generate test data
-    test_galaxy_images, test_psf_images, test_labels, test_obs = generate_dataset(
+    # Generate combined test data
+    combined_test_images, test_labels, test_obs = generate_dataset(
         test_samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd, return_obs=True
     )
+    
+    # Split into separate galaxy and PSF arrays
+    test_galaxy_images, test_psf_images = split_combined_images(combined_test_images)
+    
     print(f"Shape of test galaxy images: {test_galaxy_images.shape}")
     print(f"Shape of test PSF images: {test_psf_images.shape}")
     print(f"Shape of test labels: {test_labels.shape}")
