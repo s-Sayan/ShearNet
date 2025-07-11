@@ -9,26 +9,58 @@ psf_fnmae = '/projects/mccleary_group/saha/codes/.empty/psf_cutouts_superbit.npy
 weight_fname = '/projects/mccleary_group/saha/codes/.empty/weights_cutouts_superbit.npy'
 
 def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, return_obs=False):
-    images = []
-    psf_images = []  # NEW: collect PSF images
+    """
+    Generate dataset with concatenated galaxy and PSF images.
+    
+    Returns:
+        images: np.ndarray of shape (samples, height, width, 2) where channel 0=galaxy, channel 1=PSF
+        labels: np.ndarray of shape (samples, 4) for [g1, g2, sigma, flux]
+        obs: list of observation objects (if return_obs=True)
+    """
+    images = []  # Will store concatenated (galaxy, psf) pairs
     labels = []
     obs = []
     g1_list, g2_list, sigma_list = g1_g2_sigma_sample(num_samples=samples, seed=seed)
+    
     for i in tqdm(range(samples)):
         g1, g2 = g1_list[i], g2_list[i]
         sigma = sigma_list[i]
-        flux=np.random.uniform(1, 5)  # Random flux
+        flux = np.random.uniform(1, 5)  # Random flux
         
-        obj_obs = sim_func(g1, g2, sigma=sigma, flux=flux, psf_sigma=psf_sigma, nse_sd = nse_sd,  type=type, npix=npix, scale=scale, seed=i, exp=exp)
-        images.append(obj_obs.image)
-        psf_images.append(obj_obs.psf.image)  # NEW: extract PSF image
+        obj_obs = sim_func(g1, g2, sigma=sigma, flux=flux, psf_sigma=psf_sigma, nse_sd=nse_sd, 
+                          type=type, npix=npix, scale=scale, seed=i, exp=exp)
+        
+        # Stack galaxy and PSF images along channel dimension
+        galaxy_image = obj_obs.image
+        psf_image = obj_obs.psf.image
+        
+        # Create (height, width, 2) array
+        combined_image = np.stack([galaxy_image, psf_image], axis=-1)
+        
+        images.append(combined_image)
         labels.append(np.array([g1, g2, sigma, flux], dtype=np.float32))
         obs.append(obj_obs)
     
     if return_obs:
-        return np.array(images), np.array(psf_images), np.array(labels), obs    
+        return np.array(images), np.array(labels), obs    
     
-    return np.array(images), np.array(psf_images), np.array(labels)
+    return np.array(images), np.array(labels)
+
+
+def split_combined_images(combined_images):
+    """
+    Split concatenated images back into separate galaxy and PSF arrays.
+    
+    Args:
+        combined_images: np.ndarray of shape (samples, height, width, 2)
+        
+    Returns:
+        galaxy_images: np.ndarray of shape (samples, height, width)
+        psf_images: np.ndarray of shape (samples, height, width)
+    """
+    galaxy_images = combined_images[..., 0]  # Channel 0
+    psf_images = combined_images[..., 1]     # Channel 1
+    return galaxy_images, psf_images
 
 def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", superbit_psf_fname=psf_fnmae):
 
