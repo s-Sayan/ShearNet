@@ -1,0 +1,96 @@
+# ForkLens Configuration for ShearNet
+# Based on ForkLens paper parameters and best practices
+
+dataset:
+  # ForkLens typically uses large datasets for robust training
+  # Citation: "Statistical Learning Theory" - larger datasets improve generalization
+  samples: 100000
+  
+  # Standard astronomical simulation parameters
+  # Based on typical ground-based survey conditions
+  psf_sigma: 0.25
+  
+  exp: "ideal"
+  
+  # Low noise for clean training signal - matches ForkLens approach
+  nse_sd: 0.00001
+  
+  # Reproducibility
+  seed: 42
+
+model:
+  type: "forklike"
+  galaxy:
+    # ForkLens ResNet34 architecture for galaxy processing
+    # Citation: ForkLens paper - deep ResNet for complex galaxy features
+    type: "forklens_resnet34"
+    
+    # ForkLens original parameters - SGD with momentum works well with ResNet
+    # Citation: "Deep Residual Learning for Image Recognition" - ResNets + SGD
+    learning_rate: 0.01  # ForkLens initial_learning_rate
+    patience: 25         # Conservative for deep ResNet convergence
+    
+  psf:
+    # Simpler network for PSF processing - PSFs are well-behaved
+    # ForkLens uses lighter network for PSF vs galaxy
+    type: "forklens_psfnet"
+    
+    # Slightly lower learning rate for PSF network
+    learning_rate: 0.005
+    patience: 20
+
+training:
+  # ForkLens training parameters
+  # Citation: ForkLens config - epoch_number: 150
+  epochs: 150
+  
+  # ForkLens batch size - larger batches work well with SGD + momentum
+  # Citation: ForkLens config - batch_size: 250
+  # Benefits: Better gradient estimates, improved BatchNorm statistics
+  batch_size: 250
+  
+  # ForkLens SGD parameters
+  # Citation: ForkLens config - initial_learning_rate: 0.01, momentum: 0.9
+  learning_rate: 0.01
+  momentum: 0.9
+  
+  # Standard regularization
+  weight_decay: 0.0
+  
+  # Early stopping patience - conservative for ForkLens architecture
+  patience: 25
+  
+  # ForkLens validation split
+  # Citation: ForkLens config - validation_split: 0.1
+  val_split: 0.1
+  
+  # Monitor every epoch for learning rate scheduling
+  eval_interval: 1
+  
+  # ReduceLROnPlateau parameters optimized for ForkLens training
+  # More aggressive scheduling for longer training (150 epochs)
+  plateau_patience: 15   # Wait longer before reducing LR (vs 10 for shorter training)
+  plateau_factor: 0.2    # Less aggressive reduction (5x vs 10x)
+  plateau_min_lr: 0.0000001   # Very low minimum for fine-tuning
+  
+  # Use PSF model preferences (simpler, more conservative)
+  use_galaxy_preferences: false
+
+evaluation:
+  # Robust test set for evaluation
+  test_samples: 10000
+  seed: 58
+
+output:
+  save_path: null  # Uses SHEARNET_DATA_PATH
+  plot_path: null  # Uses SHEARNET_DATA_PATH
+  model_name: "forklens_old_optimizer+lr_scheduler"
+
+plotting:
+  plot: true
+
+comparison:
+  mcal: true
+  ngmix: true
+  psf_model: "gauss"
+  gal_model: "gauss"
