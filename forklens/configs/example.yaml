@@ -1,0 +1,52 @@
+# Dataset configuration
+dataset:
+  samples: 100000
+  psf_sigma: 0.25
+  exp: "ideal"
+  nse_sd: 1.0e-3
+  seed: 42
+
+# Model configuration  
+model:
+  type: "forklike"
+  galaxy:
+    type: "cnn"  # OriginalGalaxyNN
+    learning_rate: 1.0e-3
+    patience: 20
+  psf:
+    type: "cnn"  # OriginalGalaxyNN for PSF processing
+    learning_rate: 1.0e-3
+    patience: 20
+  
+# Training configuration
+training:
+  epochs: 300
+  batch_size: 128
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4
+  patience: 20
+  val_split: 0.2
+  eval_interval: 1
+  use_galaxy_preferences: true  # true = use galaxy model's LR/patience, false = use PSF model's
+  
+# Evaluation configuration
+evaluation:
+  test_samples: 5000
+  seed: 58
+  
+# Output configuration
+output:
+  save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
+  plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
+  model_name: "control_cnn_high_noise"
+  
+# Plotting configuration
+plotting:
+  plot: true  # Whether to plot learning curves
+  
+# Comparison methods
+comparison:
+  mcal: true
+  ngmix: true
+  psf_model: "gauss"
+  gal_model: "gauss"
