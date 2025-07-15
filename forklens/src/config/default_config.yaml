@@ -1,0 +1,61 @@
+# shearnet/config/default_config.yaml
+# Default configuration for ShearNet
+
+# Dataset configuration
+dataset:
+  samples: 10000
+  psf_sigma: 0.25
+  exp: "ideal"
+  nse_sd: 1.0e-5
+  seed: 42
+
+# Model configuration  
+model:
+  type: "forklike"
+  galaxy:
+    type: "cnn"  # Options: cnn, dev_cnn, resnet, dev_resnet, research_backed
+    learning_rate: 1.0e-3
+    patience: 20
+  psf:
+    type: "cnn"  # Options: cnn, dev_cnn, resnet, dev_resnet, research_backed
+    learning_rate: 1.0e-3
+    patience: 20
+  
+# Training configuration
+training:
+  epochs: 10
+  batch_size: 32
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4
+  patience: 20
+  val_split: 0.2
+  eval_interval: 1
+  use_galaxy_preferences: true  # true = use galaxy model's LR/patience, false = use PSF model's
+  
+  # New SGD parameters
+  momentum: 0.9                    # SGD momentum (0-1, typically 0.9)
+  plateau_patience: 10             # ReduceLROnPlateau patience (epochs to wait before reducing LR)
+  plateau_factor: 0.1              # Factor to reduce LR by (new_lr = old_lr * factor)
+  plateau_min_lr: 1.0e-8          # Minimum learning rate threshold
+  
+# Evaluation configuration
+evaluation:
+  test_samples: 1000
+  seed: 58
+  
+# Output configuration
+output:
+  save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
+  plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
+  model_name: "my_model"
+  
+# Plotting configuration
+plotting:
+  plot: true  # Whether to plot learning curves
+  
+# Comparison methods
+comparison:
+  mcal: true
+  ngmix: true
+  psf_model: "gauss"
+  gal_model: "gauss"
