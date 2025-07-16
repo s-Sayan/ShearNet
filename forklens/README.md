@@ -8,18 +8,18 @@ In this directory I document the following changes:
 
 ## Test 1
 
-In this directory [Forklens](./plots/forklens) I ran the Forklens architecture with the Forklens LR scheduler and optimizer, I got a rather poor performance. The learning and validation curve plateaued immediatly, early stop was triggered at epoch 66/150 (having not improved significantly since epoch 2).  
+In this directory [Forklens](./plots/forklens_new_optimizer+lr_scheduler) I ran the Forklens architecture with the Forklens LR scheduler and optimizer, I got a rather poor performance. The learning and validation curve plateaued immediatly, early stop was triggered at epoch 66/150 (having not improved significantly since epoch 2).  
 ### Learning curve:
 
-[Learning Curve](./plots/forklens/learning_curve.png)
+![Learning Curve](./plots/forklens_new_optimizer+lr_scheduler/learning_curve.png)
 
 ### Residual Plot:
 
-[Residual Plot](./plots/forklens/residuals.png)
+![Residual Plot](./plots/forklens_new_optimizer+lr_scheduler/residuals.png)
 
 ### Scatter Plot:
 
-[Scatter Plot](./plots/forklens/scatters.png)
+![Scatter Plot](./plots/forklens_new_optimizer+lr_scheduler/scatters.png)
 
 As seen by the residual plots, its performance on everything is quiet bad. Next I wanted to try and isolate the performance issue, so I ran Forklens' architecture with ShearNet's lr scheduler and optimizer.
 
@@ -29,15 +29,15 @@ In this directory [forklens_old_optimizer+lr_scheduler](./plots/forklens_old_opt
 I believe the bumpy learning curve to largely be due to the nature of ShearNet's lr scheduler. Or more accurately the extremely flat plateau in [test 1](#test-1) is because of the nature of Forklens' optimizer. They use a [ReduceLROnPlateau](./src/core/train.py#L200) scheduler that is designed to encourage plateaus in the learning curve, reducing the learning rate on plateaus, effectively impairing the NN's ability to learn from improvements.  
 ### Learning curve:
 
-[Learning Curve](./plots/forklens_old_optimizer+lr_scheduler/learning_curve.png)
+![Learning Curve](./plots/forklens_old_optimizer+lr_scheduler/learning_curve.png)
 
 ### Residual Plot:
 
-[Residual Plot](./plots/forklens_old_optimizer+lr_scheduler/residuals.png)
+![Residual Plot](./plots/forklens_old_optimizer+lr_scheduler/residuals.png)
 
 ### Scatter Plot:
 
-[Scatter Plot](./plots/forklens_old_optimizer+lr_scheduler/scatters.png)
+![Scatter Plot](./plots/forklens_old_optimizer+lr_scheduler/scatters.png)
 
 As seen by the residual plots, its performance on everything is quiet identical to [test 1](#test-1).
 
@@ -46,15 +46,15 @@ Confused, I tried running ShearNet's fork-like architecture (research backed on 
 
 ### Learning curve:
 
-[Learning Curve](./plots/research+original_new_lr_and_optimizer/learning_curve.png)
+![Learning Curve](./plots/research+original_new_lr_and_optimizer/learning_curve.png)
 
 ### Residual Plot:
 
-[Residual Plot](./plots/research+original_new_lr_and_optimizer/residuals.png)
+![Residual Plot](./plots/research+original_new_lr_and_optimizer/residuals.png)
 
 ### Scatter Plot:
 
-[Scatter Plot](./plots/research+original_new_lr_and_optimizer/scatters.png)
+![Scatter Plot](./plots/research+original_new_lr_and_optimizer/scatters.png)
 
 Now in the learning curve plot, something that is very confusing is that the validation loss is above the training loss.  
 Beside that, the performance is near indistinguishable in these plots, so let me compare [test 1](test-1) and [test 3's](#test-3) performance.
@@ -67,15 +67,15 @@ Here are the plots comparing [test 3](#test-3) and [test 1's](test-1) performanc
 
 ### Learning curve:
 
-[Learning Comparison Curve](./plots/compare_forklens_shearnet_new_lr+opt/learning_curves_comparison_20250715_185656.png)
+![Learning Comparison Curve](./plots/compare_new_optimizer%2Blr_scheduler/learning_curves_comparison_20250716_040706.png)
 
 ### Residual Plot:
 
-[Residual Comparison Plot](./plots/compare_forklens_shearnet_new_lr+opt/residuals_comparison_20250715_185742.png)
+![Residual Comparison Plot](./plots/compare_new_optimizer%2Blr_scheduler/residuals_comparison_20250716_040759.png)
 
 ### Scatter Plot:
 
-[Scatter Comparison Plot](./plots/compare_forklens_shearnet_new_lr+opt/prediction_comparison_20250715_185734.png)
+![Scatter Comparison Plot](./plots/compare_new_optimizer%2Blr_scheduler/prediction_comparison_20250716_040753.png)
 
 ## Comparison 2
 
@@ -83,15 +83,15 @@ Here are the plots comparing [test 2](#test-3) and [test 1's](test-1) performanc
 
 ### Learning curve:
 
-[Learning Comparison Curve](./plots/compare_forklens_both_lr+opt/learning_curves_comparison_20250715_190111.png)
+![Learning Comparison Curve](./plots/forklens_compare_optimizer%2Blr_scheduler/learning_curves_comparison_20250716_040427.png)
 
 ### Residual Plot:
 
-[Residual Comparison Plot](./plots/compare_forklens_both_lr+opt/residuals_comparison_20250715_190145.png)
+![Residual Comparison Plot](./plots/forklens_compare_optimizer%2Blr_scheduler/residuals_comparison_20250716_040523.png)
 
 ### Scatter Plot:
 
-[Scatter Comparison Plot](./plots/compare_forklens_both_lr+opt/prediction_comparison_20250715_190138.png)
+![Scatter Comparison Plot](./plots/forklens_compare_optimizer%2Blr_scheduler/prediction_comparison_20250716_040515.png)
 
 ## Comparison 3
 
@@ -99,15 +99,15 @@ Here are the plots comparing [test 3](#test-3) and ShearNet's performance on it'
 
 ### Learning curve:
 
-[Learning Comparison Curve](./plots/compare_shearnet_both_lr+opt/learning_curves_comparison_20250715_190638.png)
+![Learning Comparison Curve](./plots/shearnet_compare_optimizer%2Blr_scheduler/learning_curves_comparison_20250716_040951.png)
 
 ### Residual Plot:
 
-[Residual Comparison Plot](./plots/compare_shearnet_both_lr+opt/residuals_comparison_20250715_190711.png)
+![Residual Comparison Plot](./plots/shearnet_compare_optimizer%2Blr_scheduler/residuals_comparison_20250716_041028.png)
 
 ### Scatter Plot:
 
-[Scatter Comparison Plot](./plots/compare_shearnet_both_lr+opt/prediction_comparison_20250715_190702.png)
+![Scatter Comparison Plot](./plots/shearnet_compare_optimizer%2Blr_scheduler/prediction_comparison_20250716_041021.png)
 
 # Perspective
 
