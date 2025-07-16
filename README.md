@@ -6,9 +6,7 @@ I basically just made the [generate_dataset](./shearnet/core/dataset.py#L11) fun
 
 ### Results
 
-I will write this after my meeting today.
-
-![Alt text](../early-fusion/plots/research_backed_galaxy_resnet/residuals.png)
+TODO
 
 ## Next Steps
 
