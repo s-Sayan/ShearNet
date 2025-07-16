@@ -54,8 +54,6 @@ ENV/
 Thumbs.db
 
 # Project specific
-model_checkpoint/
-plots/
 datasets/
 *.fits
 *.npy
