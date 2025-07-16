@@ -1,0 +1,43 @@
+dataset:
+  samples: 100000
+  psf_sigma: 0.25
+  exp: ideal
+  nse_sd: 1.0e-05
+  seed: 42
+model:
+  type: forklike
+  galaxy:
+    type: forklens_resnet34
+    learning_rate: 0.01
+    patience: 25
+  psf:
+    type: forklens_psfnet
+    learning_rate: 0.005
+    patience: 20
+training:
+  epochs: 150
+  batch_size: 250
+  learning_rate: 0.01
+  weight_decay: 0.0
+  patience: 25
+  val_split: 0.1
+  eval_interval: 1
+  use_galaxy_preferences: true
+  momentum: 0.9
+  plateau_patience: 15
+  plateau_factor: 0.2
+  plateau_min_lr: 1.0e-07
+evaluation:
+  test_samples: 10000
+  seed: 58
+output:
+  save_path: /home/adfield/ShearNet/model_checkpoint
+  plot_path: /home/adfield/ShearNet/plots
+  model_name: forklens_old_optimizer+lr_scheduler
+plotting:
+  plot: true
+comparison:
+  mcal: true
+  ngmix: true
+  psf_model: gauss
+  gal_model: gauss
