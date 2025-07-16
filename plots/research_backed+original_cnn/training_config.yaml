@@ -2,7 +2,7 @@ dataset:
   samples: 100000
   psf_sigma: 0.25
   exp: ideal
-  nse_sd: 0.001
+  nse_sd: 1.0e-05
   seed: 42
 model:
   type: forklike
@@ -29,7 +29,7 @@ evaluation:
 output:
   save_path: /home/adfield/ShearNet/model_checkpoint
   plot_path: /home/adfield/ShearNet/plots
-  model_name: research_backed_galaxy_resnet_high_noise
+  model_name: research_backed+original_cnn
 plotting:
   plot: true
 comparison:
