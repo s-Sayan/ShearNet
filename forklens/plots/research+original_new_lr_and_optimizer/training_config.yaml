@@ -1,0 +1,43 @@
+dataset:
+  samples: 100000
+  psf_sigma: 0.25
+  exp: ideal
+  nse_sd: 1.0e-05
+  seed: 42
+model:
+  type: forklike
+  galaxy:
+    type: research_backed
+    learning_rate: 0.002
+    patience: 50
+  psf:
+    type: cnn
+    learning_rate: 0.001
+    patience: 20
+training:
+  epochs: 300
+  batch_size: 128
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  patience: 20
+  val_split: 0.2
+  eval_interval: 1
+  use_galaxy_preferences: true
+  momentum: 0.9
+  plateau_patience: 10
+  plateau_factor: 0.1
+  plateau_min_lr: 1.0e-06
+evaluation:
+  test_samples: 5000
+  seed: 58
+output:
+  save_path: /home/adfield/ShearNet/model_checkpoint
+  plot_path: /home/adfield/ShearNet/plots
+  model_name: research+original_new_lr_and_optimizer
+plotting:
+  plot: true
+comparison:
+  mcal: true
+  ngmix: true
+  psf_model: gauss
+  gal_model: gauss
