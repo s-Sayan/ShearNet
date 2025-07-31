@@ -1,7 +1,7 @@
 # configs/dry_run.yaml
 dataset:
   samples: 100
-  psf_sigma: 0.25
+  psf_sigma: 1.5
   nse_sd: 1.0e-3
   exp: "ideal"
   seed: 42
@@ -22,13 +22,19 @@ training:
   batch_size: 16
   patience: 20
   use_galaxy_preferences: true  # true = use galaxy model's LR/patience, false = use PSF model's
+  
+  # SGD parameters
+  momentum: 0.9
+  plateau_patience: 5
+  plateau_factor: 0.1
+  plateau_min_lr: 1.0e-8
 
 evaluation:
   test_samples: 10
   seed: 58
 
 output:
-  model_name: "dry_run"
+  model_name: "dry_run4"
   
 plotting:
   plot: true

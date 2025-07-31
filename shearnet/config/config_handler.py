@@ -86,6 +86,12 @@ class Config:
             'val_split': 'training.val_split',
             'eval_interval': 'training.eval_interval',
             
+            # New SGD args
+            'momentum': 'training.momentum',
+            'plateau_patience': 'training.plateau_patience',
+            'plateau_factor': 'training.plateau_factor',
+            'plateau_min_lr': 'training.plateau_min_lr',
+            
             # Output args
             'save_path': 'output.save_path',
             'plot_path': 'output.plot_path',

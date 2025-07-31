@@ -107,19 +107,11 @@ def main():
     config = None 
     
     if args.config:
-        # Load configuration
+        # Load configuration and get values from config (after overrides applied)
         config = Config(args.config)
-        
-        # Update config with command-line overrides (only non-None values)
         config.update_from_args(args)
         
-        # Print configuration
-        print("\nUsing config file:", args.config)
-        if any(getattr(args, k) is not None for k in DEFAULTS.keys()):
-            print("With command-line overrides")
-        
-        
-        # Get values from config (after overrides applied)
+        # Existing parameters
         samples = config.get('dataset.samples')
         psf_sigma = config.get('dataset.psf_sigma')
         nse_sd = config.get('dataset.nse_sd')
@@ -135,11 +127,15 @@ def main():
         model_name = config.get('output.model_name')
         val_split = config.get('training.val_split')
         eval_interval = config.get('training.eval_interval')
-        
-        # Get ForkLike-specific parameters
         galaxy_model_type = config.get('model.galaxy.type', 'cnn')
         psf_model_type = config.get('model.psf.type', 'cnn')
         use_galaxy_preferences = config.get('training.use_galaxy_preferences', True)
+        
+        # New SGD parameters
+        momentum = config.get('training.momentum', 0.9)
+        plateau_patience = config.get('training.plateau_patience', 10)
+        plateau_factor = config.get('training.plateau_factor', 0.1)
+        plateau_min_lr = config.get('training.plateau_min_lr', 1e-8)
         
         # Apply preference logic for learning rate and patience
         if use_galaxy_preferences:
@@ -148,7 +144,7 @@ def main():
         else:
             lr = config.get('model.psf.learning_rate', lr)
             patience = config.get('model.psf.patience', patience)
-        
+            
     else:
         # Use argparse values with defaults (original behavior)
         samples = args.samples if args.samples is not None else DEFAULTS['samples']
@@ -195,6 +191,11 @@ def main():
         galaxy_model_type = config.get('model.galaxy.type', 'cnn')
         psf_model_type = config.get('model.psf.type', 'cnn')
 
+        momentum = 0.9
+        plateau_patience = 10
+        plateau_factor = 0.1
+        plateau_min_lr = 1e-8
+
     config.print_config()    
     # Rest of the code remains the same...
     save_path = os.path.abspath(args.save_path) if args.save_path else None
@@ -235,9 +236,15 @@ def main():
                                     val_split=val_split,
                                     eval_interval=eval_interval, 
                                     patience=patience,
-                                    lr=lr, weight_decay=weight_decay,
+                                    lr=lr, 
+                                    weight_decay=weight_decay,
                                     galaxy_model_type=galaxy_model_type,
-                                    psf_model_type=psf_model_type
+                                    psf_model_type=psf_model_type,
+                                    # SGD parameters
+                                    momentum=momentum,
+                                    plateau_patience=plateau_patience,
+                                    plateau_factor=plateau_factor,
+                                    plateau_min_lr=plateau_min_lr
                                 )
 
     if plot_flag:
