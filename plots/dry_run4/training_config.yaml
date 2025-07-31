@@ -1,0 +1,43 @@
+dataset:
+  samples: 100
+  psf_sigma: 1.5
+  exp: ideal
+  nse_sd: 0.001
+  seed: 42
+model:
+  type: forklike
+  galaxy:
+    type: cnn
+    learning_rate: 0.001
+    patience: 20
+  psf:
+    type: cnn
+    learning_rate: 0.001
+    patience: 20
+training:
+  epochs: 10
+  batch_size: 16
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  patience: 20
+  val_split: 0.2
+  eval_interval: 1
+  use_galaxy_preferences: true
+  momentum: 0.9
+  plateau_patience: 5
+  plateau_factor: 0.1
+  plateau_min_lr: 1.0e-08
+evaluation:
+  test_samples: 10
+  seed: 58
+output:
+  save_path: /home/adfield/ShearNet/model_checkpoint
+  plot_path: /home/adfield/ShearNet/plots
+  model_name: dry_run4
+plotting:
+  plot: true
+comparison:
+  mcal: true
+  ngmix: true
+  psf_model: gauss
+  gal_model: gauss
