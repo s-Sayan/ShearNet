@@ -32,6 +32,12 @@ training:
   eval_interval: 1
   use_galaxy_preferences: true  # true = use galaxy model's LR/patience, false = use PSF model's
   
+  # New SGD parameters
+  momentum: 0.9                    # SGD momentum (0-1, typically 0.9)
+  plateau_patience: 10             # ReduceLROnPlateau patience (epochs to wait before reducing LR)
+  plateau_factor: 0.1              # Factor to reduce LR by (new_lr = old_lr * factor)
+  plateau_min_lr: 1.0e-8          # Minimum learning rate threshold
+  
 # Evaluation configuration
 evaluation:
   test_samples: 1000
