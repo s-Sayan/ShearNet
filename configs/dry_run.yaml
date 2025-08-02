@@ -9,7 +9,7 @@ dataset:
   pixel_size: 0.141
 
 model:
-  type: "cnn"
+  type: "mlp"
   
 training:
   epochs: 10
@@ -21,7 +21,7 @@ evaluation:
   seed: 58
 
 output:
-  model_name: "dry_run"
+  model_name: "dry_run_mlp"
   
 plotting:
   plot: true
