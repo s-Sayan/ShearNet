@@ -34,6 +34,7 @@ coverage.xml
 
 # Jupyter Notebook
 .ipynb_checkpoints
+out/
 
 # Environments
 .env

@@ -7,7 +7,10 @@ import argparse
 import os
 import jax.random as random
 import jax.numpy as jnp
+import shutil
 
+
+import shearnet.core.models
 from ..config.config_handler import Config
 from ..core.train import train_model
 from ..core.dataset import generate_dataset, split_combined_images
@@ -260,6 +263,14 @@ def main():
     config_path = os.path.join(model_dir, 'training_config.yaml')
     config.save(config_path)
     print(f"\nTraining configuration saved to: {config_path}")
+
+    try:
+        models_source = shearnet.core.models.__file__
+        architecture_dest = os.path.join(model_dir, 'architecture.py')
+        shutil.copy2(models_source, architecture_dest)
+        print(f"Model architecture saved to: {architecture_dest}")
+    except Exception as e:
+        print(f"WARNING: Could not copy model architecture file: {e}")
 
     state, train_loss, val_loss = train_model(
                                     train_galaxy_images,
