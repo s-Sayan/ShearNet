@@ -47,7 +47,7 @@ shearnet-eval --model_name cnn1 --test_samples 5000
 ```
 Key options:
 
-- `-nn`: Model type (`mlp`, `cnn`, or `resnet`)
+- `-nn`: Model type (`mlp`, `cnn`, `resnet`, `research_backed`, `forklens_psf`, `fork-like`)
 - `-mcal`: Compare with metacalibration and NGmix
 - `-plot`: Generate plots
 
@@ -56,13 +56,13 @@ Key options:
 ShearNet provides shear estimates for g1, g2, sigma, and flux parameters. Example performance on test data:
 
 ### Comparison of predictions
-<!-- <img src="./notebooks/scatter_plot_e1_scatter.png" alt="Comparison of Predictions" width="600"/> -->
-
+On 5000 test samples of stamp size 53x53 and pixel size 0.141:
 ```
-| Method          | MSE (g1, g2) | Time  |
-|-----------------|--------------|-------|
-| ShearNet        | ~6e-4        | <1s   |
-| Moment-based    | ~1e-2        | ~7s   |
+| Method                            | MSE (g1, g2)    | Time    |
+|-----------------------------------|-----------------|---------|
+| ShearNet (research backed)        | ~6.75e-6        | ~6.6s   |
+| ShearNet (fork-like)              | ~4e-6           | ~2.5s   |
+| Moment-based                      | ~1e-4           | ~142s   |
 ```
 
 ## Requirements

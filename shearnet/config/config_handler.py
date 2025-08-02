@@ -77,7 +77,10 @@ class Config:
             'pixel_size': 'dataset.pixel_size',
             
             # Model args
+            'process_psf': 'model.process_psf',
             'nn': 'model.type',
+            'galaxy_type': 'model.galaxy.type',
+            'psf_type': 'model.psf.type',
             
             # Training args
             'epochs': 'training.epochs',
