@@ -8,7 +8,7 @@ from ..methods.ngmix import g1_g2_sigma_sample
 psf_fnmae = '/projects/mccleary_group/saha/codes/.empty/psf_cutouts_superbit.npy'
 weight_fname = '/projects/mccleary_group/saha/codes/.empty/weights_cutouts_superbit.npy'
 
-def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, return_obs=False):
+def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, process_psf=False,return_obs=False):
     images = []
     labels = []
     obs = []
@@ -22,7 +22,17 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp
         #psf_sigma = np.random.uniform(0.5, 1.5)
         
         obj_obs = sim_func(g1, g2, sigma=sigma, flux=flux, psf_sigma=psf_sigma, nse_sd = nse_sd,  type=type, npix=npix, scale=scale, seed=i, exp=exp)
-        images.append(obj_obs.image)
+        
+        galaxy_images = obj_obs.image
+        psf_images = obj_obs.psf.image
+
+        if process_psf :
+            # Create (height, width, 2) array
+            combined_images = np.stack([galaxy_images, psf_images], axis=-1)
+            
+            images.append(combined_images)
+        else :
+            images.append(galaxy_images)
         labels.append(np.array([g1, g2, sigma, flux], dtype=np.float32))
         obs.append(obj_obs)
     
@@ -30,6 +40,21 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp
         return np.array(images), np.array(labels), obs    
     
     return np.array(images), np.array(labels)
+
+def split_combined_images(combined_images):
+    """
+    Split concatenated images back into separate galaxy and PSF arrays.
+    
+    Args:
+        combined_images: np.ndarray of shape (samples, height, width, 2)
+        
+    Returns:
+        galaxy_images: np.ndarray of shape (samples, height, width)
+        psf_images: np.ndarray of shape (samples, height, width)
+    """
+    galaxy_images = combined_images[..., 0]  # Channel 0
+    psf_images = combined_images[..., 1]     # Channel 1
+    return galaxy_images, psf_images
 
 def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", superbit_psf_fname=psf_fnmae):
 
