@@ -99,6 +99,8 @@ def main():
         psf_sigma = config.get('dataset.psf_sigma')
         nse_sd = config.get('dataset.nse_sd')
         exp = config.get('dataset.exp')
+        stamp_size = config.get('dataset.stamp_size')
+        pixel_size = config.get('dataset.pixel_size')
         mcal = args.mcal or config.get('comparison.ngmix', False)
         plot = args.plot or config.get('plotting.plot', False)
         plot_animation = args.plot_animation or config.get('plotting.animation', False)
@@ -110,7 +112,7 @@ def main():
 
     # Generate test data
     test_images, test_labels, test_obs = generate_dataset(
-        test_samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd, return_obs=True
+        test_samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd, npix=stamp_size, scale=pixel_size, return_obs=True
     )
     print(f"Shape of test images: {test_images.shape}")
     print(f"Shape of test labels: {test_labels.shape}")

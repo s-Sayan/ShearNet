@@ -5,6 +5,8 @@ dataset:
   nse_sd: 1.0e-3
   exp: "ideal"
   seed: 42
+  stamp_size: 53
+  pixel_size: 0.141
 
 model:
   type: "cnn"
