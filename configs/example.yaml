@@ -10,7 +10,14 @@ dataset:
 
 # Model configuration  
 model:
-  type: "cnn"  # Options: mlp, cnn, resnet
+  process_psf: False
+  type: "research_backed"  # Options: mlp, cnn, resnet, forklens_psf, 
+               #          research_backed, and fork-like
+  # Example fork-like setup
+  # galaxy:
+  #   type: "research_backed"
+  # psf:
+  #   type: "forklens_psf"
   
 # Training configuration
 training:
@@ -18,7 +25,7 @@ training:
   batch_size: 128
   learning_rate: 1.0e-3
   weight_decay: 1.0e-4
-  patience: 20
+  patience: 50
   val_split: 0.2
   eval_interval: 1
   
@@ -31,7 +38,7 @@ evaluation:
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "cnn1"
+  model_name: "major_test"
   
 # Plotting configuration
 plotting:
