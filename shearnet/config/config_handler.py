@@ -73,6 +73,8 @@ class Config:
             'exp': 'dataset.exp',
             'seed': 'dataset.seed',
             'nse_sd': 'dataset.nse_sd',
+            'stamp_size': 'dataset.stamp_size',
+            'pixel_size': 'dataset.pixel_size',
             
             # Model args
             'nn': 'model.type',

@@ -76,6 +76,10 @@ Examples:
                        help='Enable plotting (overrides config)')
     parser.add_argument('--no-plot', action='store_const', const=False, dest='plot',
                        help='Disable plotting (overrides config)')
+    parser.add_argument('--stamp_size', type=int, default=None, 
+                   help='Stamp size of the training data.')
+    parser.add_argument('--pixel_size', type=float, default=None, 
+                   help='Pixel size of the training data.')
     
     return parser
 
@@ -102,7 +106,9 @@ def main():
         'model_name': 'my_model',
         'plot': False,
         'val_split': 0.2,      
-        'eval_interval': 1,         
+        'eval_interval': 1,   
+        'stamp_size': 53,   
+        'pixel_size': 0.141,    
     }
     config = None 
     
@@ -125,6 +131,8 @@ def main():
         nse_sd = config.get('dataset.nse_sd')
         exp = config.get('dataset.exp')
         seed = config.get('dataset.seed')
+        stamp_size = config.get('dataset.stamp_size') 
+        pixel_size = config.get('dataset.pixel_size')
         epochs = config.get('training.epochs')
         batch_size = config.get('training.batch_size')
         nn = config.get('model.type')
@@ -153,6 +161,8 @@ def main():
         model_name = args.model_name if args.model_name is not None else DEFAULTS['model_name']
         val_split = args.val_split if args.val_split is not None else DEFAULTS['val_split']
         eval_interval = args.eval_interval if args.eval_interval is not None else DEFAULTS['eval_interval']
+        stamp_size = args.stamp_size if args.stamp_size is not None else DEFAULTS['stamp_size']
+        pixel_size = args.pixel_size if args.pixel_size is not None else DEFAULTS['pixel_size']
         
         # Always create a config object with the actual values being used
         config = Config()  # Start with defaults
@@ -162,6 +172,8 @@ def main():
         config._set_nested('dataset.nse_sd', nse_sd)
         config._set_nested('dataset.exp', exp)
         config._set_nested('dataset.seed', seed)
+        config._set_nested('dataset.stamp_size', stamp_size)
+        config._set_nested('dataset.pixel_size', pixel_size)
         config._set_nested('model.type', nn)
         config._set_nested('training.epochs', epochs)
         config._set_nested('training.batch_size', batch_size)
@@ -185,7 +197,7 @@ def main():
     
     get_device()
 
-    train_images, train_labels = generate_dataset(samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd)
+    train_images, train_labels = generate_dataset(samples, psf_sigma, exp=exp, seed=seed, npix=stamp_size, scale=pixel_size, nse_sd=nse_sd)
     rng_key = random.PRNGKey(seed)
     print(f"Shape of training images: {train_images.shape}")
     print(f"Shape of training labels: {train_labels.shape}")
