@@ -24,37 +24,27 @@ class ResidualBlock(nn.Module):
         x = x + residual
         x = nn.leaky_relu(x, negative_slope=0.01) # Activation after residual addition
         return x
-        
-class MultiScaleResidualBlock(nn.Module):
-    filters_per_scale: int
-    scales: tuple
 
+class SimpleGalaxyNN(nn.Module):
     @nn.compact
-    def __call__(self, x):
-        residual = x
-
-        # Multi-scale convolutions in parallel
-        scale_outputs = []
-        for scale in self.scales:
-            scale_out = nn.Conv(self.filters_per_scale, (scale, scale), padding='SAME')(x)
-            scale_outputs.append(scale_out)
-        
-        # Concatenate multi-scale features
-        x = jnp.concatenate(scale_outputs, axis=-1)
-        x = nn.relu(x)
-        
-        # Channel matching for residual
-        total_filters = self.filters_per_scale * len(self.scales)
-        if residual.shape[-1] != total_filters:
-            residual = nn.Conv(total_filters, (1, 1))(residual)
-
-        # Residual connection
-        return x + residual
-
+    def __call__(self, x, deterministic: bool = False, fork: bool = False):
+        if x.ndim == 2:  # If batch dimension is missing
+            x = jnp.expand_dims(x, axis=0)
+        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
+        x = jnp.reshape(x, (x.shape[0], -1))  # Flatten
+        if fork :
+            return x
+        else :
+            x = nn.Dense(128)(x)
+            x = nn.relu(x)
+            x = nn.Dense(64)(x)
+            x = nn.relu(x)
+            x = nn.Dense(4)(x)  # Output e1, e2
+            return x
     
 class OriginalGalaxyNN(nn.Module):
     @nn.compact
-    def __call__(self, x, deterministic: bool = False):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False):
         # Input handling 
         if x.ndim == 2:
             x = jnp.expand_dims(x, axis=0)
@@ -74,67 +64,21 @@ class OriginalGalaxyNN(nn.Module):
         # Flatten: 14*14*32 = 6,272 features
         x = x.reshape((x.shape[0], -1))
         
-        # Dense layers similar to working FNN
-        x = nn.Dense(128)(x)
-        x = nn.relu(x)
-        #x = nn.Dropout(0.5)(x, deterministic=deterministic)  # Dropout applied only if deterministic=False
-        x = nn.Dense(4)(x)
-        #x = 0.5*nn.tanh(x)
-        return x
-        
-class EnhancedGalaxyNN(nn.Module):
-    """
-    Built off of the CNN from Sayan above. Changes are listed below:
-    - multi-scale feature detection per convolution layer
-    - increase in channels per convoluton layer resulting in an increase in channels from 6,272 -> 62,720
-    """
+        if fork : 
+            return x
+        else :
+            # Dense layers similar to working FNN
+            x = nn.Dense(128)(x)
+            x = nn.relu(x)
+            #x = nn.Dropout(0.5)(x, deterministic=deterministic)  # Dropout applied only if deterministic=False
+            x = nn.Dense(4)(x)
+            #x = 0.5*nn.tanh(x)
+            return x
+    
+    
+class GalaxyResNet(nn.Module):
     @nn.compact
-    def __call__(self, x, deterministic: bool = False):
-        # Input handling - same as original
-        if x.ndim == 2:
-            x = jnp.expand_dims(x, axis=0)
-        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
-
-        x = jnp.expand_dims(x, axis=-1)
-
-        # Multi-scale first layer instead of single 3x3
-        x_fine = nn.Conv(32, (3, 3), padding='SAME')(x)     # Fine features (original)
-        x_small = nn.Conv(32, (5, 5), padding='SAME')(x)    # Small-scale patterns
-        x_med = nn.Conv(32, (9, 9), padding='SAME')(x)      # Medium-scale patterns
-        x_large = nn.Conv(32, (15, 15), padding='SAME')(x)  # Large-scale patterns
-        x_global = nn.Conv(32, (21, 21), padding='SAME')(x) # Global elliptical shape
-
-        # Concatenate multi-scale features
-        x = jnp.concatenate([x_fine, x_small, x_med, x_large, x_global], axis=-1)
-        print(x.shape)
-        x = nn.relu(x)
-
-        x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))  # ~27x27x160
-
-        x2_fine = nn.Conv(64, (3, 3), padding='SAME')(x)     # Fine features
-        x2_small = nn.Conv(64, (5, 5), padding='SAME')(x)    # Small-scale patterns
-        x2_med = nn.Conv(64, (9, 9), padding='SAME')(x)      # Medium-scale patterns
-        x2_large = nn.Conv(64, (15, 15), padding='SAME')(x)  # Large-scale patterns
-        x2_global = nn.Conv(64, (21, 21), padding='SAME')(x) # Global elliptical shape
-
-        x = jnp.concatenate([x2_fine, x2_small, x2_med, x2_large, x2_global], axis=-1)
-        x = nn.relu(x)
-
-        x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))  # ~14x14x96
-
-        # Flatten: 14x14x320 = 62,720 features
-        x = x.reshape((x.shape[0], -1))
-
-        # Dense layers
-        x = nn.Dense(128)(x)
-        x = nn.relu(x)
-        x = nn.Dense(4)(x)
-
-        return x
-        
-class OriginalGalaxyResNet(nn.Module):
-    @nn.compact
-    def __call__(self, x, deterministic: bool = False):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False):
         if x.ndim == 2:  # If batch dimension is missing
             x = jnp.expand_dims(x, axis=0)
         assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
@@ -160,45 +104,18 @@ class OriginalGalaxyResNet(nn.Module):
         x = jnp.reshape(x, (x.shape[0], -1))
         #print(f"Shape after resnet: {x.shape}")
 
-        # Ensure that the flattened dimension does not exceed ~200
-        #assert x.shape[1] <= 200, f"Flattened dimension is too large: {x.shape[1]}"
-
-        # Fully connected layers        
-        x = nn.Dense(128)(x)
-        x = nn.leaky_relu(x, negative_slope=0.01)
-        # x = nn.Dropout(0.5, deterministic=deterministic)(x)  # Dropout for regularization
-        x = nn.Dense(64)(x)
-        x = nn.leaky_relu(x, negative_slope=0.01)
-        x = nn.Dense(2)(x)  # Output e1, e2
-        x = nn.tanh(x)
-        return x
-        
-class GalaxyResNet(nn.Module):
-    """
-    Built off of the ResNet from Sayan above. Changes are listed below:
-    - multi-scale feature detection per convolution layer
-    """
-    @nn.compact
-    def __call__(self, x, deterministic: bool = False):
-    
-        if x.ndim == 2:
-            x = jnp.expand_dims(x, axis=0)
-        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
-
-        x = jnp.expand_dims(x, axis=-1)
-
-        # Fewer scales, smaller filters, but with residuals
-        x = MultiScaleResidualBlock(filters_per_scale=16, scales=(3, 9, 21))(x)  # 48 total
-        x = nn.avg_pool(x, (2, 2), (2, 2))
-
-        x = MultiScaleResidualBlock(filters_per_scale=32, scales=(3, 9, 21))(x)  # 96 total  
-        x = nn.avg_pool(x, (2, 2), (2, 2))
-
-        x = x.reshape((x.shape[0], -1))  # 16,224 features (13×13×96)
-        x = nn.Dense(128)(x)
-        x = nn.relu(x)
-        x = nn.Dense(4)(x)
-        return x
+        if fork :
+            return x
+        else :
+            # Fully connected layers        
+            x = nn.Dense(128)(x)
+            x = nn.leaky_relu(x, negative_slope=0.01)
+            # x = nn.Dropout(0.5, deterministic=deterministic)(x)  # Dropout for regularization
+            x = nn.Dense(64)(x)
+            x = nn.leaky_relu(x, negative_slope=0.01)
+            x = nn.Dense(2)(x)  # Output e1, e2
+            x = nn.tanh(x)
+            return x
 
 class CBAM_Attention(nn.Module):
     """
@@ -332,7 +249,7 @@ class ResearchBackedGalaxyResNet(nn.Module):
     """
 
     @nn.compact
-    def __call__(self, x, deterministic: bool = False):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False):
         
         # ==================== INPUT HANDLING ====================
         # CITATION: Standard practice in computer vision, established in LeNet-5 (LeCun et al., 1998)
@@ -388,37 +305,157 @@ class ResearchBackedGalaxyResNet(nn.Module):
             scales=(3, 9, 21),     # DECISION: Consistent scale selection
             use_dilated=True
         )(x, deterministic=deterministic)
-
+        
         # ==================== GLOBAL AVERAGE POOLING ====================
         # CITATION: "Network In Network" (Lin, Chen & Yan, ICLR 2014)
         # QUOTE: "more robust to spatial translations of the input"
         # QUOTE: "no parameter to optimize in the fully connected layers, overfitting is avoided"
         # RATIONALE: Reduces parameters from ~16,224 to 96, preventing overfitting
         # TRADE-OFF: May lose spatial information important for galaxy shape measurement
-        x = jnp.mean(x, axis=(1, 2))  # Global average pooling
+        x = jnp.mean(x, axis=(1, 2))
 
-        # Print for comparison with your original 16,224 features
-        print(f"Flattened shape: {x.shape}")
+        # print(f"Flattened shape: {x.shape}")
 
-        # ==================== CLASSIFICATION HEAD ====================
-        # CITATION: "ImageNet Classification with Deep Convolutional Neural Networks" (Krizhevsky et al., NIPS 2012)
-        # RATIONALE: Dense layers for final feature combination and prediction
-        # DECISION: 128 units matches your successful original design
-        x = nn.Dense(128)(x)
+        if fork :
+            return x
+        else :
+
+            # ==================== CLASSIFICATION HEAD ====================
+            # CITATION: "ImageNet Classification with Deep Convolutional Neural Networks" (Krizhevsky et al., NIPS 2012)
+            # RATIONALE: Dense layers for final feature combination and prediction
+            # DECISION: 128 units matches your successful original design
+            x = nn.Dense(128)(x)
+            
+            # CITATION: Batch norm in dense layers: "Batch Normalization: Accelerating Deep Network Training"
+            # RATIONALE: Normalizes inputs to activation function
+            x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+            x = nn.relu(x)
+            
+            # OPTIONAL REGULARIZATION (commented out for initial testing):
+            # CITATION: "Dropout: A Simple Way to Prevent Neural Networks from Overfitting" (Srivastava et al., JMLR 2014)
+            # x = nn.Dropout(0.5)(x, deterministic=deterministic)
+
+            # ==================== FINAL PREDICTION LAYER ====================
+            # DECISION: 4 outputs to match your pipeline expectations (g1, g2, sigma, flux)
+            # CITATION: Standard practice since "Gradient-Based Learning Applied to Document Recognition" (LeCun et al., 1998)
+            # RATIONALE: Linear layer for regression output, no activation for unbounded predictions
+            x = nn.Dense(4)(x)
+
+            return x
+
+class ForkLensPSFNet(nn.Module):
+    """Simple CNN for PSF processing (from ForkLens cnn_layers)"""
+    
+    @nn.compact
+    def __call__(self, x, deterministic: bool = False, fork: bool = False):
+        # Input handling
+        if x.ndim == 2:
+            x = jnp.expand_dims(x, axis=0)
+        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
+        x = jnp.expand_dims(x, axis=-1)
         
-        # CITATION: Batch norm in dense layers: "Batch Normalization: Accelerating Deep Network Training"
-        # RATIONALE: Normalizes inputs to activation function
+        # First conv block
+        x = nn.Conv(
+            features=32,
+            kernel_size=(3, 3),
+            strides=(2, 2),
+            padding=((3, 3), (3, 3)),
+            use_bias=False
+        )(x)
         x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
         x = nn.relu(x)
         
-        # OPTIONAL REGULARIZATION (commented out for initial testing):
-        # CITATION: "Dropout: A Simple Way to Prevent Neural Networks from Overfitting" (Srivastava et al., JMLR 2014)
-        # x = nn.Dropout(0.5)(x, deterministic=deterministic)
+        # Second conv block
+        x = nn.Conv(
+            features=64,
+            kernel_size=(3, 3),
+            strides=(2, 2),
+            padding=((3, 3), (3, 3)),
+            use_bias=False
+        )(x)
+        x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+        x = nn.relu(x)
+        
+        # Third conv block
+        x = nn.Conv(
+            features=32,
+            kernel_size=(3, 3),
+            strides=(2, 2),
+            padding=((3, 3), (3, 3)),
+            use_bias=False
+        )(x)
+        x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+        x = nn.relu(x)
+        
+        # Fourth conv block
+        x = nn.Conv(
+            features=16,
+            kernel_size=(3, 3),
+            strides=(2, 2),
+            padding=((3, 3), (3, 3)),
+            use_bias=False
+        )(x)
+        x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+        x = nn.relu(x)
+        
+        # Flatten for concatenation
+        x = x.reshape((x.shape[0], -1))
 
-        # ==================== FINAL PREDICTION LAYER ====================
-        # DECISION: 4 outputs to match your pipeline expectations (g1, g2, sigma, flux)
-        # CITATION: Standard practice since "Gradient-Based Learning Applied to Document Recognition" (LeCun et al., 1998)
-        # RATIONALE: Linear layer for regression output, no activation for unbounded predictions
+        if fork :
+            return x
+        else : 
+            x = nn.Dense(128)(x)
+            x = nn.relu(x)
+            x = nn.Dense(64)(x)
+            x = nn.relu(x)
+            x = nn.Dense(4)(x)
+            return x
+
+class ForkLike(nn.Module):
+    """
+    This class is meant to take two of the above models, train one on galaxy images and another on psf images, then concatenate the results and do the dense/fully connected layers.
+
+    This is to mimimic the forklens structure here https://github.com/zhangzzk/forklens/.
+    """
+    galaxy_model_type: str = "cnn"  # Default to EnhancedGalaxyNN
+    psf_model_type: str = "cnn"     # Default to EnhancedGalaxyNN
+
+    def setup(self):
+        """Initialize the sub-models during setup."""
+        self.galaxy_model = self._get_model(self.galaxy_model_type)
+        self.psf_model = self._get_model(self.psf_model_type)
+
+    def _get_model(self, model_type):
+        """Helper function to get model instance from type string."""
+        if model_type == "mlp":
+            return SimpleGalaxyNN()
+        elif model_type == "cnn":
+            return EnhancedGalaxyNN()
+        elif model_type == "resnet":
+            return GalaxyResNet()
+        elif model_type == "research_backed":
+            return ResearchBackedGalaxyResNet()
+        elif model_type == "forklens_psf":
+            return ForkLensPSFNet()
+        else:
+            raise ValueError(f"Invalid model type specified: {model_type}")
+
+    @nn.compact
+    def __call__(self, galaxy_image, psf_image, deterministic: bool = False):
+        # This model will learn from galaxy images
+        galaxy_features = self.galaxy_model(galaxy_image, deterministic=deterministic, fork=True)
+        
+        # This model will learn from psf images
+        psf_features = self.psf_model(psf_image, deterministic=deterministic, fork=True)
+        
+        # Combines features from the two separate models above trained on different types of images to represent them in one feature layer
+        combined_features = jnp.concatenate([galaxy_features, psf_features], axis=-1)
+
+        # The fully connected layers
+        x = nn.Dense(128)(combined_features)
+        x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+        x = nn.relu(x)
+
+        # Final predictions of [g1, g2, sigma, flux]
         x = nn.Dense(4)(x)
-
         return x

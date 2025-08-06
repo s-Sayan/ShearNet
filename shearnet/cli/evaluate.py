@@ -10,7 +10,7 @@ from flax.training import checkpoints, train_state
 
 from ..config.config_handler import Config
 from ..core.dataset import generate_dataset
-from ..core.models import OriginalGalaxyNN, EnhancedGalaxyNN, OriginalGalaxyResNet, GalaxyResNet, ResearchBackedGalaxyResNet
+from ..core.models import SimpleGalaxyNN, EnhancedGalaxyNN, GalaxyResNet, ResearchBackedGalaxyResNet, ForkLensPSFNet, ForkLike
 from ..utils.metrics import eval_model, eval_ngmix, eval_mcal, remove_nan_preds_multi
 from ..utils.plot_helpers import (
     plot_residuals, 
@@ -54,6 +54,13 @@ Examples:
                        help='Generate all plots')
     parser.add_argument('--plot_animation', action='store_true', 
                        help='Plot animation of scatter plot.')
+
+    parser.add_argument('--process_psf', action='store_const', const=True, default=None, help='Process psf images on separate CNN branch.')
+
+    parser.add_argument('--galaxy_type', type=str, default=None, 
+                    help='Galaxy model type for fork-like models')
+    parser.add_argument('--psf_type', type=str, default=None,
+                    help='PSF model type for fork-like models')
     
     return parser
 
@@ -95,10 +102,15 @@ def main():
         # Get values from config
         seed = args.seed if args.seed is not None else config.get('evaluation.seed')
         test_samples = args.test_samples if args.test_samples is not None else config.get('evaluation.test_samples')
+        process_psf = args.process_psf if args.process_psf is not None else config.get('model.process_psf')
         nn = config.get('model.type')
+        galaxy_type = config.get('model.galaxy.type')
+        psf_type = config.get('model.psf.type')
         psf_sigma = config.get('dataset.psf_sigma')
         nse_sd = config.get('dataset.nse_sd')
         exp = config.get('dataset.exp')
+        stamp_size = config.get('dataset.stamp_size')
+        pixel_size = config.get('dataset.pixel_size')
         mcal = args.mcal or config.get('comparison.ngmix', False)
         plot = args.plot or config.get('plotting.plot', False)
         plot_animation = args.plot_animation or config.get('plotting.animation', False)
@@ -110,27 +122,35 @@ def main():
 
     # Generate test data
     test_images, test_labels, test_obs = generate_dataset(
-        test_samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd, return_obs=True
+        test_samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd, npix=stamp_size, scale=pixel_size, process_psf=process_psf,return_obs=True
     )
-    print(f"Shape of test images: {test_images.shape}")
+    if process_psf : 
+        # Split into separate galaxy and PSF arrays
+        test_galaxy_images, test_psf_images = split_combined_images(test_images)
+        
+        print(f"Shape of test galaxy images: {test_galaxy_images.shape}")
+        print(f"Shape of test PSF images: {test_psf_images.shape}")
+    else :
+        print(f"Shape of test images: {test_images.shape}")
     print(f"Shape of test labels: {test_labels.shape}")
 
     # Initialize the model and its parameters
     rng_key = random.PRNGKey(seed)
-    
-    # Model selection
-    if nn == "cnn":
-        model = OriginalGalaxyNN()
-    elif nn == "dev_cnn":
+
+    if nn == "mlp":
+        model = SimpleGalaxyNN()
+    elif nn == "cnn":
         model = EnhancedGalaxyNN()
     elif nn == "resnet":
-        model = OriginalGalaxyResNet()
-    elif nn == "dev_resnet":
         model = GalaxyResNet()
     elif nn == "research_backed":
         model = ResearchBackedGalaxyResNet()
+    elif nn == "forklens_psfnet":
+        model = ForkLensPSFNet()
+    elif nn == "forklike":
+        model = ForkLike()
     else:
-        raise ValueError("Invalid model type specified.")
+        raise ValueError(f"Invalid model type specified: {nn}")
         
     init_params = model.init(rng_key, jnp.ones_like(test_images[0]))
     state = train_state.TrainState.create(

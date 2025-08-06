@@ -5,10 +5,19 @@ dataset:
   exp: "ideal"
   nse_sd: 1.0e-3
   seed: 42
+  stamp_size: 53
+  pixel_size: 0.141
 
 # Model configuration  
 model:
-  type: "cnn"  # Options: cnn, dev_cnn, resnet, dev_resnet
+  process_psf: False
+  type: "research_backed"  # Options: mlp, cnn, resnet, forklens_psf, 
+               #          research_backed, and fork-like
+  # Example fork-like setup
+  # galaxy:
+  #   type: "research_backed"
+  # psf:
+  #   type: "forklens_psf"
   
 # Training configuration
 training:
@@ -16,7 +25,7 @@ training:
   batch_size: 128
   learning_rate: 1.0e-3
   weight_decay: 1.0e-4
-  patience: 20
+  patience: 50
   val_split: 0.2
   eval_interval: 1
   
@@ -29,7 +38,7 @@ evaluation:
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "control_cnn_high_noise"
+  model_name: "major_test"
   
 # Plotting configuration
 plotting:
