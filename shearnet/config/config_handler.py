@@ -73,9 +73,14 @@ class Config:
             'exp': 'dataset.exp',
             'seed': 'dataset.seed',
             'nse_sd': 'dataset.nse_sd',
+            'stamp_size': 'dataset.stamp_size',
+            'pixel_size': 'dataset.pixel_size',
             
             # Model args
+            'process_psf': 'model.process_psf',
             'nn': 'model.type',
+            'galaxy_type': 'model.galaxy.type',
+            'psf_type': 'model.psf.type',
             
             # Training args
             'epochs': 'training.epochs',
