@@ -10,6 +10,8 @@ dataset:
   seed: 42
   stamp_size: 53
   pixel_size: 0.141
+  apply_psf_shear: false
+  psf_shear_range: 0.05
 
 # Model configuration  
 model:

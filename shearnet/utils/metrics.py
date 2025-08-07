@@ -197,6 +197,24 @@ def loss_fn_eval(state, params, images, labels):
     
     return loss, loss_per_label
 
+def fork_loss_fn_eval(state, params, galaxy_images, psf_images, labels):
+
+    preds = state.apply_fn(params, galaxy_images, psf_images)
+    
+    # Combined loss (assuming preds shape matches labels shape)
+    loss = optax.l2_loss(preds, labels).mean()
+    
+    # Per-label losses
+    loss_per_label = {
+        'g1': optax.l2_loss(preds[:, 0], labels[:, 0]).mean(),
+        'g2': optax.l2_loss(preds[:, 1], labels[:, 1]).mean(),
+        'g1g2_combined': optax.l2_loss(preds[:, :2], labels[:, :2]).mean(),
+        'sigma': optax.l2_loss(preds[:, 2], labels[:, 2]).mean(),
+        'flux': optax.l2_loss(preds[:, 3], labels[:, 3]).mean()
+    }
+    
+    return loss, loss_per_label
+
 
 def eval_mcal(test_images, test_labels, psf_fwhm) -> Dict[str, Any]:
     """Evaluate metacalibration on the entire test set at once.
@@ -351,6 +369,23 @@ def eval_step(state, images, labels):
     
     return loss, preds, loss_per_label, bias_per_label
 
+@jax.jit
+def fork_eval_step(state, images, psf_images, labels):
+    
+    loss, loss_per_label = fork_loss_fn_eval(state, state.params, images, psf_images, labels)
+    preds = state.apply_fn(state.params, images, psf_images, deterministic=True)
+    
+    # Calculate per-label biases
+    bias_per_label = {
+        'g1': (preds[:, 0] - labels[:, 0]).mean(),
+        'g2': (preds[:, 1] - labels[:, 1]).mean(),
+        'g1g2_combined': (preds[:, :2] - labels[:, :2]).mean(),
+        'sigma': (preds[:, 2] - labels[:, 2]).mean(),
+        'flux': (preds[:, 3] - labels[:, 3]).mean()
+    }
+    
+    return loss, preds, loss_per_label, bias_per_label
+
 
 def eval_model(state, test_images, test_labels, batch_size=32) -> Dict[str, Any]:
     """Evaluate the neural network model on the entire test set.
@@ -391,6 +426,82 @@ def eval_model(state, test_images, test_labels, batch_size=32) -> Dict[str, Any]
         batch_images = test_images[i:i + batch_size]
         batch_labels = test_labels[i:i + batch_size]
         loss, preds, loss_per_label, bias_per_label = eval_step(state, batch_images, batch_labels)
+        
+        all_preds.append(preds)
+        
+        batch_bias = (preds - batch_labels).mean()
+        batch_size_actual = len(batch_images)
+        
+        # Accumulate combined metrics
+        total_loss += loss * batch_size_actual
+        total_bias += batch_bias * batch_size_actual
+        total_samples += batch_size_actual
+        
+        # Accumulate per-label metrics
+        for label in total_loss_per_label:
+            total_loss_per_label[label] += loss_per_label[label] * batch_size_actual
+            total_bias_per_label[label] += bias_per_label[label] * batch_size_actual
+
+    # Calculate averages
+    avg_loss = total_loss / total_samples
+    avg_bias = total_bias / total_samples
+    
+    avg_loss_per_label = {
+        label: total / total_samples 
+        for label, total in total_loss_per_label.items()
+    }
+    avg_bias_per_label = {
+        label: total / total_samples 
+        for label, total in total_bias_per_label.items()
+    }
+    
+    total_time = time.time() - start_time
+    
+    # Print combined metrics
+    print(f"\n{BOLD}=== Combined Metrics (ShearNet) ==={END}")
+    print(f"Mean Squared Error (MSE) from ShearNet: {BOLD}{YELLOW}{avg_loss:.6e}{END}")
+    print(f"Average Bias from ShearNet: {BOLD}{YELLOW}{avg_bias:.6e}{END}")
+    print(f"Time taken: {BOLD}{CYAN}{total_time:.2f} seconds{END}")
+    
+    # Print per-label metrics
+    print("\n=== Per-Label Metrics ===")
+    label_names = ['g1', 'g2', 'g1g2_combined', 'sigma', 'flux']
+    for label in label_names:
+        print(f"{label:>15}: MSE = {avg_loss_per_label[label]:.6e}, Bias = {avg_bias_per_label[label]:+.6e}")
+    print()
+    
+    return {
+        'loss': avg_loss,
+        'bias': avg_bias,
+        'loss_per_label': avg_loss_per_label,
+        'bias_per_label': avg_bias_per_label,
+        'all_preds': jnp.concatenate(all_preds) if all_preds else None,
+        'time_taken': total_time
+    }
+
+def fork_eval_model(state, test_images, test_psf_images, test_labels, batch_size=32) -> Dict[str, Any]:
+    
+    start_time = time.time()
+
+    total_loss = 0
+    total_samples = 0
+    total_bias = 0
+    
+    # Initialize per-label accumulators
+    total_loss_per_label = {
+        'g1': 0, 'g2': 0, 'g1g2_combined': 0, 'sigma': 0, 'flux': 0
+    }
+    total_bias_per_label = {
+        'g1': 0, 'g2': 0, 'g1g2_combined': 0, 'sigma': 0, 'flux': 0
+    }
+    
+    all_preds = []
+
+    for i in range(0, len(test_images), batch_size):
+        batch_images = test_images[i:i + batch_size]
+        batch_psf_images = test_images[i:i + batch_size]
+        batch_labels = test_labels[i:i + batch_size]
+        loss, preds, loss_per_label, bias_per_label = fork_eval_step(state, batch_images, batch_psf_images, batch_labels)
         
         all_preds.append(preds)
         

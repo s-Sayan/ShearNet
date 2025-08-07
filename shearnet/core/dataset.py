@@ -5,10 +5,10 @@ from scipy.signal import convolve2d
 from tqdm import tqdm
 from ..methods.ngmix import g1_g2_sigma_sample
 
-psf_fnmae = '/projects/mccleary_group/saha/codes/.empty/psf_cutouts_superbit.npy'
+psf_fname = '/projects/mccleary_group/saha/codes/.empty/psf_cutouts_superbit.npy'
 weight_fname = '/projects/mccleary_group/saha/codes/.empty/weights_cutouts_superbit.npy'
 
-def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, process_psf=False,return_obs=False):
+def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, process_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05):
     images = []
     labels = []
     obs = []
@@ -21,7 +21,8 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp
         flux=np.random.uniform(1, 5)  # Random flux
         #psf_sigma = np.random.uniform(0.5, 1.5)
         
-        obj_obs = sim_func(g1, g2, sigma=sigma, flux=flux, psf_sigma=psf_sigma, nse_sd = nse_sd,  type=type, npix=npix, scale=scale, seed=i, exp=exp)
+        obj_obs = sim_func(g1, g2, sigma=sigma, flux=flux, psf_sigma=psf_sigma, 
+        nse_sd=nse_sd, type=type, npix=npix, scale=scale, seed=i, exp=exp, apply_psf_shear=apply_psf_shear, psf_shear_range=psf_shear_range)
         
         galaxy_images = obj_obs.image
         psf_images = obj_obs.psf.image
@@ -56,7 +57,7 @@ def split_combined_images(combined_images):
     psf_images = combined_images[..., 1]     # Channel 1
     return galaxy_images, psf_images
 
-def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", superbit_psf_fname=psf_fnmae):
+def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", superbit_psf_fname=psf_fname,apply_psf_shear=False, psf_shear_range=0.05):
 
     rng = np.random.RandomState(seed=seed)
 
@@ -68,6 +69,12 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
     else:
         raise ValueError("type must be 'exp' or 'gauss'")
 
+    # Generate PSF shear values if requested
+    psf_g1, psf_g2 = 0.0, 0.0
+    if apply_psf_shear:
+        psf_g1 = rng.uniform(-psf_shear_range, psf_shear_range)
+        psf_g2 = rng.uniform(-psf_shear_range, psf_shear_range)
+
     # Apply a random shift
     dx, dy = 2.0 * (rng.uniform(size=2) - 0.5) * 0.2
     sheared_gal = gal.shift(dx, dy)
@@ -76,12 +83,17 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
     if exp == 'ideal':
         #gsp = galsim.GSParams(maximum_fft_size=8192000)
         psf = galsim.Gaussian(sigma=psf_sigma)
+
+        if apply_psf_shear:
+            psf = psf.shear(g1=psf_g1, g2=psf_g2)
+
         obj = galsim.Convolve(sheared_gal, psf)
 
         # Draw images
         obj_im = obj.drawImage(nx=npix, ny=npix, scale=scale).array
         psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
     elif exp == 'superbit':
+        # NOTE, did not impliment psf shear here since exp == "superbit" is disfunction at time of implementing psf shear.
         try:
             sheared_im = sheared_gal.drawImage(nx=npix, ny=npix, scale=scale).array
         except Exception as e:
@@ -251,7 +263,7 @@ def sim_func_decrepted(g1, g2, seed, psf_sigma, sigma=1.0, flux=1.0, type='exp',
 
     return obj_obs
 
-def sim_func_superbit_dual_shear(g1, g2, seed, psf_sigma, g1_sh=0, g2_sh=0, sigma=1.0, flux=1.0, superbit_psf_fnmae=psf_fnmae, type='exp', npix=53, scale=0.2):
+def sim_func_superbit_dual_shear(g1, g2, seed, psf_sigma, g1_sh=0, g2_sh=0, sigma=1.0, flux=1.0, superbit_psf_fname=psf_fname, type='exp', npix=53, scale=0.2):
     rng = np.random.RandomState(seed=seed)
     
     # Create a galaxy object
@@ -281,7 +293,7 @@ def sim_func_superbit_dual_shear(g1, g2, seed, psf_sigma, g1_sh=0, g2_sh=0, sigm
     #sheared_gal = gal
 
     obj_im = sheared_gal.drawImage(nx=npix, ny=npix, scale=scale).array
-    psf_images = np.load(superbit_psf_fnmae)
+    psf_images = np.load(superbit_psf_fname)
 
     random_psf_index = rng.randint(0, psf_images.shape[0])  # Random index in the range [0, n)
     psf_image = psf_images[random_psf_index].copy()
@@ -324,7 +336,7 @@ def sim_func_superbit_dual_shear(g1, g2, seed, psf_sigma, g1_sh=0, g2_sh=0, sigm
 
     return obj_obs, g1_admom, g2_admom
 
-def sim_func_superbit(g1, g2, seed, sigma=1.0, type='exp', npix=53, scale=0.2, superbit_psf_fnmae=psf_fnmae, superbit_weight_fname=weight_fname):
+def sim_func_superbit(g1, g2, seed, sigma=1.0, type='exp', npix=53, scale=0.2, superbit_psf_fname=psf_fname, superbit_weight_fname=weight_fname):
 
     rng = np.random.RandomState(seed=seed)
     
@@ -342,7 +354,7 @@ def sim_func_superbit(g1, g2, seed, sigma=1.0, type='exp', npix=53, scale=0.2, s
 
     # Draw images
     obj_im = sheared_gal.drawImage(nx=npix, ny=npix, scale=scale).array
-    psf_images = np.load(superbit_psf_fnmae)
+    psf_images = np.load(superbit_psf_fname)
     weight_images = np.load(superbit_weight_fname)
 
     # Randomly choose one image using rng
