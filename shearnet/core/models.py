@@ -42,7 +42,7 @@ class SimpleGalaxyNN(nn.Module):
             x = nn.Dense(4)(x)  # Output e1, e2
             return x
     
-class OriginalGalaxyNN(nn.Module):
+class EnhancedGalaxyNN(nn.Module):
     @nn.compact
     def __call__(self, x, deterministic: bool = False, fork: bool = False):
         # Input handling 
