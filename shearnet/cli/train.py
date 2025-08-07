@@ -90,6 +90,11 @@ Examples:
                     help='Galaxy model type for fork-like models')
     parser.add_argument('--psf_type', type=str, default=None,
                     help='PSF model type for fork-like models')
+
+    parser.add_argument('--apply_psf_shear', action='store_const', const=True, default=None,
+                       help='Apply random shear to PSF images')
+    parser.add_argument('--psf_shear_range', type=float, default=None,
+                       help='Maximum absolute shear value for PSF (default: 0.05)')
     
     return parser
 
@@ -122,6 +127,8 @@ def main():
         'process_psf': False,       
         'galaxy_type': 'research_backed',
         'psf_type': 'forklens_psf',
+        'apply_psf_shear': False,
+        'psf_shear_range': 0.05,
     }
     config = None 
     
@@ -159,6 +166,9 @@ def main():
         eval_interval = config.get('training.eval_interval')
         galaxy_type = config.get('model.galaxy.type')
         psf_type = config.get('model.psf.type')
+
+        apply_psf_shear = config.get('dataset.apply_psf_shear')
+        psf_shear_range = config.get('dataset.psf_shear_range')
         
     else:
         # Use argparse values with defaults (original behavior)
@@ -184,6 +194,9 @@ def main():
 
         galaxy_type = args.galaxy_type if args.galaxy_type is not None else DEFAULTS['galaxy_type']
         psf_type = args.psf_type if args.psf_type is not None else DEFAULTS['psf_type']
+
+        apply_psf_shear = args.apply_psf_shear if args.apply_psf_shear is not None else DEFAULTS['apply_psf_shear']
+        psf_shear_range = args.psf_shear_range if args.psf_shear_range is not None else DEFAULTS['psf_shear_range']
         
         # Always create a config object with the actual values being used
         config = Config()  # Start with defaults
@@ -210,6 +223,8 @@ def main():
         config._set_nested('model.process_psf', process_psf)
         config._set_nested('model.galaxy.type', galaxy_type)
         config._set_nested('model.psf.type', psf_type)
+        config._set_nested('dataset.apply_psf_shear', apply_psf_shear)
+        config._set_nested('dataset.psf_shear_range', psf_shear_range)
 
     # Validate process_psf and model compatibility
     if process_psf:

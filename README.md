@@ -2,60 +2,37 @@
 
 test
 
-A JAX-based neural network implementation for galaxy shear estimation.
+## My Model vs Main Branch Model 
 
-## Installation
+I tweaked the model at [this link](https://github.com/s-Sayan/ShearNet/blob/main/shearnet/core/models.py#L43) based of numerous research papers. The model I refer to is [here](./shearnet/core/models.py#L323). Plotted here is the comparison of the original model vs my new model.
 
-### Quick Install
+### Low Noise (nse_sd = 1e-5)
 
-```bash
-git clone https://github.com/s-Sayan/ShearNet.git
-cd ShearNet
+The comparison is also housed at [this directory](./notebooks/research_vs_control_low_noise/).
 
-# CPU version
-make install
+Here is the comparions plots:
 
-# GPU version (CUDA 12)
-make install-gpu
+![learning curve](./notebooks/research_vs_control_low_noise/learning_curves_comparison_20250702_172032.png)
 
-# Activate environment
-conda activate shearnet  # or shearnet_gpu for GPU
-```
-### Manual Install
+![residuals comparison](./notebooks/research_vs_control_low_noise/residuals_comparison_20250702_172126.png)
 
-```bash
-conda create -n shearnet python=3.11
-conda activate shearnet
-pip install -e .# or pip install -e ".[gpu]" for GPU
-pip install git+https://github.com/esheldon/ngmix.git
-python scripts/post_installation.py
-```
+![scatter comparison](./notebooks/research_vs_control_low_noise/prediction_comparison_20250702_172119.png)
 
-## Usage
+### High Noise (nse_sd = 1e-3)
 
-### Train a model
+The comparison is also housed at [this directory](./notebooks/research_vs_control_high_noise/).
 
-```bash
-shearnet-train --epochs 10 --batch_size 64 --samples 10000  --psf_sigma 0.25 --model_name cnn1 --plot --nn cnn --patience 20
-```
-or
-```bash
-shearnet-train --config ./configs/example.yaml
-```
-### Evaluate a model
+Here is the comparions plots:
 
-```bash
-shearnet-eval --model_name cnn1 --test_samples 5000
-```
-Key options:
+![learning curve](./notebooks/research_vs_control_high_noise/learning_curves_comparison_20250702_191955.png)
 
 - `-nn`: Model type (`mlp`, `cnn`, `resnet`, `research_backed`, `forklens_psf`, `fork-like`)
 - `-mcal`: Compare with metacalibration and NGmix
 - `-plot`: Generate plots
 
-## Example Results
+![scatter comparison](./notebooks/research_vs_control_high_noise/residuals_comparison_20250702_192253.png)
 
-ShearNet provides shear estimates for g1, g2, sigma, and flux parameters. Example performance on test data:
+## Next Steps
 
 ### Comparison of predictions
 On 5000 test samples of stamp size 53x53 and pixel size 0.141:
