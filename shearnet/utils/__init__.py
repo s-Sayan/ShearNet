@@ -33,3 +33,11 @@ __all__ = [
     # device detection
     "get_device"
 ]
+
+from .notebook_output_system import (
+    log_print,
+    save_plot,
+    log_array_stats,
+    experiment_section,
+    get_output_manager
+)
