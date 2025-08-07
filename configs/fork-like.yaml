@@ -7,10 +7,12 @@ dataset:
   seed: 42
   stamp_size: 53
   pixel_size: 0.141
+  apply_psf_shear: false
+  psf_shear_range: 0.05
 
 # Model configuration  
 model:
-  process_psf: False
+  process_psf: true
   type: "fork-like"  # Options: mlp, cnn, resnet, forklens_psf, 
                #          research_backed, and fork-like
   galaxy:
@@ -37,7 +39,7 @@ evaluation:
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "fork-like_1"
+  model_name: "fork-like_no_psf_sigma"
   
 # Plotting configuration
 plotting:
