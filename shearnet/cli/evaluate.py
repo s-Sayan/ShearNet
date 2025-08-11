@@ -136,7 +136,7 @@ def main():
     )
     if process_psf : 
         # Split into separate galaxy and PSF arrays
-        test_galaxy_images, test_psf_images = split_combined_images(test_images)
+        test_galaxy_images, test_psf_images = split_combined_images(test_images, True, False)
         
         print(f"Shape of test galaxy images: {test_galaxy_images.shape}")
         print(f"Shape of test PSF images: {test_psf_images.shape}")

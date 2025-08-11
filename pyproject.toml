@@ -60,6 +60,8 @@ Repository = "https://github.com/s-Sayan/ShearNet.git"
 [project.scripts]
 shearnet-train = "shearnet.cli.train:main"
 shearnet-eval = "shearnet.cli.evaluate:main"
+shearnet-train-deconv = "shearnet.cli.train_deconv:main"
+shearnet-eval-deconv = "shearnet.cli.evaluate_deconv:main"
 
 [tool.setuptools.packages.find]
 include = ["shearnet*"]
