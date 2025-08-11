@@ -266,7 +266,7 @@ def main():
     # Split into separate galaxy and PSF arrays
     train_psf_images = train_galaxy_images # I know this is weird, but see ../core/train.py#L11 to see that i need it defined (as not null), but it is not used if process_psf is off
     if process_psf :
-        train_galaxy_images, train_psf_images = split_combined_images(train_galaxy_images)
+        train_galaxy_images, train_psf_images = split_combined_images(train_galaxy_images, True, False)
         print(f"Shape of train PSF images: {train_psf_images.shape}")
     print(f"Shape of train images: {train_galaxy_images.shape}")
     print(f"Shape of train labels: {train_labels.shape}")

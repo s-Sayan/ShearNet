@@ -8,7 +8,7 @@ from ..methods.ngmix import g1_g2_sigma_sample
 psf_fname = '/projects/mccleary_group/saha/codes/.empty/psf_cutouts_superbit.npy'
 weight_fname = '/projects/mccleary_group/saha/codes/.empty/weights_cutouts_superbit.npy'
 
-def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, process_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05):
+def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, process_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05, neural_metacal=False):
     images = []
     labels = []
     obs = []
@@ -26,14 +26,24 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp
         
         galaxy_images = obj_obs.image
         psf_images = obj_obs.psf.image
+        clean_images = obj_obs.clean_image
 
-        if process_psf :
-            # Create (height, width, 2) array
-            combined_images = np.stack([galaxy_images, psf_images], axis=-1)
-            
+        if process_psf and neural_metacal:
+            # Create (height, width, 3) array: [galaxy, psf, clean]
+            combined_images = np.stack([galaxy_images, psf_images, clean_images], axis=-1)
             images.append(combined_images)
-        else :
+        elif process_psf:
+            # Create (height, width, 2) array: [galaxy, psf]
+            combined_images = np.stack([galaxy_images, psf_images], axis=-1)
+            images.append(combined_images)
+        elif neural_metacal:
+            # Create (height, width, 2) array: [galaxy, clean]
+            combined_images = np.stack([galaxy_images, clean_images], axis=-1)
+            images.append(combined_images)
+        else:
+            # Just galaxy images
             images.append(galaxy_images)
+            
         labels.append(np.array([g1, g2, sigma, flux], dtype=np.float32))
         obs.append(obj_obs)
     
@@ -42,20 +52,46 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp
     
     return np.array(images), np.array(labels)
 
-def split_combined_images(combined_images):
+def split_combined_images(combined_images, has_psf=False, has_clean=False):
     """
-    Split concatenated images back into separate galaxy and PSF arrays.
+    Split concatenated images back into separate arrays.
     
     Args:
-        combined_images: np.ndarray of shape (samples, height, width, 2)
+        combined_images: np.ndarray of shape (samples, height, width, 2 or 3)
+        has_psf: bool, whether PSF images are included
+        has_clean: bool, whether clean images are included
         
     Returns:
-        galaxy_images: np.ndarray of shape (samples, height, width)
-        psf_images: np.ndarray of shape (samples, height, width)
+        Tuple of arrays depending on combination:
+        - If has_psf=True, has_clean=True: (galaxy, psf, clean)
+        - If has_psf=True, has_clean=False: (galaxy, psf)
+        - If has_psf=False, has_clean=True: (galaxy, clean)
     """
-    galaxy_images = combined_images[..., 0]  # Channel 0
-    psf_images = combined_images[..., 1]     # Channel 1
-    return galaxy_images, psf_images
+    if combined_images.shape[-1] == 2:
+        if has_psf and not has_clean:
+            # Galaxy + PSF
+            galaxy_images = combined_images[..., 0]
+            psf_images = combined_images[..., 1]
+            return galaxy_images, psf_images
+        elif has_clean and not has_psf:
+            # Galaxy + Clean
+            galaxy_images = combined_images[..., 0]
+            clean_images = combined_images[..., 1]
+            return galaxy_images, clean_images
+        else:
+            raise ValueError("Invalid combination: 2 channels requires either PSF or clean images, not both")
+            
+    elif combined_images.shape[-1] == 3:
+        if has_psf and has_clean:
+            # Galaxy + PSF + Clean
+            galaxy_images = combined_images[..., 0]
+            psf_images = combined_images[..., 1]
+            clean_images = combined_images[..., 2]
+            return galaxy_images, psf_images, clean_images
+        else:
+            raise ValueError("3 channels requires both PSF and clean images")
+    else:
+        raise ValueError(f"Unexpected number of channels: {combined_images.shape[-1]}")
 
 def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", superbit_psf_fname=psf_fname,apply_psf_shear=False, psf_shear_range=0.05):
 
@@ -79,9 +115,16 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
     dx, dy = 2.0 * (rng.uniform(size=2) - 0.5) * 0.2
     sheared_gal = gal.shift(dx, dy)
 
+    # Draw the clean galaxy image BEFORE convolution - handle GalSim instabilities
+    try:
+        clean_gal_im = sheared_gal.drawImage(nx=npix, ny=npix, scale=scale).array
+    except (galsim.errors.GalSimFFTSizeError, galsim.errors.GalSimError) as e:
+        print(f"GalSim error drawing clean galaxy: {e}")
+        # Create a fallback zero image
+        clean_gal_im = np.zeros((npix, npix))
+
     # Convolve with PSF
     if exp == 'ideal':
-        #gsp = galsim.GSParams(maximum_fft_size=8192000)
         psf = galsim.Gaussian(sigma=psf_sigma)
 
         if apply_psf_shear:
@@ -89,11 +132,20 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
 
         obj = galsim.Convolve(sheared_gal, psf)
 
-        # Draw images
-        obj_im = obj.drawImage(nx=npix, ny=npix, scale=scale).array
-        psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
+        # Draw images - handle GalSim instabilities
+        try:
+            obj_im = obj.drawImage(nx=npix, ny=npix, scale=scale).array
+        except (galsim.errors.GalSimFFTSizeError, galsim.errors.GalSimError) as e:
+            print(f"GalSim error drawing convolved galaxy: {e}")
+            obj_im = np.zeros((npix, npix))
+            
+        try:
+            psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
+        except (galsim.errors.GalSimFFTSizeError, galsim.errors.GalSimError) as e:
+            print(f"GalSim error drawing PSF: {e}")
+            psf_im = np.zeros((npix, npix))
+            
     elif exp == 'superbit':
-        # NOTE, did not impliment psf shear here since exp == "superbit" is disfunction at time of implementing psf shear.
         try:
             sheared_im = sheared_gal.drawImage(nx=npix, ny=npix, scale=scale).array
         except Exception as e:
@@ -101,10 +153,9 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
             sheared_im = np.zeros((npix, npix))
             flag = 2 
         psf_images = np.load(superbit_psf_fname)
-        random_psf_index = rng.randint(0, psf_images.shape[0])  # Random index in the range [0, n)
+        random_psf_index = rng.randint(0, psf_images.shape[0])
         psf_im = psf_images[random_psf_index].copy()
         obj_im = convolve2d(sheared_im, psf_im, mode='same', boundary='wrap')
-
     else:
         raise ValueError("For now only supported experiments are 'ideal' or 'superbit'")
 
@@ -119,12 +170,13 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
     # Add small noise to PSF for stability
     target_psf_s2n = 500.0
     target_psf_noise = np.sqrt(np.sum(psf_im**2)) / target_psf_s2n
-    #print(target_psf_noise)
+    
     psf_obs = ngmix.Observation(
         image=psf_im,
         weight=np.ones_like(psf_im) / target_psf_noise**2,
         jacobian=psf_jac,
     )
+    
     obj_obs = ngmix.Observation(
         image=obj_im + nse,
         noise=nse_im,
@@ -134,6 +186,10 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
         ormask=np.zeros_like(nse_im, dtype=np.int32),
         psf=psf_obs,
     )
+    
+    # Store the clean image as an attribute
+    obj_obs.clean_image = clean_gal_im
+    
     return obj_obs
 
 def sim_func_dual_shear(g1, g2, seed, psf_sigma, g1_sh=0, g2_sh=0, sigma=1.0, flux=1.0, type='exp', npix=53, scale=0.2):
