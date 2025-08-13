@@ -2,6 +2,7 @@
 
 import time
 import numpy as np
+import jax
 import jax.numpy as jnp
 from typing import Dict, Any
 from ..methods.fft_deconv import fourier_deconvolve
@@ -118,6 +119,9 @@ def calculate_lpips_approx(target_images: jnp.ndarray, predicted_images: jnp.nda
     
     return float(grad_dist)
 
+@jax.jit
+def predict_batch(state, batch_galaxy, batch_psf):
+    return state.apply_fn(state.params, batch_galaxy, batch_psf, training=False)
 
 def eval_deconv_model(state, galaxy_images: jnp.ndarray, psf_images: jnp.ndarray, 
                      target_images: jnp.ndarray, batch_size: int = 32) -> Dict[str, Any]:
@@ -134,6 +138,7 @@ def eval_deconv_model(state, galaxy_images: jnp.ndarray, psf_images: jnp.ndarray
     Returns:
         Dictionary containing all evaluation metrics and predictions
     """
+
     start_time = time.time()
     
     # Generate predictions
@@ -143,7 +148,7 @@ def eval_deconv_model(state, galaxy_images: jnp.ndarray, psf_images: jnp.ndarray
         batch_psf = psf_images[i:i + batch_size]
         
         # Generate predictions (training=False for inference mode)
-        batch_preds = state.apply_fn(state.params, batch_galaxy, batch_psf, training=False)
+        batch_preds = predict_batch(state, batch_galaxy, batch_psf)
         predictions.append(batch_preds)
     
     predictions = jnp.concatenate(predictions, axis=0)

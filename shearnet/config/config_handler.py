@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 import argparse
-import copy
+
 
 class Config:
     """Handle configuration loading and command-line overrides."""
@@ -56,8 +56,13 @@ class Config:
         """Update config with command-line arguments."""
         args_dict = vars(args)
         
-        # Get the mapping for training mode
-        mapping = self._get_train_mapping()
+        # Determine which mapping to use based on available arguments
+        if 'model_type' in args_dict:
+            # This is deconv training
+            mapping = self._get_deconv_mapping()
+        else:
+            # Regular training
+            mapping = self._get_train_mapping()
         
         # Update config with non-None arguments
         for arg_name, config_path in mapping.items():
@@ -65,7 +70,7 @@ class Config:
                 self._set_nested(config_path, args_dict[arg_name])
     
     def _get_train_mapping(self) -> Dict[str, str]:
-        """Get argument mapping for training mode."""
+        """Get argument mapping for regular training mode."""
         return {
             # Dataset args
             'samples': 'dataset.samples',
@@ -90,6 +95,43 @@ class Config:
             'learning_rate': 'training.learning_rate',
             'weight_decay': 'training.weight_decay',
             'patience': 'training.patience',
+            'val_split': 'training.val_split',
+            'eval_interval': 'training.eval_interval',
+            
+            # Output args
+            'save_path': 'output.save_path',
+            'plot_path': 'output.plot_path',
+            'model_name': 'output.model_name',
+            
+            # Plotting args
+            'plot': 'plotting.plot',
+        }
+    
+    def _get_deconv_mapping(self) -> Dict[str, str]:
+        """Get argument mapping for deconvolution training mode."""
+        return {
+            # Dataset args
+            'samples': 'dataset.samples',
+            'psf_sigma': 'dataset.psf_sigma',
+            'exp': 'dataset.exp',
+            'seed': 'dataset.seed',
+            'nse_sd': 'dataset.nse_sd',
+            'stamp_size': 'dataset.stamp_size',
+            'pixel_size': 'dataset.pixel_size',
+            'apply_psf_shear': 'dataset.apply_psf_shear',
+            'psf_shear_range': 'dataset.psf_shear_range',
+            
+            # Deconv-specific args
+            'model_type': 'deconv.model_type',
+            
+            # Training args
+            'epochs': 'training.epochs',
+            'batch_size': 'training.batch_size',
+            'learning_rate': 'training.learning_rate',
+            'weight_decay': 'training.weight_decay',
+            'patience': 'training.patience',
+            'val_split': 'training.val_split',
+            'eval_interval': 'training.eval_interval',
             
             # Output args
             'save_path': 'output.save_path',
@@ -132,29 +174,32 @@ class Config:
     
     def print_config(self) -> None:
         """Print current configuration."""
-        print("\n" + "="*50)
-        print("Training Configuration")
-        print("="*50)
+        print("\n" + "="*60)
+        print("Configuration")
+        print("="*60)
         
-        for section in ['dataset', 'model', 'training', 'output', 'plotting']:
-            if section in self.config:
+        # Print sections in logical order
+        sections = ['dataset', 'model', 'deconv', 'training', 'output', 'plotting']
+        
+        for section in sections:
+            if section in self.config and self.config[section]:
                 print(f"\n{section}:")
                 for key, value in self.config[section].items():
                     print(f"  {key}: {value}")
-        print("="*50 + "\n")
+        print("="*60 + "\n")
 
     def print_eval_config(self) -> None:
         """Print only evaluation-relevant configuration."""
-        print("\n" + "="*50)
+        print("\n" + "="*60)
         print("Evaluation Configuration")
-        print("="*50)
+        print("="*60)
         
         # Only print relevant sections for evaluation
-        sections_to_print = ['evaluation', 'model', 'plotting', 'comparison']
+        sections = ['evaluation', 'model', 'deconv', 'plotting', 'comparison']
         
-        for section in sections_to_print:
-            if section in self.config:
+        for section in sections:
+            if section in self.config and self.config[section]:
                 print(f"\n{section}:")
                 for key, value in self.config[section].items():
                     print(f"  {key}: {value}")
-        print("="*50 + "\n")
+        print("="*60 + "\n")

@@ -13,15 +13,18 @@ dataset:
   apply_psf_shear: false
   psf_shear_range: 0.05
 
-# Model configuration  
+# Model configuration (for regular shear training)
 model:
-  process_psf: False
-  type: "cnn"  # Options: mlp, cnn, resnet, forklens_psf, 
-               #          research_backed, and fork-like
+  process_psf: false
+  type: "cnn"  # Options: mlp, cnn, resnet, forklens_psf, research_backed, fork-like
   galaxy:
     type: "research_backed"
   psf:
     type: "forklens_psf"
+
+# Deconvolution model configuration (for deconv training)
+deconv:
+  model_type: "unet"  # Options: unet
   
 # Training configuration
 training:
@@ -46,7 +49,7 @@ output:
   
 # Plotting configuration
 plotting:
-  plot: true  # Whether to plot learning curves
+  plot: true
   
 # Comparison methods
 comparison:
