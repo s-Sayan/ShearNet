@@ -134,6 +134,12 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
         ormask=np.zeros_like(nse_im, dtype=np.int32),
         psf=psf_obs,
     )
+
+    # Calculate SNR using ngmix built-in method
+    snr = obj_obs.get_s2n()
+    # Store SNR in metadata
+    obj_obs.update_meta_data({'snr': snr})
+
     return obj_obs
 
 def sim_func_dual_shear(g1, g2, seed, psf_sigma, g1_sh=0, g2_sh=0, sigma=1.0, flux=1.0, type='exp', npix=53, scale=0.2):
