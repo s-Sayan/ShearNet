@@ -76,12 +76,12 @@ def plot_residuals(true_labels, predicted_labels, path=None, mcal=False, preds_n
     else:
         plt.show()
 
-def visualize_samples(images, true_labels, predicted_labels, num_samples=5, path=None):
+def visualize_samples(images, true_labels, predicted_labels, snr_values, num_samples=5, path=None):
     """Visualize true and predicted labels on test images."""
     fig, axes = plt.subplots(num_samples, 2, figsize=(10, 2 * num_samples))
     for i in range(num_samples):
         axes[i, 0].imshow(images[i], cmap='gray')
-        axes[i, 0].set_title(f"True e1: {true_labels[i, 0]:.2f}, e2: {true_labels[i, 1]:.2f}")
+        axes[i, 0].set_title(f"True e1: {true_labels[i, 0]:.2f}, e2: {true_labels[i, 1]:.2f}, SNR: {snr_values[i]:.2f}")
         axes[i, 0].axis('off')
 
         axes[i, 1].imshow(images[i], cmap='gray')

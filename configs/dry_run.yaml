@@ -2,7 +2,7 @@
 dataset:
   samples: 100
   psf_sigma: 0.25
-  nse_sd: 1.0e-5
+  nse_sd: 1.0e-3
   exp: "ideal"
   seed: 42
   stamp_size: 53
@@ -24,7 +24,7 @@ evaluation:
   seed: 58
 
 output:
-  model_name: "dry_run_heavy_psf_shear"
+  model_name: "dry_run3"
   
 plotting:
   plot: true
