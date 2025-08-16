@@ -7,7 +7,7 @@ dataset:
   seed: 42
   stamp_size: 53
   pixel_size: 0.141
-  apply_psf_shear: false
+  apply_psf_shear: true
   psf_shear_range: 0.05
 
 # Model configuration  
@@ -39,7 +39,7 @@ evaluation:
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "fork-like_no_psf_sigma"
+  model_name: "fork-like_low_noise"
   
 # Plotting configuration
 plotting:

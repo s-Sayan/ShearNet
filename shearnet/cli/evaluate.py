@@ -134,6 +134,13 @@ def main():
         scale=pixel_size, process_psf=process_psf, return_obs=True,
         apply_psf_shear=apply_psf_shear, psf_shear_range=psf_shear_range
     )
+    snr_values = []
+    for obs in test_obs:
+        if 'snr' in obs.meta:
+            snr_values.append(obs.meta['snr'])
+        else:
+            # Fallback: calculate it on the fly if not stored
+            snr_values.append(obs.get_s2n())
     if process_psf : 
         # Split into separate galaxy and PSF arrays
         test_galaxy_images, test_psf_images = split_combined_images(test_images)
@@ -234,10 +241,10 @@ def main():
 
             print("Plotting galaxy samples...")
             samples_galaxy_path = os.path.join(df_plot_path, "samples_galaxy_plot.png")
-            visualize_samples(test_galaxy_images, test_labels, predicted_labels, path=samples_galaxy_path)
+            visualize_samples(test_galaxy_images, test_labels, predicted_labels, snr_values, path=samples_galaxy_path)
             print("Plotting psf samples...")
             samples_psf_path = os.path.join(df_plot_path, "samples_psf_plot.png")
-            visualize_samples(test_psf_images, test_labels, predicted_labels, path=samples_psf_path)
+            visualize_samples(test_psf_images, test_labels, predicted_labels, snr_values, path=samples_psf_path)
 
             print("Plotting scatter plots...")
             scatter_path = os.path.join(df_plot_path, "scatters")
@@ -287,7 +294,7 @@ def main():
 
             print("Plotting samples...")
             samples_path = os.path.join(df_plot_path, "samples_plot.png")
-            visualize_samples(test_images, test_labels, predicted_labels, path=samples_path)
+            visualize_samples(test_images, test_labels, predicted_labels, snr_values, path=samples_path)
 
             print("Plotting scatter plots...")
             scatter_path = os.path.join(df_plot_path, "scatters")
