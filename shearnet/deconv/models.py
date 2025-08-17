@@ -1,7 +1,7 @@
-"""PSF deconvolution networks for neural metacalibration.
+"""Updated PSF deconvolution networks for neural metacalibration.
 
-This module implements U-Net based architectures for learning PSF deconvolution
-directly from data, replacing traditional Fourier-space methods.
+This module extends the existing deconv models with research-backed architectures
+while maintaining full compatibility with the existing ShearNet training pipeline.
 """
 
 import jax
@@ -9,6 +9,15 @@ import jax.numpy as jnp
 import flax.linen as nn
 from typing import Sequence, Optional, Tuple
 import numpy as np
+
+# Import the research-backed components
+from .research_backed_unet import (
+    ResearchBackedPSFDeconvolutionUNet,
+    create_research_backed_deconv_unet,
+    GroupNormWithWeightStandardization,
+    CBAM_Attention,
+    LeWinTransformerBlock
+)
 
 
 class ConvBlock(nn.Module):
@@ -29,9 +38,6 @@ class ConvBlock(nn.Module):
         if self.use_batch_norm:
             x = nn.BatchNorm(use_running_average=True)(x)
         x = nn.relu(x)
-        
-        #if self.dropout_rate > 0:
-            #x = nn.Dropout(self.dropout_rate)(x, deterministic=deterministic)
         
         return x
 
@@ -223,20 +229,244 @@ class SimplePSFDeconvNet(nn.Module):
         return galaxy_image[..., :1] + x
 
 
-def create_deconv_net(config):
-    """Create deconvolution network from configuration."""
-    arch = config.get('metacal.deconv_network.architecture', 'unet')
+class EnhancedPSFDeconvNet(nn.Module):
+    """
+    Enhanced deconvolution network with modern components.
     
-    if arch == 'unet':
-        return PSFDeconvolutionNet(
-            features=config.get('metacal.deconv_network.features', [32, 64, 128, 256]),
-            use_attention=config.get('metacal.deconv_network.use_attention', True),
-            dropout_rate=config.get('metacal.deconv_network.dropout_rate', 0.1)
-        )
-    elif arch == 'simple':
-        return SimplePSFDeconvNet(
-            features=config.get('metacal.deconv_network.features', 64),
-            num_layers=config.get('metacal.deconv_network.num_layers', 4)
-        )
+    Incorporates some research-backed components while maintaining
+    computational efficiency for medium-scale applications.
+    """
+    features: Sequence[int] = (32, 64, 128, 256)
+    use_attention: bool = True
+    use_group_norm: bool = True
+    dropout_rate: float = 0.1
+    output_channels: int = 1
+    
+    @nn.compact
+    def __call__(self, galaxy_image, psf_image, training: bool = False):
+        # Ensure proper dimensions
+        if galaxy_image.ndim == 3:
+            galaxy_image = jnp.expand_dims(galaxy_image, axis=-1)
+        if psf_image.ndim == 3:
+            psf_image = jnp.expand_dims(psf_image, axis=-1)
+        
+        # Concatenate galaxy and PSF as input
+        x = jnp.concatenate([galaxy_image, psf_image], axis=-1)
+        
+        # Initial feature extraction
+        x = nn.Conv(self.features[0], (3, 3), padding='SAME')(x)
+        if self.use_group_norm:
+            x = GroupNormWithWeightStandardization()(x)
+        else:
+            x = nn.BatchNorm(use_running_average=True)(x)
+        x = nn.elu(x)
+        
+        # Encoder with attention
+        skip_connections = []
+        for i, feat in enumerate(self.features):
+            # Convolution block
+            x = nn.Conv(feat, (3, 3), padding='SAME')(x)
+            if self.use_group_norm:
+                x = GroupNormWithWeightStandardization()(x)
+            else:
+                x = nn.BatchNorm(use_running_average=True)(x)
+            x = nn.elu(x)
+            
+            # Add attention for important features
+            if self.use_attention:
+                x = CBAM_Attention()(x)
+            
+            skip_connections.append(x)
+            
+            # Downsample (except last layer)
+            if i < len(self.features) - 1:
+                x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
+        
+        # Decoder with skip connections
+        for i, feat in enumerate(reversed(self.features[:-1])):
+            # Upsample
+            x = nn.ConvTranspose(feat, (2, 2), strides=(2, 2))(x)
+            
+            # Get skip connection
+            skip = skip_connections[-(i+2)]
+            
+            # Handle dimension mismatch
+            if x.shape[1:3] != skip.shape[1:3]:
+                target_h, target_w = skip.shape[1], skip.shape[2]
+                current_h, current_w = x.shape[1], x.shape[2]
+                
+                if current_h != target_h or current_w != target_w:
+                    # Simple center crop/pad
+                    if current_h > target_h:
+                        crop_h = (current_h - target_h) // 2
+                        x = x[:, crop_h:crop_h+target_h, :, :]
+                    if current_w > target_w:
+                        crop_w = (current_w - target_w) // 2
+                        x = x[:, :, crop_w:crop_w+target_w, :]
+            
+            # Concatenate skip connection
+            x = jnp.concatenate([x, skip], axis=-1)
+            
+            # Process combined features
+            x = nn.Conv(feat, (3, 3), padding='SAME')(x)
+            if self.use_group_norm:
+                x = GroupNormWithWeightStandardization()(x)
+            else:
+                x = nn.BatchNorm(use_running_average=True)(x)
+            x = nn.elu(x)
+        
+        # Final output
+        x = nn.Conv(self.output_channels, (1, 1), padding='SAME')(x)
+        
+        # Residual connection
+        residual = galaxy_image[..., :self.output_channels]
+        return residual + x
+
+
+def create_deconv_net(config=None, model_type: str = "unet"):
+    """
+    Create deconvolution network from configuration or model type.
+    
+    Enhanced to support research-backed architectures while maintaining
+    backward compatibility with existing configurations.
+    """
+    
+    if config is not None:
+        # Legacy config-based creation
+        arch = config.get('metacal.deconv_network.architecture', 'unet')
+        
+        if arch == 'unet':
+            return PSFDeconvolutionNet(
+                features=config.get('metacal.deconv_network.features', [32, 64, 128, 256]),
+                use_attention=config.get('metacal.deconv_network.use_attention', True),
+                dropout_rate=config.get('metacal.deconv_network.dropout_rate', 0.1)
+            )
+        elif arch == 'simple':
+            return SimplePSFDeconvNet(
+                features=config.get('metacal.deconv_network.features', 64),
+                num_layers=config.get('metacal.deconv_network.num_layers', 4)
+            )
+        elif arch == 'research_backed':
+            return create_research_backed_deconv_unet(
+                architecture=config.get('metacal.deconv_network.preset', 'full')
+            )
+        else:
+            raise ValueError(f"Unknown deconvolution architecture: {arch}")
+    
+    # Model type-based creation (new interface)
+    elif model_type == "unet":
+        return PSFDeconvolutionNet()
+    elif model_type == "simple":
+        return SimplePSFDeconvNet()
+    elif model_type == "enhanced":
+        return EnhancedPSFDeconvNet()
+    elif model_type == "research_backed":
+        return create_research_backed_deconv_unet(architecture="full")
+    elif model_type == "research_backed_lite":
+        return create_research_backed_deconv_unet(architecture="lite")
+    elif model_type == "research_backed_minimal":
+        return create_research_backed_deconv_unet(architecture="minimal")
     else:
-        raise ValueError(f"Unknown deconvolution architecture: {arch}")
+        raise ValueError(f"Unknown model type: {model_type}")
+
+
+# Model registry for easy access
+DECONV_MODELS = {
+    "unet": PSFDeconvolutionNet,
+    "simple": SimplePSFDeconvNet,
+    "enhanced": EnhancedPSFDeconvNet,
+    "research_backed": lambda: create_research_backed_deconv_unet(architecture="full"),
+    "research_backed_lite": lambda: create_research_backed_deconv_unet(architecture="lite"),
+    "research_backed_minimal": lambda: create_research_backed_deconv_unet(architecture="minimal"),
+}
+
+
+def get_available_models():
+    """Get list of available deconvolution models."""
+    return list(DECONV_MODELS.keys())
+
+
+def create_model_from_name(model_name: str, **kwargs):
+    """Create a model instance from its name with optional parameters."""
+    if model_name not in DECONV_MODELS:
+        raise ValueError(f"Unknown model: {model_name}. Available models: {get_available_models()}")
+    
+    model_class = DECONV_MODELS[model_name]
+    
+    if callable(model_class) and not hasattr(model_class, '__call__'):
+        # It's a function that returns a model
+        return model_class()
+    else:
+        # It's a class, instantiate with kwargs
+        return model_class(**kwargs)
+
+
+# Integration with existing training infrastructure
+def get_model_for_training(model_type: str = "unet", **model_kwargs):
+    """
+    Get model configured for training with the existing ShearNet infrastructure.
+    
+    This function ensures compatibility with the existing train_deconv_model function.
+    """
+    if model_type in ["research_backed", "research_backed_lite", "research_backed_minimal"]:
+        # Research-backed models with default configurations optimized for training
+        if model_type == "research_backed":
+            return create_research_backed_deconv_unet(
+                architecture="full",
+                dropout_rate=0.1,
+                **model_kwargs
+            )
+        elif model_type == "research_backed_lite":
+            return create_research_backed_deconv_unet(
+                architecture="lite",
+                dropout_rate=0.05,
+                **model_kwargs
+            )
+        else:  # research_backed_minimal
+            return create_research_backed_deconv_unet(
+                architecture="minimal",
+                dropout_rate=0.0,
+                **model_kwargs
+            )
+    else:
+        # Existing models
+        return create_deconv_net(model_type=model_type)
+
+
+# Example usage and testing
+if __name__ == "__main__":
+    print("Available deconvolution models:")
+    for model_name in get_available_models():
+        print(f"  - {model_name}")
+    
+    # Test model creation
+    import jax.random as random
+    
+    key = random.PRNGKey(42)
+    batch_size = 2
+    height, width = 53, 53
+    
+    galaxy_images = random.normal(key, (batch_size, height, width))
+    psf_images = random.normal(key, (batch_size, height, width))
+    
+    print(f"\nTesting model creation with input shapes:")
+    print(f"  Galaxy: {galaxy_images.shape}")
+    print(f"  PSF: {psf_images.shape}")
+    
+    for model_name in ["unet", "enhanced", "research_backed_lite"]:
+        print(f"\nTesting {model_name}:")
+        model = create_model_from_name(model_name)
+        
+        try:
+            params = model.init(key, galaxy_images, psf_images, training=False)
+            output = model.apply(params, galaxy_images, psf_images, training=False)
+            param_count = sum(x.size for x in jax.tree_util.tree_leaves(params))
+            
+            print(f"  ✓ Output shape: {output.shape}")
+            print(f"  ✓ Parameters: {param_count:,}")
+        except Exception as e:
+            print(f"  ✗ Error: {e}")
+    
+    print(f"\n{'-'*50}")
+    print("Enhanced deconvolution models ready for ShearNet integration!")
+    print(f"{'-'*50}")

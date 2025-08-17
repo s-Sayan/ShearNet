@@ -1,11 +1,11 @@
-"""Metrics and evaluation functions for PSF deconvolution."""
+"""Metrics and evaluation functions for PSF deconvolution with NGmix comparison."""
 
 import time
 import numpy as np
 import jax
 import jax.numpy as jnp
 from typing import Dict, Any
-from ..methods.fft_deconv import fourier_deconvolve
+from ..methods.ngmix_deconv import ngmix_exp_deconvolve, ngmix_gauss_deconvolve, ngmix_dev_deconvolve
 
 # ANSI color codes for pretty printing
 BOLD = '\033[1m'
@@ -120,24 +120,20 @@ def calculate_lpips_approx(target_images: jnp.ndarray, predicted_images: jnp.nda
     return float(grad_dist)
 
 @jax.jit
-def predict_batch(state, batch_galaxy, batch_psf):
-    return state.apply_fn(state.params, batch_galaxy, batch_psf, training=False)
+def _eval_batch_jit(state, galaxy_batch, psf_batch):
+    """JIT-compiled evaluation batch function."""
+    return state.apply_fn(state.params, galaxy_batch, psf_batch, training=False)
 
 def eval_deconv_model(state, galaxy_images: jnp.ndarray, psf_images: jnp.ndarray, 
-                     target_images: jnp.ndarray, batch_size: int = 32) -> Dict[str, Any]:
-    """
-    Evaluate a trained deconvolution model with comprehensive metrics.
+                     target_images: jnp.ndarray, batch_size: int = 64) -> Dict[str, Any]:  # Increased default batch size
+    """Evaluate a trained deconvolution model with comprehensive metrics."""
     
-    Args:
-        state: Trained model state
-        galaxy_images: Observed galaxy images
-        psf_images: PSF images
-        target_images: Ground truth clean images
-        batch_size: Batch size for evaluation
-        
-    Returns:
-        Dictionary containing all evaluation metrics and predictions
-    """
+    # Pre-compile the function
+    print("Compiling evaluation function...")
+    sample_galaxy = galaxy_images[:1]
+    sample_psf = psf_images[:1]
+    _ = _eval_batch_jit(state, sample_galaxy, sample_psf)  # Trigger compilation
+    print("Compilation complete. Running evaluation...")
 
     start_time = time.time()
     
@@ -148,7 +144,7 @@ def eval_deconv_model(state, galaxy_images: jnp.ndarray, psf_images: jnp.ndarray
         batch_psf = psf_images[i:i + batch_size]
         
         # Generate predictions (training=False for inference mode)
-        batch_preds = predict_batch(state, batch_galaxy, batch_psf)
+        batch_preds = _eval_batch_jit(state, batch_galaxy, batch_psf)
         predictions.append(batch_preds)
     
     predictions = jnp.concatenate(predictions, axis=0)
@@ -197,24 +193,39 @@ def eval_deconv_model(state, galaxy_images: jnp.ndarray, psf_images: jnp.ndarray
     }
 
 
-def eval_fft_deconv(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray, 
-                   target_images: jnp.ndarray, epsilon: float = 1e-3) -> Dict[str, Any]:
+def eval_ngmix_deconv(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray, 
+                     target_images: jnp.ndarray, model: str = 'exp', 
+                     **kwargs) -> Dict[str, Any]:
     """
-    Evaluate FFT-based deconvolution method.
+    Evaluate NGmix-based deconvolution method.
     
     Args:
         galaxy_images: Observed galaxy images
         psf_images: PSF images
         target_images: Ground truth clean images
-        epsilon: Regularization parameter for FFT deconvolution
+        model: NGmix model type ('exp', 'gauss', 'dev')
+        **kwargs: Additional arguments for NGmix deconvolution
         
     Returns:
         Dictionary containing evaluation metrics and predictions
     """
     start_time = time.time()
     
-    # Generate FFT deconvolution predictions
-    predictions = fourier_deconvolve(galaxy_images, psf_images, epsilon)
+    # Choose the appropriate deconvolution function
+    if model == 'exp':
+        deconv_func = ngmix_exp_deconvolve
+        model_name = 'Exponential'
+    elif model == 'gauss':
+        deconv_func = ngmix_gauss_deconvolve
+        model_name = 'Gaussian'
+    elif model == 'dev':
+        deconv_func = ngmix_dev_deconvolve
+        model_name = 'de Vaucouleurs'
+    else:
+        raise ValueError(f"Unknown NGmix model: {model}")
+    
+    # Generate NGmix deconvolution predictions
+    predictions = deconv_func(galaxy_images, psf_images, **kwargs)
     
     # Remove extra dimension if present
     if predictions.ndim == 4 and predictions.shape[-1] == 1:
@@ -240,8 +251,8 @@ def eval_fft_deconv(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray,
     total_time = time.time() - start_time
     
     # Print results
-    print(f"\n{BOLD}=== FFT Deconvolution Results ==={END}")
-    print(f"Regularization parameter (ε): {BOLD}{epsilon:.1e}{END}")
+    print(f"\n{BOLD}=== NGmix {model_name} Deconvolution Results ==={END}")
+    print(f"Model type: {BOLD}{model}{END}")
     print(f"Mean Squared Error (MSE): {BOLD}{YELLOW}{mse:.6e}{END}")
     print(f"Mean Absolute Error (MAE): {BOLD}{YELLOW}{mae:.6e}{END}")
     print(f"Peak Signal-to-Noise Ratio (PSNR): {BOLD}{CYAN}{psnr:.2f} dB{END}")
@@ -252,7 +263,7 @@ def eval_fft_deconv(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray,
     print(f"Evaluation time: {BOLD}{CYAN}{total_time:.2f} seconds{END}")
     
     return {
-        'method': 'FFT Deconvolution',
+        'method': f'NGmix {model_name}',
         'mse': mse,
         'mae': mae,
         'psnr': psnr,
@@ -262,82 +273,111 @@ def eval_fft_deconv(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray,
         'normalized_mse': normalized_mse,
         'predictions': predictions,
         'time_taken': total_time,
-        'epsilon': epsilon
+        'model': model
     }
 
 
-def compare_deconv_methods(neural_results: Dict[str, Any], fft_results: Dict[str, Any]) -> None:
+def eval_all_ngmix_methods(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray, 
+                          target_images: jnp.ndarray, **kwargs) -> Dict[str, Dict[str, Any]]:
     """
-    Compare results from different deconvolution methods.
+    Evaluate all NGmix deconvolution methods.
+    
+    Args:
+        galaxy_images: Observed galaxy images
+        psf_images: PSF images
+        target_images: Ground truth clean images
+        **kwargs: Additional arguments for NGmix methods
+        
+    Returns:
+        Dictionary with results from all NGmix methods
+    """
+    models = ['exp', 'gauss', 'dev']
+    results = {}
+    
+    for model in models:
+        try:
+            print(f"\nEvaluating NGmix {model} model...")
+            results[model] = eval_ngmix_deconv(
+                galaxy_images, psf_images, target_images, model=model, **kwargs
+            )
+        except Exception as e:
+            print(f"Error evaluating NGmix {model}: {e}")
+            results[model] = {'error': str(e)}
+    
+    return results
+
+
+def compare_deconv_methods(neural_results: Dict[str, Any], ngmix_results: Dict[str, Any]) -> None:
+    """
+    Compare results from neural network and NGmix deconvolution methods.
     
     Args:
         neural_results: Results from neural network deconvolution
-        fft_results: Results from FFT deconvolution
+        ngmix_results: Results from NGmix deconvolution
     """
     print(f"\n{BOLD}Method Comparison:{END}")
-    print(f"{'Metric':<25} {'Neural':<15} {'FFT':<15} {'Winner':<10}")
+    print(f"{'Metric':<25} {'Neural':<15} {'NGmix':<15} {'Winner':<10}")
     print("-" * 70)
     
     metrics = ['mse', 'mae', 'psnr', 'ssim', 'normalized_mse', 'time_taken']
     higher_better = {'psnr': True, 'ssim': True}
     
     for metric in metrics:
-        if metric in neural_results and metric in fft_results:
+        if metric in neural_results and metric in ngmix_results:
             neural_val = neural_results[metric]
-            fft_val = fft_results[metric]
+            ngmix_val = ngmix_results[metric]
             
             # Determine winner (lower is better for most metrics, except PSNR and SSIM)
             if metric in higher_better:
-                winner = "Neural" if neural_val > fft_val else "FFT"
+                winner = "Neural" if neural_val > ngmix_val else "NGmix"
                 winner_color = GREEN if winner == "Neural" else RED
             else:
-                winner = "Neural" if neural_val < fft_val else "FFT"
+                winner = "Neural" if neural_val < ngmix_val else "NGmix"
                 winner_color = GREEN if winner == "Neural" else RED
             
             # Format values
             if metric == 'time_taken':
                 neural_str = f"{neural_val:.2f}s"
-                fft_str = f"{fft_val:.2f}s"
+                ngmix_str = f"{ngmix_val:.2f}s"
             elif metric in ['psnr']:
                 neural_str = f"{neural_val:.2f}"
-                fft_str = f"{fft_val:.2f}"
+                ngmix_str = f"{ngmix_val:.2f}"
             elif metric in ['ssim']:
                 neural_str = f"{neural_val:.4f}"
-                fft_str = f"{fft_val:.4f}"
+                ngmix_str = f"{ngmix_val:.4f}"
             else:
                 neural_str = f"{neural_val:.3e}"
-                fft_str = f"{fft_val:.3e}"
+                ngmix_str = f"{ngmix_val:.3e}"
             
-            print(f"{metric.upper():<25} {neural_str:<15} {fft_str:<15} {winner_color}{winner}{END}")
+            print(f"{metric.upper():<25} {neural_str:<15} {ngmix_str:<15} {winner_color}{winner}{END}")
     
     # Overall summary
     print("\n" + "="*70)
     
     # Count wins for each method
     neural_wins = 0
-    fft_wins = 0
-    
+    ngmix_wins = 0
     for metric in ['mse', 'mae', 'normalized_mse']:  # Lower is better
-        if neural_results[metric] < fft_results[metric]:
+        if neural_results[metric] < ngmix_results[metric]:
             neural_wins += 1
         else:
-            fft_wins += 1
+            ngmix_wins += 1
     
     for metric in ['psnr', 'ssim']:  # Higher is better
-        if neural_results[metric] > fft_results[metric]:
+        if neural_results[metric] > ngmix_results[metric]:
             neural_wins += 1
         else:
-            fft_wins += 1
+            ngmix_wins += 1
     
-    if neural_wins > fft_wins:
+    if neural_wins > ngmix_wins:
         print(f"{BOLD}{GREEN}Overall Winner: Neural Network Deconvolution{END}")
-        print(f"Neural network wins {neural_wins} out of {neural_wins + fft_wins} key metrics")
-    elif fft_wins > neural_wins:
-        print(f"{BOLD}{RED}Overall Winner: FFT Deconvolution{END}")
-        print(f"FFT method wins {fft_wins} out of {neural_wins + fft_wins} key metrics")
+        print(f"Neural network wins {neural_wins} out of {neural_wins + ngmix_wins} key metrics")
+    elif ngmix_wins > neural_wins:
+        print(f"{BOLD}{RED}Overall Winner: NGmix Deconvolution{END}")
+        print(f"NGmix method wins {ngmix_wins} out of {neural_wins + ngmix_wins} key metrics")
     else:
         print(f"{BOLD}{YELLOW}Result: Tie between methods{END}")
-        print(f"Each method wins {neural_wins} out of {neural_wins + fft_wins} key metrics")
+        print(f"Each method wins {neural_wins} out of {neural_wins + ngmix_wins} key metrics")
 
 
 def calculate_improvement_metrics(baseline_results: Dict[str, Any], 
