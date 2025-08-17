@@ -40,6 +40,7 @@ training:
 evaluation:
   test_samples: 1000
   seed: 58
+  compare_ngmix: true
   
 # Output configuration
 output:

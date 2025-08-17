@@ -12,8 +12,8 @@ from ..config.config_handler import Config
 from ..core.dataset import generate_dataset, split_combined_images
 from ..deconv.models import PSFDeconvolutionNet, SimplePSFDeconvNet, create_deconv_net
 from ..deconv.train import generate_deconv_predictions
-from ..methods.fft_deconv import fourier_deconvolve, wiener_deconvolve, richardson_lucy_deconvolve
-from ..utils.deconv_metrics import eval_deconv_model, eval_fft_deconv, compare_deconv_methods
+from ..methods.ngmix_deconv import ngmix_parametric_deconvolve, ngmix_exp_deconvolve, ngmix_gauss_deconvolve, ngmix_dev_deconvolve
+from ..utils.deconv_metrics import eval_deconv_model, eval_ngmix_deconv, compare_deconv_methods
 from ..utils.deconv_plots import (
     plot_deconv_samples,
     plot_deconv_metrics,
@@ -21,6 +21,7 @@ from ..utils.deconv_plots import (
     plot_deconv_compare_samples
 )
 import time
+from ..deconv.research_backed_unet import create_research_backed_deconv_unet
 
 # ANSI color codes for pretty printing
 BOLD = '\033[1m'
@@ -58,6 +59,9 @@ Examples:
                        help='Number of test samples (overrides config).')
     parser.add_argument('--compare_fft', action='store_true', 
                        help='Compare with FFT deconvolution baseline')
+    
+    parser.add_argument('--compare_ngmix', action='store_const', const=True, default=None, help='Compare with NGmix deconvolution baseline')
+    
     parser.add_argument('--fft_epsilon', type=float, default=1e-3,
                        help='Regularization parameter for FFT deconvolution')
     parser.add_argument('--plot', action='store_true', 
@@ -67,6 +71,70 @@ Examples:
 
     return parser
 
+def warm_up_model(state, galaxy_shape, psf_shape):
+    """Warm up the model to trigger JIT compilation."""
+    print("Warming up model...")
+    dummy_galaxy = jnp.ones((1,) + galaxy_shape)
+    dummy_psf = jnp.ones((1,) + psf_shape)
+    
+    # Trigger compilation
+    _ = state.apply_fn(state.params, dummy_galaxy, dummy_psf, training=False)
+    print("Model warm-up complete")
+
+def evaluate_ngmix_deconv_methods(galaxy_images, psf_images, target_images):
+    """Evaluate NGmix deconvolution methods."""
+    results = {}
+    
+    methods = [
+        ('exp', 'Exponential', ngmix_exp_deconvolve),
+        ('gauss', 'Gaussian', ngmix_gauss_deconvolve), 
+        ('dev', 'de Vaucouleurs', ngmix_dev_deconvolve)
+    ]
+    
+    for model_key, model_name, method_func in methods:
+        print(f"\n{BOLD}=== NGmix {model_name} Deconvolution ==={END}")
+        
+        start_time = time.time()
+        
+        try:
+            predictions = method_func(galaxy_images, psf_images, n_jobs=4)
+            elapsed_time = time.time() - start_time
+            
+            # Calculate metrics
+            mse = float(jnp.mean((predictions - target_images) ** 2))
+            mae = float(jnp.mean(jnp.abs(predictions - target_images)))
+            
+            # PSNR
+            if mse > 0:
+                max_val = float(jnp.max(target_images))
+                psnr = 20 * jnp.log10(max_val / jnp.sqrt(mse))
+            else:
+                psnr = float('inf')
+            
+            # Bias
+            bias = float(jnp.mean(predictions - target_images))
+            
+            results[f'ngmix_{model_key}'] = {
+                'method': f'NGmix {model_name}',
+                'predictions': predictions,
+                'mse': mse,
+                'mae': mae,
+                'psnr': psnr,
+                'bias': bias,
+                'time_taken': elapsed_time
+            }
+            
+            print(f"Evaluation Time: {BOLD}{CYAN}{elapsed_time:.2f} seconds{END}")
+            print(f"Mean Squared Error (MSE): {BOLD}{YELLOW}{mse:.6e}{END}")
+            print(f"Mean Absolute Error (MAE): {BOLD}{YELLOW}{mae:.6e}{END}")
+            print(f"Peak Signal-to-Noise Ratio (PSNR): {BOLD}{CYAN}{psnr:.2f} dB{END}")
+            print(f"Bias: {BOLD}{bias:+.6e}{END}")
+            
+        except Exception as e:
+            print(f"{RED}Error with NGmix {model_name}: {e}{END}")
+            results[f'ngmix_{model_key}'] = {'error': str(e)}
+    
+    return results
 
 def main():
     """Main function for deconv model evaluation."""
@@ -121,7 +189,7 @@ def main():
     test_galaxy_images, test_target_images = split_combined_images(
         combined_images, has_psf=False, has_clean=True
     )
-    
+
     # Generate PSF images separately
     psf_combined_images, _ = generate_dataset(
         test_samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd,
@@ -141,6 +209,29 @@ def main():
         model = PSFDeconvolutionNet()
     elif model_type == "simple":
         model = SimplePSFDeconvNet()
+    elif model_type == "research_backed":
+        # Extract research-backed parameters from config
+        architecture = config.get('deconv.architecture', 'full')
+        encoder_features = config.get('deconv.encoder_features')
+        use_transformers = config.get('deconv.use_transformers', True)
+        use_physics_informed = config.get('deconv.use_physics_informed', True)
+        use_dense_connections = config.get('deconv.use_dense_connections', True)
+        use_pyramid_fusion = config.get('deconv.use_pyramid_fusion', True)
+        window_size = config.get('deconv.window_size', 8)
+        num_heads = config.get('deconv.num_heads', 8)
+        dropout_rate = config.get('deconv.dropout_rate', 0.1)
+        
+        model = create_research_backed_deconv_unet(
+            architecture=architecture,
+            encoder_features=encoder_features,
+            use_transformers=use_transformers,
+            use_physics_informed=use_physics_informed,
+            use_dense_connections=use_dense_connections,
+            use_pyramid_fusion=use_pyramid_fusion,
+            window_size=window_size,
+            num_heads=num_heads,
+            dropout_rate=dropout_rate
+        )
     else:
         raise ValueError(f"Invalid model type specified: {model_type}")
 
@@ -154,86 +245,45 @@ def main():
 
     import pickle
 
-    # Find checkpoint directories instead of files
+    # Find and load checkpoint
     all_items = os.listdir(load_path)
-    print(f"All items in checkpoint directory: {all_items}")
-
-    # Look for directories that might be checkpoints
-    candidate_dirs = []
-    for item in all_items:
-        full_path = os.path.join(load_path, item)
-        if os.path.isdir(full_path):
-            # Check if directory name matches our pattern
-            if model_name in item:
-                candidate_dirs.append(full_path)
-
-    print(f"Candidate directories for model '{model_name}': {candidate_dirs}")
-
+    candidate_dirs = [
+        os.path.join(load_path, item) for item in all_items
+        if os.path.isdir(os.path.join(load_path, item)) and model_name in item
+    ]
+    
     if not candidate_dirs:
-        # Try looking for best/final versions
-        for suffix in ['_best', '_final']:
-            prefixed_name = f"{model_name}{suffix}"
-            for item in all_items:
-                full_path = os.path.join(load_path, item)
-                if os.path.isdir(full_path) and prefixed_name in item:
-                    candidate_dirs.append(full_path)
-        
-        print(f"Directories after checking suffixes: {candidate_dirs}")
-
-    if not candidate_dirs:
-        # Last resort: look for any directory containing the model name
-        for item in all_items:
-            full_path = os.path.join(load_path, item)
-            if os.path.isdir(full_path) and model_name in item:
-                candidate_dirs.append(full_path)
-        
-        print(f"Directories after broad search: {candidate_dirs}")
-        if not candidate_dirs:
-            raise FileNotFoundError(
-                f"No checkpoint directories found in {load_path} for model '{model_name}'. "
-                f"Items present: {all_items}"
-            )
-
-    # Extract step numbers from directory names
+        raise FileNotFoundError(f"No checkpoint directories found for model '{model_name}'")
+    
     def extract_step(dir_path):
         """Extract step number from directory name"""
         dir_name = os.path.basename(dir_path)
         try:
-            # Strategy 1: Look for numbers at the end of directory name
             if '_' in dir_name:
                 last_part = dir_name.split('_')[-1]
                 if last_part.isdigit():
                     return int(last_part)
-            
-            # Strategy 2: Extract all numbers and take the last one
             numbers = [int(s) for s in dir_name.split('_') if s.isdigit()]
             if numbers:
                 return max(numbers)
-                
-            return -1  # Couldn't determine step number
-        except Exception as e:
-            print(f"Warning: Error extracting step from {dir_name}: {str(e)}")
+            return -1
+        except Exception:
             return -1
 
-    # Sort directories by step number (highest first)
     candidate_dirs.sort(key=extract_step, reverse=True)
     chosen_dir = candidate_dirs[0]
 
-    # Use Flax's built-in checkpoint restoration
     print(f"Loading checkpoint from directory: {chosen_dir}")
     state = checkpoints.restore_checkpoint(
         ckpt_dir=chosen_dir,
         target=state,
-        prefix=model_name  # This should match the prefix used when saving
+        prefix=model_name
     )
 
-    # If the above doesn't work, try without prefix
+    warm_up_model(state, test_galaxy_images[0].shape, test_psf_images[0].shape)
+
     if state.params is None:
-        print("Trying without prefix...")
-        state = checkpoints.restore_checkpoint(
-            ckpt_dir=chosen_dir,
-            target=state
-        )
+        state = checkpoints.restore_checkpoint(ckpt_dir=chosen_dir, target=state)
 
     if state.params is None:
         raise ValueError(f"Failed to load checkpoint from {chosen_dir}")
@@ -249,24 +299,35 @@ def main():
         state, test_galaxy_images, test_psf_images, test_target_images
     )
 
-    # Compare with FFT deconvolution if requested
-    if args.compare_fft:
+    # Compare with NGmix deconvolution if requested
+    ngmix_results = {}
+    if args.compare_ngmix:
         print(f"\n{'='*50}")
-        print("Evaluating FFT Deconvolution Baseline")
+        print("Evaluating NGmix Deconvolution Methods")
         print(f"{'='*50}")
         
-        fft_results = eval_fft_deconv(
-            test_galaxy_images, test_psf_images, test_target_images, 
-            epsilon=args.fft_epsilon
+        ngmix_results = evaluate_ngmix_deconv_methods(
+            test_galaxy_images, test_psf_images, test_target_images
         )
         
         print(f"\n{'='*50}")
         print("Comparison Summary")
         print(f"{'='*50}")
         
-        compare_deconv_methods(neural_results, fft_results)
+        # Compare with best NGmix method
+        best_ngmix_key = None
+        best_ngmix_mse = float('inf')
+        
+        for key, result in ngmix_results.items():
+            if 'error' not in result and result['mse'] < best_ngmix_mse:
+                best_ngmix_mse = result['mse']
+                best_ngmix_key = key
+        
+        if best_ngmix_key:
+            best_ngmix_result = ngmix_results[best_ngmix_key]
+            #compare_deconv_methods(neural_results, best_ngmix_result)
 
-    # After neural evaluation
+    # Generate plots if requested
     if args.plot:
         print(f"\nGenerating evaluation plots...")
         df_plot_path = os.path.join(plot_path, model_name)
@@ -277,51 +338,11 @@ def main():
             state, test_galaxy_images, test_psf_images
         )
         
-        # generate FFT predictions for comparison
-        fft_start = time.time()
-        fft_predictions = fourier_deconvolve(test_galaxy_images, test_psf_images, 
-                                            args.fft_epsilon)
-        fft_time = time.time() - fft_start
-        
-        # Calculate FFT metrics
-        fft_mse = float(jnp.mean((fft_predictions - test_target_images) ** 2))
-        fft_mae = float(jnp.mean(jnp.abs(fft_predictions - test_target_images)))
-        
-        # generate Weiner predictions for comparison
-        weiner_start = time.time()
-        weiner_predictions = wiener_deconvolve(test_galaxy_images, test_psf_images, nse_sd)
-        weiner_time = time.time() - weiner_start
-        
-        # Calculate Weiner metrics
-        weiner_mse = float(jnp.mean((weiner_predictions - test_target_images) ** 2))
-        weiner_mae = float(jnp.mean(jnp.abs(weiner_predictions - test_target_images)))
-
-        # generate RL predictions for comparison
-        richardson_lucy_start = time.time()
-        richardson_lucy_predictions = richardson_lucy_deconvolve(test_galaxy_images, test_psf_images)
-        richardson_lucy_time = time.time() - richardson_lucy_start
-        
-        # Calculate RL metrics
-        richardson_lucy_mse = float(jnp.mean((richardson_lucy_predictions - test_target_images) ** 2))
-        richardson_lucy_mae = float(jnp.mean(jnp.abs(richardson_lucy_predictions - test_target_images)))
-        
-        # Print FFT metrics
-        print(f"\n{BOLD}=== FFT Deconvolution Results ==={END}")
-        print(f"Evaluation Time: {BOLD}{CYAN}{fft_time:.2f} seconds{END}")
-        print(f"Mean Squared Error (MSE): {BOLD}{YELLOW}{fft_mse:.6e}{END}")
-        print(f"Mean Absolute Error (MAE): {BOLD}{YELLOW}{fft_mae:.6e}{END}")
-
-        # Print weiner metrics
-        print(f"\n{BOLD}=== Weiner Deconvolution Results ==={END}")
-        print(f"Evaluation Time: {BOLD}{CYAN}{weiner_time:.2f} seconds{END}")
-        print(f"Mean Squared Error (MSE): {BOLD}{YELLOW}{weiner_mse:.6e}{END}")
-        print(f"Mean Absolute Error (MAE): {BOLD}{YELLOW}{weiner_mae:.6e}{END}")
-
-        # Print RL metrics
-        print(f"\n{BOLD}=== RL Deconvolution Results ==={END}")
-        print(f"Evaluation Time: {BOLD}{CYAN}{richardson_lucy_time:.2f} seconds{END}")
-        print(f"Mean Squared Error (MSE): {BOLD}{YELLOW}{richardson_lucy_mse:.6e}{END}")
-        print(f"Mean Absolute Error (MAE): {BOLD}{YELLOW}{richardson_lucy_mae:.6e}{END}")
+        # Get NGmix predictions
+        ngmix_predictions = {}
+        for key, result in ngmix_results.items():
+            if 'error' not in result:
+                ngmix_predictions[key] = result['predictions']
         
         # Plot sample results
         print("Plotting sample deconvolutions...")
@@ -335,29 +356,55 @@ def main():
             path=samples_path
         )
 
-        # Plot sample results
-        print("Plotting comparison deconvolutions...")
-        samples_path = os.path.join(df_plot_path, "deconv_comparison_samples.png")
-        plot_deconv_compare_samples(
-            test_target_images[:args.num_plot_samples],
-            neural_predictions[:args.num_plot_samples],
-            fft_predictions[:args.num_plot_samples],
-            weiner_predictions[:args.num_plot_samples],
-            richardson_lucy_predictions[:args.num_plot_samples],
-            num_samples=args.num_plot_samples,
-            path=samples_path
-        )
+        # Plot comparison between methods if we have NGmix results
+        if ngmix_predictions:
+            # Use the best NGmix method for comparison
+            best_key = min(ngmix_predictions.keys(), 
+                          key=lambda k: ngmix_results[k]['mse'])
+            best_ngmix_preds = ngmix_predictions[best_key]
+            
+            print("Plotting method comparison...")
+            comparison_path = os.path.join(df_plot_path, "deconv_method_comparison.png")
+            plot_deconv_comparison(
+                test_galaxy_images[:args.num_plot_samples],
+                test_target_images[:args.num_plot_samples],
+                neural_predictions[:args.num_plot_samples],
+                best_ngmix_preds[:args.num_plot_samples],
+                num_samples=args.num_plot_samples,
+                path=comparison_path
+            )
+            
+            # Plot comparison with all NGmix methods
+            if len(ngmix_predictions) >= 2:
+                print("Plotting comprehensive comparison...")
+                comp_samples_path = os.path.join(df_plot_path, "deconv_all_methods_comparison.png")
+                
+                # Get predictions from different methods
+                exp_preds = ngmix_predictions.get('ngmix_exp', neural_predictions)
+                gauss_preds = ngmix_predictions.get('ngmix_gauss', neural_predictions)
+                dev_preds = ngmix_predictions.get('ngmix_dev', neural_predictions)
+                
+                plot_deconv_compare_samples(
+                    test_target_images[:args.num_plot_samples],
+                    neural_predictions[:args.num_plot_samples],
+                    exp_preds[:args.num_plot_samples],
+                    gauss_preds[:args.num_plot_samples],
+                    dev_preds[:args.num_plot_samples],
+                    num_samples=args.num_plot_samples,
+                    path=comp_samples_path
+                )
         
-        # Plot metrics (updated to include FFT)
-        print("Plotting deconvolution metrics...")
-        metrics_path = os.path.join(df_plot_path, "deconv_metrics.png")
-        plot_deconv_metrics(
-            test_target_images, 
-            neural_predictions,
-            fft_predictions,  # ADDED FFT predictions
-            path=metrics_path, 
-            title="Deconvolution Performance Comparison"
-        )
+        # Plot metrics comparison
+        if ngmix_predictions:
+            print("Plotting deconvolution metrics...")
+            metrics_path = os.path.join(df_plot_path, "deconv_metrics.png")
+            plot_deconv_metrics(
+                test_target_images, 
+                neural_predictions,
+                best_ngmix_preds,
+                path=metrics_path, 
+                title="Neural vs NGmix Deconvolution Performance"
+            )
     
     print("\nEvaluation complete!")
 
