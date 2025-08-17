@@ -16,8 +16,7 @@ from .metrics import (
 )
 
 from .deconv_metrics import (
-    eval_deconv_model,
-    eval_fft_deconv, 
+    eval_ngmix_deconv,
     compare_deconv_methods,
     calculate_psnr,
     calculate_ssim

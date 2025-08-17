@@ -132,6 +132,10 @@ class Config:
             'patience': 'training.patience',
             'val_split': 'training.val_split',
             'eval_interval': 'training.eval_interval',
+
+            # Evaluation args
+            'test_samples': 'evaluation.test_samples',
+            'compare_ngmix': 'evaluation.compare_ngmix',
             
             # Output args
             'save_path': 'output.save_path',
