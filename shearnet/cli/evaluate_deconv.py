@@ -7,19 +7,13 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 from flax.training import checkpoints, train_state
+import matplotlib.pyplot as plt
 
 from ..config.config_handler import Config
 from ..core.dataset import generate_dataset, split_combined_images
 from ..deconv.models import PSFDeconvolutionNet, SimplePSFDeconvNet, create_deconv_net
-from ..deconv.train import generate_deconv_predictions
-from ..methods.ngmix_deconv import ngmix_parametric_deconvolve, ngmix_exp_deconvolve, ngmix_gauss_deconvolve, ngmix_dev_deconvolve
-from ..utils.deconv_metrics import eval_deconv_model, eval_ngmix_deconv, compare_deconv_methods
-from ..utils.deconv_plots import (
-    plot_deconv_samples,
-    plot_deconv_metrics,
-    plot_deconv_comparison,
-    plot_deconv_compare_samples
-)
+from ..methods.ngmix_deconv import metacal_deconvolve
+from ..utils.deconv_metrics import eval_deconv_model, eval_ngmix_deconv, compare_deconv_methods, _eval_batch_jit
 import time
 from ..deconv.research_backed_unet import create_research_backed_deconv_unet
 
@@ -38,14 +32,11 @@ def create_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Evaluate using saved model config
-  shearnet-eval-deconv --model_name deconv_unet
-  
-  # Override test samples and compare with FFT
-  shearnet-eval-deconv --model_name deconv_unet --test_samples 1000 --compare_fft
-  
-  # Enable plotting
+  # Evaluate and plot comparison
   shearnet-eval-deconv --model_name deconv_unet --plot
+  
+  # Override test samples
+  shearnet-eval-deconv --model_name deconv_unet --test_samples 1000 --plot
         """
     )
     
@@ -57,13 +48,6 @@ Examples:
                        help='Random seed for test data generation (overrides config).')
     parser.add_argument('--test_samples', type=int, default=None, 
                        help='Number of test samples (overrides config).')
-    parser.add_argument('--compare_fft', action='store_true', 
-                       help='Compare with FFT deconvolution baseline')
-    
-    parser.add_argument('--compare_ngmix', action='store_const', const=True, default=None, help='Compare with NGmix deconvolution baseline')
-    
-    parser.add_argument('--fft_epsilon', type=float, default=1e-3,
-                       help='Regularization parameter for FFT deconvolution')
     parser.add_argument('--plot', action='store_true', 
                        help='Generate evaluation plots')
     parser.add_argument('--num_plot_samples', type=int, default=5,
@@ -81,60 +65,106 @@ def warm_up_model(state, galaxy_shape, psf_shape):
     _ = state.apply_fn(state.params, dummy_galaxy, dummy_psf, training=False)
     print("Model warm-up complete")
 
-def evaluate_ngmix_deconv_methods(galaxy_images, psf_images, target_images):
-    """Evaluate NGmix deconvolution methods."""
-    results = {}
+def generate_neural_predictions(state, galaxy_images, psf_images, batch_size=64):
+    """Generate predictions using the neural network."""
+    # Pre-compile the function
+    sample_galaxy = galaxy_images[:1]
+    sample_psf = psf_images[:1]
+    _ = _eval_batch_jit(state, sample_galaxy, sample_psf)  # Trigger compilation
     
-    methods = [
-        ('exp', 'Exponential', ngmix_exp_deconvolve),
-        ('gauss', 'Gaussian', ngmix_gauss_deconvolve), 
-        ('dev', 'de Vaucouleurs', ngmix_dev_deconvolve)
-    ]
-    
-    for model_key, model_name, method_func in methods:
-        print(f"\n{BOLD}=== NGmix {model_name} Deconvolution ==={END}")
+    predictions = []
+    for i in range(0, len(galaxy_images), batch_size):
+        batch_galaxy = galaxy_images[i:i + batch_size]
+        batch_psf = psf_images[i:i + batch_size]
         
-        start_time = time.time()
-        
-        try:
-            predictions = method_func(galaxy_images, psf_images, n_jobs=4)
-            elapsed_time = time.time() - start_time
-            
-            # Calculate metrics
-            mse = float(jnp.mean((predictions - target_images) ** 2))
-            mae = float(jnp.mean(jnp.abs(predictions - target_images)))
-            
-            # PSNR
-            if mse > 0:
-                max_val = float(jnp.max(target_images))
-                psnr = 20 * jnp.log10(max_val / jnp.sqrt(mse))
-            else:
-                psnr = float('inf')
-            
-            # Bias
-            bias = float(jnp.mean(predictions - target_images))
-            
-            results[f'ngmix_{model_key}'] = {
-                'method': f'NGmix {model_name}',
-                'predictions': predictions,
-                'mse': mse,
-                'mae': mae,
-                'psnr': psnr,
-                'bias': bias,
-                'time_taken': elapsed_time
-            }
-            
-            print(f"Evaluation Time: {BOLD}{CYAN}{elapsed_time:.2f} seconds{END}")
-            print(f"Mean Squared Error (MSE): {BOLD}{YELLOW}{mse:.6e}{END}")
-            print(f"Mean Absolute Error (MAE): {BOLD}{YELLOW}{mae:.6e}{END}")
-            print(f"Peak Signal-to-Noise Ratio (PSNR): {BOLD}{CYAN}{psnr:.2f} dB{END}")
-            print(f"Bias: {BOLD}{bias:+.6e}{END}")
-            
-        except Exception as e:
-            print(f"{RED}Error with NGmix {model_name}: {e}{END}")
-            results[f'ngmix_{model_key}'] = {'error': str(e)}
+        batch_preds = _eval_batch_jit(state, batch_galaxy, batch_psf)
+        predictions.append(batch_preds)
     
-    return results
+    return jnp.concatenate(predictions, axis=0)
+
+def plot_comparison(target_images, neural_preds, metacal_preds, num_samples=5, save_path=None):
+    """Create a simple comparison plot showing truth, neural, and metacal results."""
+    
+    # Ensure all images have the same shape
+    if target_images.ndim == 4:
+        target_images = target_images.squeeze(-1)
+    if neural_preds.ndim == 4:
+        neural_preds = neural_preds.squeeze(-1)
+    if metacal_preds.ndim == 4:
+        metacal_preds = metacal_preds.squeeze(-1)
+    
+    fig, axes = plt.subplots(3, num_samples, figsize=(15, 9))
+    
+    for i in range(num_samples):
+        # Truth
+        axes[0, i].imshow(target_images[i], cmap='viridis')
+        axes[0, i].set_title(f'Truth {i+1}')
+        axes[0, i].axis('off')
+        
+        # Neural
+        axes[1, i].imshow(neural_preds[i], cmap='viridis')
+        axes[1, i].set_title(f'Neural {i+1}')
+        axes[1, i].axis('off')
+        
+        # Metacal
+        axes[2, i].imshow(metacal_preds[i], cmap='viridis')
+        axes[2, i].set_title(f'Metacal {i+1}')
+        axes[2, i].axis('off')
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Comparison plot saved to: {save_path}")
+    else:
+        plt.show()
+    
+    plt.close()
+
+def plot_residuals(target_images, neural_preds, metacal_preds, num_samples=5, save_path=None):
+    """Plot residuals (differences from truth) for both methods."""
+    
+    # Ensure all images have the same shape
+    if target_images.ndim == 4:
+        target_images = target_images.squeeze(-1)
+    if neural_preds.ndim == 4:
+        neural_preds = neural_preds.squeeze(-1)
+    if metacal_preds.ndim == 4:
+        metacal_preds = metacal_preds.squeeze(-1)
+    
+    fig, axes = plt.subplots(3, num_samples, figsize=(15, 9))
+    
+    for i in range(num_samples):
+        # Truth (for reference)
+        axes[0, i].imshow(target_images[i], cmap='viridis')
+        axes[0, i].set_title(f'Truth {i+1}')
+        axes[0, i].axis('off')
+        
+        # Neural residual
+        neural_residual = neural_preds[i] - target_images[i]
+        vmax = np.max(np.abs(neural_residual))
+        axes[1, i].imshow(neural_residual, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+        axes[1, i].set_title(f'Neural Residual {i+1}')
+        axes[1, i].axis('off')
+        
+        # Metacal residual
+        metacal_residual = metacal_preds[i] - target_images[i]
+        vmax = np.max(np.abs(metacal_residual))
+        axes[2, i].imshow(metacal_residual, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+        axes[2, i].set_title(f'Metacal Residual {i+1}')
+        axes[2, i].axis('off')
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Residuals plot saved to: {save_path}")
+    else:
+        plt.show()
+    
+    plt.close()
+
+    plt.close()
 
 def main():
     """Main function for deconv model evaluation."""
@@ -179,10 +209,10 @@ def main():
     print(f"Model type: {model_type}")
     
     # Generate test data with neural_metacal=True to get clean targets
-    combined_images, labels = generate_dataset(
+    combined_images, labels, obs = generate_dataset(
         test_samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd, 
         npix=stamp_size, scale=pixel_size, neural_metacal=True,
-        apply_psf_shear=apply_psf_shear, psf_shear_range=psf_shear_range
+        apply_psf_shear=apply_psf_shear, psf_shear_range=psf_shear_range, return_obs=True
     )
     
     # Split into galaxy and clean images
@@ -235,15 +265,10 @@ def main():
     else:
         raise ValueError(f"Invalid model type specified: {model_type}")
 
-    print("galaxy shape"+str(jnp.ones_like(test_galaxy_images[0][..., None]).shape))
-    print("psf shape"+str(jnp.ones_like(test_psf_images[0][..., None]).shape))
-
     init_params = model.init(rng_key, jnp.ones_like(test_galaxy_images[0][..., None]), jnp.ones_like(test_psf_images[0][..., None]), training=False)
     state = train_state.TrainState.create(
         apply_fn=model.apply, params=init_params, tx=optax.adam(1e-3)
     )
-
-    import pickle
 
     # Find and load checkpoint
     all_items = os.listdir(load_path)
@@ -299,33 +324,20 @@ def main():
         state, test_galaxy_images, test_psf_images, test_target_images
     )
 
-    # Compare with NGmix deconvolution if requested
-    ngmix_results = {}
-    if args.compare_ngmix:
-        print(f"\n{'='*50}")
-        print("Evaluating NGmix Deconvolution Methods")
-        print(f"{'='*50}")
-        
-        ngmix_results = evaluate_ngmix_deconv_methods(
-            test_galaxy_images, test_psf_images, test_target_images
-        )
-        
-        print(f"\n{'='*50}")
-        print("Comparison Summary")
-        print(f"{'='*50}")
-        
-        # Compare with best NGmix method
-        best_ngmix_key = None
-        best_ngmix_mse = float('inf')
-        
-        for key, result in ngmix_results.items():
-            if 'error' not in result and result['mse'] < best_ngmix_mse:
-                best_ngmix_mse = result['mse']
-                best_ngmix_key = key
-        
-        if best_ngmix_key:
-            best_ngmix_result = ngmix_results[best_ngmix_key]
-            #compare_deconv_methods(neural_results, best_ngmix_result)
+    # Always evaluate Metacal for comparison
+    print(f"\n{'='*50}")
+    print("Evaluating Metacalibration Deconvolution")
+    print(f"{'='*50}")
+    
+    metacal_results = eval_ngmix_deconv(
+        test_galaxy_images, test_psf_images, test_target_images, model='exp'
+    )
+
+    # Compare methods
+    print(f"\n{'='*50}")
+    print("Method Comparison")
+    print(f"{'='*50}")
+    compare_deconv_methods(neural_results, metacal_results)
 
     # Generate plots if requested
     if args.plot:
@@ -334,79 +346,55 @@ def main():
         os.makedirs(df_plot_path, exist_ok=True)
         
         # Generate neural network predictions
-        neural_predictions = generate_deconv_predictions(
+        print("Generating neural network predictions...")
+        neural_predictions = generate_neural_predictions(
             state, test_galaxy_images, test_psf_images
         )
         
-        # Get NGmix predictions
-        ngmix_predictions = {}
-        for key, result in ngmix_results.items():
-            if 'error' not in result:
-                ngmix_predictions[key] = result['predictions']
+        # Get metacal predictions from results
+        metacal_predictions = metacal_results['predictions']
         
-        # Plot sample results
-        print("Plotting sample deconvolutions...")
-        samples_path = os.path.join(df_plot_path, "deconv_samples.png")
-        plot_deconv_samples(
-            test_galaxy_images[:args.num_plot_samples],
-            test_psf_images[:args.num_plot_samples], 
+        # Ensure predictions have correct shape
+        if neural_predictions.ndim == 4:
+            neural_predictions = neural_predictions.squeeze(-1)
+        if metacal_predictions.ndim == 4:
+            metacal_predictions = metacal_predictions.squeeze(-1)
+        if test_target_images.ndim == 4:
+            test_target_images = test_target_images.squeeze(-1)
+        
+        print(f"Neural predictions shape: {neural_predictions.shape}")
+        print(f"Metacal predictions shape: {metacal_predictions.shape}")
+        print(f"Target images shape: {test_target_images.shape}")
+        
+        # Plot comparison
+        print("Creating comparison plot...")
+        comparison_path = os.path.join(df_plot_path, "truth_neural_metacal_comparison.png")
+        plot_comparison(
             test_target_images[:args.num_plot_samples],
             neural_predictions[:args.num_plot_samples],
+            metacal_predictions[:args.num_plot_samples],
             num_samples=args.num_plot_samples,
-            path=samples_path
+            save_path=comparison_path
         )
-
-        # Plot comparison between methods if we have NGmix results
-        if ngmix_predictions:
-            # Use the best NGmix method for comparison
-            best_key = min(ngmix_predictions.keys(), 
-                          key=lambda k: ngmix_results[k]['mse'])
-            best_ngmix_preds = ngmix_predictions[best_key]
-            
-            print("Plotting method comparison...")
-            comparison_path = os.path.join(df_plot_path, "deconv_method_comparison.png")
-            plot_deconv_comparison(
-                test_galaxy_images[:args.num_plot_samples],
-                test_target_images[:args.num_plot_samples],
-                neural_predictions[:args.num_plot_samples],
-                best_ngmix_preds[:args.num_plot_samples],
-                num_samples=args.num_plot_samples,
-                path=comparison_path
-            )
-            
-            # Plot comparison with all NGmix methods
-            if len(ngmix_predictions) >= 2:
-                print("Plotting comprehensive comparison...")
-                comp_samples_path = os.path.join(df_plot_path, "deconv_all_methods_comparison.png")
-                
-                # Get predictions from different methods
-                exp_preds = ngmix_predictions.get('ngmix_exp', neural_predictions)
-                gauss_preds = ngmix_predictions.get('ngmix_gauss', neural_predictions)
-                dev_preds = ngmix_predictions.get('ngmix_dev', neural_predictions)
-                
-                plot_deconv_compare_samples(
-                    test_target_images[:args.num_plot_samples],
-                    neural_predictions[:args.num_plot_samples],
-                    exp_preds[:args.num_plot_samples],
-                    gauss_preds[:args.num_plot_samples],
-                    dev_preds[:args.num_plot_samples],
-                    num_samples=args.num_plot_samples,
-                    path=comp_samples_path
-                )
         
-        # Plot metrics comparison
-        if ngmix_predictions:
-            print("Plotting deconvolution metrics...")
-            metrics_path = os.path.join(df_plot_path, "deconv_metrics.png")
-            plot_deconv_metrics(
-                test_target_images, 
-                neural_predictions,
-                best_ngmix_preds,
-                path=metrics_path, 
-                title="Neural vs NGmix Deconvolution Performance"
-            )
+        # Plot residuals
+        print("Creating residuals plot...")
+        residuals_path = os.path.join(df_plot_path, "residuals_comparison.png")
+        plot_residuals(
+            test_target_images[:args.num_plot_samples],
+            neural_predictions[:args.num_plot_samples],
+            metacal_predictions[:args.num_plot_samples],
+            num_samples=args.num_plot_samples,
+            save_path=residuals_path
+        )
+        
+        print(f"Plots saved to: {df_plot_path}")
     
     print("\nEvaluation complete!")
+
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":
