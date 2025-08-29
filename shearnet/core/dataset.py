@@ -291,7 +291,7 @@ def sim_func_decrepted(g1, g2, seed, psf_sigma, sigma=1.0, flux=1.0, type='exp',
 
     return obj_obs
 
-def sim_func_superbit_dual_shear(g1, g2, seed, psf_sigma, g1_sh=0, g2_sh=0, sigma=1.0, flux=1.0, superbit_psf_fnmae=psf_fnmae, type='exp', npix=53, scale=0.2):
+def sim_func_superbit_dual_shear(g1, g2, seed, psf_sigma, g1_sh=0, g2_sh=0, sigma=1.0, flux=1.0, superbit_psf_fnmae=PSF_DATA_DIR, type='exp', npix=53, scale=0.2):
     rng = np.random.RandomState(seed=seed)
     
     # Create a galaxy object
@@ -364,7 +364,7 @@ def sim_func_superbit_dual_shear(g1, g2, seed, psf_sigma, g1_sh=0, g2_sh=0, sigm
 
     return obj_obs, g1_admom, g2_admom
 
-def sim_func_superbit(g1, g2, seed, sigma=1.0, type='exp', npix=53, scale=0.2, superbit_psf_fnmae=psf_fnmae, superbit_weight_fname=weight_fname):
+def sim_func_superbit(g1, g2, seed, sigma=1.0, type='exp', npix=53, scale=0.2, superbit_psf_fnmae=PSF_DATA_DIR, superbit_weight_fname=weight_fname):
 
     rng = np.random.RandomState(seed=seed)
     
