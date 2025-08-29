@@ -1,3 +1,5 @@
+import os
+from glob import glob
 import numpy as np
 import galsim
 import ngmix
@@ -5,14 +7,24 @@ from scipy.signal import convolve2d
 from tqdm import tqdm
 from ..methods.ngmix import g1_g2_sigma_sample
 
-psf_fnmae = '/projects/mccleary_group/saha/codes/.empty/psf_cutouts_superbit.npy'
-weight_fname = '/projects/mccleary_group/saha/codes/.empty/weights_cutouts_superbit.npy'
+XIMAGE_SIZE, YIMAGE_SIZE = 9600, 6422 # Usual size of SuperBIT single exposures in pixel unit
+MARGIN = 200 # Margins that I wanna use for PSF Rendering
+
+PSF_DATA_DIR = "/projects/mccleary_group/superbit/SHEARNET_DATA"
 
 def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, process_psf=False,return_obs=False):
     images = []
     labels = []
     obs = []
     g1_list, g2_list, sigma_list = g1_g2_sigma_sample(num_samples=samples, seed=seed)
+    ud = galsim.UniformDeviate(seed)
+    if exp=="superbit":
+        psf_files = search_psf_files(path=PSF_DATA_DIR)
+        if len(psf_files)==0:
+            raise FileNotFoundError(f"No PSF files found in {PSF_DATA_DIR}")
+    else:
+        psf_files = None
+
     for i in tqdm(range(samples)):
         g1, g2 = g1_list[i], g2_list[i]
         sigma = sigma_list[i]
@@ -21,7 +33,7 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp
         flux=np.random.uniform(1, 5)  # Random flux
         #psf_sigma = np.random.uniform(0.5, 1.5)
         
-        obj_obs = sim_func(g1, g2, sigma=sigma, flux=flux, psf_sigma=psf_sigma, nse_sd = nse_sd,  type=type, npix=npix, scale=scale, seed=i, exp=exp)
+        obj_obs = sim_func(g1, g2, sigma=sigma, flux=flux, psf_sigma=psf_sigma, nse_sd = nse_sd,  type=type, npix=npix, scale=scale, seed=i, exp=exp, ud=ud, psf_files=psf_files)
         
         galaxy_images = obj_obs.image
         psf_images = obj_obs.psf.image
@@ -56,7 +68,7 @@ def split_combined_images(combined_images):
     psf_images = combined_images[..., 1]     # Channel 1
     return galaxy_images, psf_images
 
-def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", superbit_psf_fname=psf_fnmae):
+def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", ud=None, psf_files=None):
 
     rng = np.random.RandomState(seed=seed)
 
@@ -78,24 +90,16 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
         psf = galsim.Gaussian(sigma=psf_sigma)
         obj = galsim.Convolve(sheared_gal, psf)
 
-        # Draw images
-        obj_im = obj.drawImage(nx=npix, ny=npix, scale=scale).array
-        psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
     elif exp == 'superbit':
-        try:
-            sheared_im = sheared_gal.drawImage(nx=npix, ny=npix, scale=scale).array
-        except Exception as e:
-            print(e)
-            sheared_im = np.zeros((npix, npix))
-            flag = 2 
-        psf_images = np.load(superbit_psf_fname)
-        random_psf_index = rng.randint(0, psf_images.shape[0])  # Random index in the range [0, n)
-        psf_im = psf_images[random_psf_index].copy()
-        obj_im = convolve2d(sheared_im, psf_im, mode='same', boundary='wrap')
-
+        this_psf = import_psf(psf_files, ud)
+        gsp=galsim.GSParams(maximum_fft_size=32768)
+        obj = galsim.Convolve([this_psf, sheared_gal], gsparams=gsp)
     else:
         raise ValueError("For now only supported experiments are 'ideal' or 'superbit'")
-
+    
+    # Draw images
+    obj_im = obj.drawImage(nx=npix, ny=npix, scale=scale).array
+    psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
     # Add noise
     nse = rng.normal(size=obj_im.shape, scale=nse_sd)
     nse_im = rng.normal(size=obj_im.shape, scale=nse_sd)
@@ -105,9 +109,8 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
     psf_jac = ngmix.jacobian.DiagonalJacobian(scale=scale, row=cen, col=cen)
 
     # Add small noise to PSF for stability
-    target_psf_s2n = 500.0
-    target_psf_noise = np.sqrt(np.sum(psf_im**2)) / target_psf_s2n
-    #print(target_psf_noise)
+    target_psf_noise = psf_im.max() / 1000.0
+
     psf_obs = ngmix.Observation(
         image=psf_im,
         weight=np.ones_like(psf_im) / target_psf_noise**2,
@@ -123,6 +126,43 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
         psf=psf_obs,
     )
     return obj_obs
+
+def search_psf_files(path):
+    all_psf_files = []
+    search_path = os.path.join(path, 'psfex-output', '*.psf')
+    return all_psf_files.extend(glob(search_path))
+
+def get_background_file(psf_file):
+    # Extract base name without directory
+    fname = os.path.basename(psf_file)
+    
+    # Remove the "_starcat.psf" suffix
+    stem = fname.replace("_starcat.psf", "")
+    
+    # Build the new file name
+    new_fname = stem + ".bkg_rms.fits"
+    
+    # Replace psfex-output with sky_backgrounds
+    new_dir = os.path.dirname(psf_file).replace("psfex-output", "sky_backgrounds")
+    
+    return os.path.join(new_dir, new_fname)
+
+def import_psf(psf_files, ud, xsize=XIMAGE_SIZE, ysize=YIMAGE_SIZE, margin=MARGIN):
+    maxexp = len(psf_files)
+    # random position
+    x = margin + (xsize - 2*margin) * ud()
+    y = margin + (ysize - 2*margin) * ud()
+
+    # random integer between 1 and maxexp
+    exp = int(1 + (maxexp) * ud())  
+    image_pos = galsim.PositionD(x=x, y=y)  
+    psf_file = psf_files[exp-1]
+
+    bk_image = get_background_file(psf_file)
+    psf = galsim.des.DES_PSFEx(psf_file, bk_image)
+    this_psf = psf.getPSF(image_pos)
+
+    return this_psf
 
 def sim_func_dual_shear(g1, g2, seed, psf_sigma, g1_sh=0, g2_sh=0, sigma=1.0, flux=1.0, type='exp', npix=53, scale=0.2):
     rng = np.random.RandomState(seed=seed)
