@@ -11,7 +11,7 @@ XIMAGE_SIZE, YIMAGE_SIZE = 9600, 6422 # Usual size of SuperBIT single exposures 
 MARGIN = 200 # Margins that I wanna use for PSF Rendering
 
 PSF_DATA_DIR = "/projects/mccleary_group/superbit/SHEARNET_DATA"
-
+weight_fname = "placeholder" # FIXME: add proper noise later
 def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, process_psf=False,return_obs=False):
     images = []
     labels = []
