@@ -129,15 +129,6 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
 
         if apply_psf_shear:
             psf = psf.shear(g1=psf_g1, g2=psf_g2)
-
-        obj = galsim.Convolve(sheared_gal, psf)
-
-        # Draw images - handle GalSim instabilities
-        try:
-            obj_im = obj.drawImage(nx=npix, ny=npix, scale=scale).array
-        except (galsim.errors.GalSimFFTSizeError, galsim.errors.GalSimError) as e:
-            print(f"GalSim error drawing convolved galaxy: {e}")
-            obj_im = np.zeros((npix, npix))
             
         try:
             psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
@@ -159,9 +150,17 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
     else:
         raise ValueError("For now only supported experiments are 'ideal' or 'superbit'")
 
-    # Add noise
-    nse = rng.normal(size=obj_im.shape, scale=nse_sd)
-    nse_im = rng.normal(size=obj_im.shape, scale=nse_sd)
+    nse = rng.normal(size=(npix, npix), scale=nse_sd)
+    nse_gs = galsim.InterpolatedImage(galsim.Image(nse, scale=scale))
+
+    noisy_obj = sheared_gal + nse_gs
+    obj = galsim.Convolve(noisy_obj, psf)
+    # Draw images - handle GalSim instabilities
+    try:
+        obj_im = obj.drawImage(nx=npix, ny=npix, scale=scale).array
+    except (galsim.errors.GalSimFFTSizeError, galsim.errors.GalSimError) as e:
+        print(f"GalSim error drawing convolved galaxy: {e}")
+        obj_im = np.zeros((npix, npix))
 
     cen = npix // 2
     jac = ngmix.jacobian.DiagonalJacobian(scale=scale, row=cen + dy / scale, col=cen + dx / scale)
@@ -179,11 +178,11 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
     
     obj_obs = ngmix.Observation(
         image=obj_im + nse,
-        noise=nse_im,
-        weight=np.ones_like(nse_im) / nse_sd**2,
+        noise=nse,
+        weight=np.ones_like(obj_im) / nse_sd**2,
         jacobian=jac,
-        bmask=np.zeros_like(nse_im, dtype=np.int32),
-        ormask=np.zeros_like(nse_im, dtype=np.int32),
+        bmask=np.zeros_like(obj_im, dtype=np.int32),
+        ormask=np.zeros_like(obj_im, dtype=np.int32),
         psf=psf_obs,
     )
     
