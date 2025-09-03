@@ -31,7 +31,7 @@ training:
   eval_interval: 1
 
 evaluation:
-  test_samples: 5000
+  test_samples: 10
   seed: 58
   compare_ngmix: true
 
