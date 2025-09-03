@@ -1,4 +1,4 @@
-"""Metacalibration-based PSF deconvolution methods for ShearNet - UPDATED VERSION.
+"""Metacalibration-based PSF deconvolution methods for ShearNet
 
 This implementation completely replaces the old parametric fitting approach
 with direct metacalibration-based PSF deconvolution using ngmix's MetacalDilatePSF.
@@ -118,13 +118,13 @@ def metacal_deconvolve_single(args):
         # Use MetacalDilatePSF for deconvolution
         mc = MetacalDilatePSF(obs)
         
-        # The key fix: image_int_nopsf is a GalSim Convolution object that needs to be drawn
+        # image_int_nopsf is a GalSim Convolution object
         if hasattr(mc, 'image_int_nopsf'):
             # Get image size from input galaxy image
             img_height, img_width = galaxy_img.shape
             # Draw the GalSim object to get pixel values
-            drawn_image = mc.image_int_nopsf.drawImage(nx=img_width, ny=img_height, scale=pixel_scale)
-            deconv_img = drawn_image.array
+            drawn_image = mc.image_int_nopsf.drawKImage(nx=img_width, ny=img_height, scale=pixel_scale)
+            deconv_img = np.real(drawn_image.array)
         else:
             print("Warning: MetacalDilatePSF has no image_int_nopsf attribute")
             return np.zeros_like(galaxy_img)
