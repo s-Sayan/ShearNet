@@ -22,10 +22,9 @@ from .deconv_metrics import (
     calculate_ssim
 )
 from .deconv_plots import (
-    plot_deconv_samples,
-    plot_deconv_metrics,
-    plot_deconv_comparison,
-    plot_deconv_residuals
+    plot_comparison, 
+    plot_residuals, 
+    plot_deconv_spatial_residuals
 )
 
 
