@@ -16,6 +16,7 @@ from ..methods.ngmix_deconv import metacal_deconvolve
 from ..utils.deconv_metrics import eval_deconv_model, eval_ngmix_deconv, compare_deconv_methods, _eval_batch_jit
 import time
 from ..deconv.research_backed_unet import create_research_backed_deconv_unet
+from ..utils.deconv_plots import plot_comparison, plot_residuals, plot_deconv_spatial_residuals
 
 # ANSI color codes for pretty printing
 BOLD = '\033[1m'
@@ -81,90 +82,6 @@ def generate_neural_predictions(state, galaxy_images, psf_images, batch_size=64)
         predictions.append(batch_preds)
     
     return jnp.concatenate(predictions, axis=0)
-
-def plot_comparison(target_images, neural_preds, metacal_preds, num_samples=5, save_path=None):
-    """Create a simple comparison plot showing truth, neural, and metacal results."""
-    
-    # Ensure all images have the same shape
-    if target_images.ndim == 4:
-        target_images = target_images.squeeze(-1)
-    if neural_preds.ndim == 4:
-        neural_preds = neural_preds.squeeze(-1)
-    if metacal_preds.ndim == 4:
-        metacal_preds = metacal_preds.squeeze(-1)
-    
-    fig, axes = plt.subplots(3, num_samples, figsize=(15, 9))
-    
-    for i in range(num_samples):
-        # Truth
-        axes[0, i].imshow(target_images[i], cmap='viridis')
-        axes[0, i].set_title(f'Truth {i+1}')
-        axes[0, i].axis('off')
-        
-        # Neural
-        axes[1, i].imshow(neural_preds[i], cmap='viridis')
-        axes[1, i].set_title(f'Neural {i+1}')
-        axes[1, i].axis('off')
-        
-        # Metacal
-        axes[2, i].imshow(metacal_preds[i], cmap='viridis')
-        axes[2, i].set_title(f'Metacal {i+1}')
-        axes[2, i].axis('off')
-    
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Comparison plot saved to: {save_path}")
-    else:
-        plt.show()
-    
-    plt.close()
-
-def plot_residuals(target_images, neural_preds, metacal_preds, num_samples=5, save_path=None):
-    """Plot residuals (differences from truth) for both methods."""
-    
-    # Ensure all images have the same shape
-    if target_images.ndim == 4:
-        target_images = target_images.squeeze(-1)
-    if neural_preds.ndim == 4:
-        neural_preds = neural_preds.squeeze(-1)
-    if metacal_preds.ndim == 4:
-        metacal_preds = metacal_preds.squeeze(-1)
-    
-    fig, axes = plt.subplots(3, num_samples, figsize=(15, 9))
-    
-    for i in range(num_samples):
-        # Truth (for reference)
-        axes[0, i].imshow(target_images[i], cmap='viridis')
-        axes[0, i].set_title(f'Truth {i+1}')
-        axes[0, i].axis('off')
-        
-        # Neural residual
-        neural_residual = neural_preds[i] - target_images[i]
-        vmax = np.max(np.abs(neural_residual))
-        axes[1, i].imshow(neural_residual, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
-        axes[1, i].set_title(f'Neural Residual {i+1}')
-        axes[1, i].axis('off')
-        
-        # Metacal residual
-        metacal_residual = metacal_preds[i] - target_images[i]
-        vmax = np.max(np.abs(metacal_residual))
-        axes[2, i].imshow(metacal_residual, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
-        axes[2, i].set_title(f'Metacal Residual {i+1}')
-        axes[2, i].axis('off')
-    
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Residuals plot saved to: {save_path}")
-    else:
-        plt.show()
-    
-    plt.close()
-
-    plt.close()
 
 def main():
     """Main function for deconv model evaluation."""
@@ -330,7 +247,9 @@ def main():
     print(f"{'='*50}")
     
     metacal_results = eval_ngmix_deconv(
-        test_galaxy_images, test_psf_images, test_target_images, model='exp'
+        observations=obs,
+        target_images=test_target_images,
+        model='exp' 
     )
 
     # Compare methods
@@ -368,7 +287,7 @@ def main():
         
         # Plot comparison
         print("Creating comparison plot...")
-        comparison_path = os.path.join(df_plot_path, "truth_neural_metacal_comparison.png")
+        comparison_path = os.path.join(df_plot_path, "comparison.png")
         plot_comparison(
             test_target_images[:args.num_plot_samples],
             neural_predictions[:args.num_plot_samples],
@@ -376,16 +295,16 @@ def main():
             num_samples=args.num_plot_samples,
             save_path=comparison_path
         )
-        
-        # Plot residuals
-        print("Creating residuals plot...")
-        residuals_path = os.path.join(df_plot_path, "residuals_comparison.png")
-        plot_residuals(
-            test_target_images[:args.num_plot_samples],
-            neural_predictions[:args.num_plot_samples],
-            metacal_predictions[:args.num_plot_samples],
-            num_samples=args.num_plot_samples,
-            save_path=residuals_path
+
+        # Plot spatial residuals
+        print("Creating spatial residuals heat map...")
+        spatial_residuals_path = os.path.join(df_plot_path, "spatial_residual.png")
+        plot_deconv_spatial_residuals(
+            test_target_images,
+            neural_predictions,
+            metacal_predictions,
+            path=spatial_residuals_path,
+            title="Spatial Deconvolution Bias Analysis"
         )
         
         print(f"Plots saved to: {df_plot_path}")

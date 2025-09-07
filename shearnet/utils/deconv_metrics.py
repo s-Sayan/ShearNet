@@ -1,10 +1,10 @@
-"""Metrics and evaluation functions for PSF deconvolution with Metacalibration comparison."""
+"""Metrics and evaluation functions for PSF deconvolution with Metacalibration comparison - Fixed Version."""
 
 import time
 import numpy as np
 import jax
 import jax.numpy as jnp
-from typing import Dict, Any
+from typing import Dict, Any, List
 from ..methods.ngmix_deconv import metacal_deconvolve
 
 # ANSI color codes for pretty printing
@@ -228,15 +228,13 @@ def eval_deconv_model(state, galaxy_images: jnp.ndarray, psf_images: jnp.ndarray
     }
 
 
-def eval_ngmix_deconv(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray, 
-                     target_images: jnp.ndarray, model: str = 'exp', 
-                     **kwargs) -> Dict[str, Any]:
+def eval_ngmix_deconv(observations: List, target_images: jnp.ndarray, 
+                              model: str = 'exp', **kwargs) -> Dict[str, Any]:
     """
-    Evaluate Metacalibration-based deconvolution method.
+    Evaluate Metacalibration-based deconvolution method using pre-existing observations.
     
     Args:
-        galaxy_images: Observed galaxy images
-        psf_images: PSF images
+        observations: List of ngmix.Observation objects with proper jacobians
         target_images: Ground truth clean images
         model: Model type ('exp', 'gauss', 'dev') - all use metacal now
         **kwargs: Additional arguments for metacalibration deconvolution
@@ -246,8 +244,6 @@ def eval_ngmix_deconv(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray,
     """
     start_time = time.time()
     
-    # Choose the appropriate deconvolution function (all use metacal now)
-    deconv_func = metacal_deconvolve
     model_name = 'Metacal'
     
     # FORCE single-threaded execution to avoid JAX multiprocessing issues
@@ -257,8 +253,9 @@ def eval_ngmix_deconv(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray,
     print(f"Original target_images shape: {target_images.shape}")
     print(f"Target images - min: {jnp.min(target_images):.2e}, max: {jnp.max(target_images):.2e}, mean: {jnp.mean(target_images):.2e}")
     
-    # Generate metacalibration deconvolution predictions
-    predictions = deconv_func(galaxy_images, psf_images, **kwargs_copy)
+    # Generate metacalibration deconvolution predictions using pre-existing observations
+    print("Using pre-existing observation objects with proper jacobians and metadata")
+    predictions = metacal_deconvolve(observations, **kwargs_copy)
     
     print(f"Raw predictions shape: {predictions.shape}")
     print(f"Raw predictions - min: {jnp.min(predictions):.2e}, max: {jnp.max(predictions):.2e}, mean: {jnp.mean(predictions):.2e}")
@@ -307,7 +304,7 @@ def eval_ngmix_deconv(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray,
     total_time = time.time() - start_time
     
     # Print results
-    print(f"\n{BOLD}=== Metacalibration {model_name} Deconvolution ==={END}")
+    print(f"\n{BOLD}=== Metacalibration {model_name} Deconvolution (Using Pre-existing Obs) ==={END}")
     print(f"Evaluation Time: {BOLD}{CYAN}{total_time:.2f} seconds{END}")
     print(f"Mean Squared Error (MSE): {BOLD}{YELLOW}{mse:.6e}{END}")
     print(f"Mean Absolute Error (MAE): {BOLD}{YELLOW}{mae:.6e}{END}")
@@ -315,7 +312,7 @@ def eval_ngmix_deconv(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray,
     print(f"Bias: {BOLD}{bias:+.6e}{END}")
     
     return {
-        'method': f'Metacal {model_name}',
+        'method': f'Metacal {model_name} (Pre-existing Obs)',
         'mse': mse,
         'mae': mae,
         'psnr': psnr,
@@ -328,15 +325,13 @@ def eval_ngmix_deconv(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray,
         'model': model
     }
 
-
-def eval_all_ngmix_methods(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray, 
-                          target_images: jnp.ndarray, **kwargs) -> Dict[str, Dict[str, Any]]:
+def eval_all_ngmix_methods_with_obs(observations: List, target_images: jnp.ndarray, 
+                                   **kwargs) -> Dict[str, Dict[str, Any]]:
     """
-    Evaluate all Metacalibration deconvolution methods.
+    Evaluate all Metacalibration deconvolution methods using pre-existing observations.
     
     Args:
-        galaxy_images: Observed galaxy images
-        psf_images: PSF images
+        observations: List of ngmix.Observation objects
         target_images: Ground truth clean images
         **kwargs: Additional arguments for metacalibration methods
         
@@ -348,9 +343,47 @@ def eval_all_ngmix_methods(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray,
     
     for model in models:
         try:
+            print(f"\nEvaluating Metacalibration {model} variant with pre-existing observations...")
+            results[model] = eval_ngmix_deconv(
+                observations, target_images, model=model, **kwargs
+            )
+        except Exception as e:
+            print(f"Error evaluating Metacalibration {model}: {e}")
+            results[model] = {'error': str(e)}
+    
+    return results
+
+
+def eval_all_ngmix_methods(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray, 
+                          target_images: jnp.ndarray, **kwargs) -> Dict[str, Dict[str, Any]]:
+    """
+    DEPRECATED: Evaluate all Metacalibration deconvolution methods using recreated observations.
+    
+    Args:
+        galaxy_images: Observed galaxy images
+        psf_images: PSF images
+        target_images: Ground truth clean images
+        **kwargs: Additional arguments for metacalibration methods
+        
+    Returns:
+        Dictionary with results from all metacalibration methods
+    """
+    import warnings
+    warnings.warn(
+        "eval_all_ngmix_methods is deprecated. Use eval_all_ngmix_methods_with_obs "
+        "with pre-existing observation objects for proper jacobian handling.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    
+    models = ['exp', 'gauss', 'dev']
+    results = {}
+    
+    for model in models:
+        try:
             print(f"\nEvaluating Metacalibration {model} variant...")
             results[model] = eval_ngmix_deconv(
-                galaxy_images, psf_images, target_images, model=model, **kwargs
+                observations, target_images, model=model, **kwargs
             )
         except Exception as e:
             print(f"Error evaluating Metacalibration {model}: {e}")
@@ -467,23 +500,21 @@ def calculate_improvement_metrics(baseline_results: Dict[str, Any],
     return improvements
 
 
-def evaluate_metacal_deconv_comprehensive(galaxy_images: jnp.ndarray, psf_images: jnp.ndarray, 
-                                        target_images: jnp.ndarray) -> Dict[str, Any]:
+def evaluate_metacal_deconv_comprehensive_with_obs(observations: List, target_images: jnp.ndarray) -> Dict[str, Any]:
     """
-    Comprehensive evaluation of all metacalibration deconvolution variants.
+    Comprehensive evaluation of all metacalibration deconvolution variants using pre-existing observations.
     
     Args:
-        galaxy_images: Observed galaxy images
-        psf_images: PSF images
+        observations: List of ngmix.Observation objects
         target_images: Ground truth clean images
         
     Returns:
         Dictionary with comprehensive comparison results
     """
-    print(f"\n{BOLD}=== Comprehensive Metacalibration Deconvolution Evaluation ==={END}")
+    print(f"\n{BOLD}=== Comprehensive Metacalibration Deconvolution Evaluation (Pre-existing Obs) ==={END}")
     
     # Evaluate all variants
-    results = eval_all_ngmix_methods(galaxy_images, psf_images, target_images)
+    results = eval_all_ngmix_methods_with_obs(observations, target_images)
     
     # Find best performing variant
     valid_results = {k: v for k, v in results.items() if 'error' not in v}
