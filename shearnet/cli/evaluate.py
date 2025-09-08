@@ -14,7 +14,8 @@ from ..core.models import SimpleGalaxyNN, EnhancedGalaxyNN, GalaxyResNet, Resear
 from ..utils.metrics import eval_model, fork_eval_model, eval_ngmix, eval_mcal, remove_nan_preds_multi
 from ..utils.plot_helpers import (
     plot_residuals, 
-    visualize_samples, 
+    visualize_galaxy_samples,
+    visualize_psf_samples, 
     plot_true_vs_predicted, 
     animate_model_epochs
 )
@@ -241,10 +242,10 @@ def main():
 
             print("Plotting galaxy samples...")
             samples_galaxy_path = os.path.join(df_plot_path, "samples_galaxy_plot.png")
-            visualize_samples(test_galaxy_images, test_labels, predicted_labels, snr_values, path=samples_galaxy_path)
+            visualize_galaxy_samples(test_galaxy_images, test_labels, predicted_labels, snr_values, path=samples_galaxy_path)
             print("Plotting psf samples...")
             samples_psf_path = os.path.join(df_plot_path, "samples_psf_plot.png")
-            visualize_samples(test_psf_images, test_labels, predicted_labels, snr_values, path=samples_psf_path)
+            visualize_psf_samples(test_psf_images, path=samples_psf_path)
 
             print("Plotting scatter plots...")
             scatter_path = os.path.join(df_plot_path, "scatters")
@@ -294,7 +295,7 @@ def main():
 
             print("Plotting samples...")
             samples_path = os.path.join(df_plot_path, "samples_plot.png")
-            visualize_samples(test_images, test_labels, predicted_labels, snr_values, path=samples_path)
+            visualize_galaxy_samples(test_images, test_labels, predicted_labels, snr_values, path=samples_path)
 
             print("Plotting scatter plots...")
             scatter_path = os.path.join(df_plot_path, "scatters")
