@@ -14,7 +14,36 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
 from typing import Union, Optional, Dict, Any, List
-from ngmix.metacal.metacal import _galsim_stuff, MetacalDilatePSF
+
+def _galsim_stuff(img, wcs, xinterp):
+    """
+    Taken straight from ngmix.metacal.metacal
+    """
+    def _cached_galsim_stuff(img, wcs_repr, xinterp):
+        return _galsim_stuff_impl(np.array(img), eval(wcs_repr), xinterp)
+    def _galsim_stuff_impl(img, wcs, xinterp):
+        image = galsim.Image(img, wcs=wcs)
+        image_int = galsim.InterpolatedImage(image, x_interpolant=xinterp)
+        return image, image_int
+
+    return _cached_galsim_stuff(
+        tuple(tuple(ii) for ii in img),
+        repr(wcs),
+        xinterp,
+    )
+
+
+def get_wcs(obs):
+    """
+    Taken straight from ngmix.metacal.metacal
+    """
+    return obs.jacobian.get_galsim_wcs()
+
+def get_psf_wcs(obs):
+    """
+    Taken straight from ngmix.metacal.metacal
+    """
+    return obs.psf.jacobian.get_galsim_wcs()
 
 def metacal_deconvolve_single(obs):
     """Single galaxy deconvolution using metacalibration approach with pre-existing observation."""
@@ -25,18 +54,16 @@ def metacal_deconvolve_single(obs):
         if not hasattr(obs, 'psf') or obs.psf is None:
             raise ValueError("Invalid observation: missing or None PSF")
 
-        mc = MetacalDilatePSF(obs)
-
         # Making the image_int_nopsf manually
         __, image_int = _galsim_stuff(
             obs.image,
-            mc.get_wcs(),
-            mc.interp,
+            get_wcs(obs),
+            'lanczos15',
         )
         __, psf_int = _galsim_stuff(
             obs.psf.image,
-            mc.get_psf_wcs(),
-            mc.interp,
+            get_psf_wcs(obs),
+            'lanczos15',
         )
         psf_int_inv = galsim.Deconvolve(psf_int)
         image_int_nopsf = galsim.Convolve(image_int, psf_int_inv)
