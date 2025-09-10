@@ -245,7 +245,6 @@ class ResearchBackedGalaxyResNet(nn.Module):
     - Multi-scale processing: Inspired by galaxy morphology having features at different scales
     - Residual learning: "Deep Residual Learning for Image Recognition" (He et al., CVPR 2016)
     - Attention mechanisms: "CBAM: Convolutional Block Attention Module" (Woo et al., ECCV 2018)
-    - Conservative enhancement: Maintains successful elements from your original design
     """
 
     @nn.compact
@@ -271,7 +270,7 @@ class ResearchBackedGalaxyResNet(nn.Module):
         # CITATION: "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift" 
         #           (Ioffe & Szegedy, ICML 2015)
         # RATIONALE: "allows us to use much higher learning rates and be less careful about initialization"
-        # DECISION: use_running_average=True prevents batch_stats complexity in your existing pipeline
+        # DECISION: use_running_average=True prevents batch_stats complexity in existing pipeline
         x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
         
         # CITATION: "Rectified Linear Units Improve Restricted Boltzmann Machines" (Nair & Hinton, ICML 2010)
