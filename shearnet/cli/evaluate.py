@@ -132,7 +132,7 @@ def main():
     # Generate test data
     test_images, test_labels, test_obs = generate_dataset(
         test_samples, psf_sigma, exp=exp, seed=seed, nse_sd=nse_sd, npix=stamp_size, 
-        scale=pixel_size, process_psf=process_psf, return_obs=True,
+        scale=pixel_size, return_psf=process_psf, return_obs=True,
         apply_psf_shear=apply_psf_shear, psf_shear_range=psf_shear_range
     )
     snr_values = []
