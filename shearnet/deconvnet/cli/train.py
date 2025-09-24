@@ -60,10 +60,10 @@ Examples:
     parser.add_argument('--patience', type=int, default=None, help='Patience for early stopping.')
     parser.add_argument('--psf_sigma', type=float, default=None, help='PSF sigma for simulation.')
     parser.add_argument('--nse_sd', type=float, default=None, help='Noise std deviation.')
+    parser.add_argument('--normalized', action='store_const', const=True, default=None, help='normalized training')
     parser.add_argument('--exp', type=str, default=None, help='Experiment type (ideal/superbit)')
     parser.add_argument('--learning_rate', type=float, default=None, help="Learning rate")
     parser.add_argument('--weight_decay', type=float, default=None, help="Weight decay")
-    parser.add_argument('--weights', type=list, default=None, help="this is the weights that will be used in the loss calculation, first entry is coefficient of L2, second for convolution-consistency loss, third for TV loss, and fourth for laplacian loss.")
     parser.add_argument('--model_name', type=str, default=None, help='Model name.')
     parser.add_argument('--val_split', type=float, default=None, help='Validation split fraction')
     parser.add_argument('--eval_interval', type=int, default=None, help='Evaluate every N epochs')
@@ -101,10 +101,10 @@ def main():
         'patience': 10,
         'psf_sigma': 0.25,
         'nse_sd': 1e-5,
+        'normalized': False,
         'exp': 'ideal',
         'learning_rate': 1e-3,
         'weight_decay': 1e-4,
-        'weights': [0.2, 0.7, 0.05, 0.05],
         'model_name': 'deconvnet_model',
         'plot': True,
         'val_split': 0.2,
@@ -132,6 +132,7 @@ def main():
         psf_sigma = config.get('dataset.psf_sigma')
         nse_sd = config.get('dataset.nse_sd')
         exp = config.get('dataset.exp')
+        normalized = config.get('dataset.normalized')
         seed = config.get('dataset.seed')
         stamp_size = config.get('dataset.stamp_size')
         pixel_size = config.get('dataset.pixel_size')
@@ -140,7 +141,6 @@ def main():
         patience = config.get('training.patience')
         lr = config.get('training.learning_rate')
         weight_decay = config.get('training.weight_decay')
-        weights = config.get('training.weights')
         plot_flag = config.get('plotting.plot')
         model_name = config.get('output.model_name')
         val_split = config.get('training.val_split')
@@ -154,6 +154,7 @@ def main():
         samples = args.samples if args.samples is not None else DEFAULTS['samples']
         psf_sigma = args.psf_sigma if args.psf_sigma is not None else DEFAULTS['psf_sigma']
         nse_sd = args.nse_sd if args.nse_sd is not None else DEFAULTS['nse_sd']
+        normalized = args.normalized if args.normalized is not None else DEFAULTS['normalized']
         exp = args.exp if args.exp is not None else DEFAULTS['exp']
         seed = args.seed if args.seed is not None else DEFAULTS['seed']
         epochs = args.epochs if args.epochs is not None else DEFAULTS['epochs']
@@ -161,7 +162,6 @@ def main():
         patience = args.patience if args.patience is not None else DEFAULTS['patience']
         lr = args.learning_rate if args.learning_rate is not None else DEFAULTS['learning_rate']
         weight_decay = args.weight_decay if args.weight_decay is not None else DEFAULTS['weight_decay']
-        weights = args.weights if args.weights is not None else DEFAULTS['weights']
         plot_flag = args.plot if args.plot is not None else DEFAULTS['plot']
         model_name = args.model_name if args.model_name is not None else DEFAULTS['model_name']
         val_split = args.val_split if args.val_split is not None else DEFAULTS['val_split']
@@ -178,6 +178,7 @@ def main():
         config._set_nested('dataset.samples', samples)
         config._set_nested('dataset.psf_sigma', psf_sigma)
         config._set_nested('dataset.nse_sd', nse_sd)
+        config._set_nested('dataset.normalized', normalized)
         config._set_nested('dataset.exp', exp)
         config._set_nested('dataset.seed', seed)
         config._set_nested('dataset.stamp_size', stamp_size)
@@ -186,7 +187,6 @@ def main():
         config._set_nested('training.batch_size', batch_size)
         config._set_nested('training.learning_rate', lr)
         config._set_nested('training.weight_decay', weight_decay)
-        config._set_nested('training.weights', weights)
         config._set_nested('training.patience', patience)
         config._set_nested('training.val_split', val_split)
         config._set_nested('training.eval_interval', eval_interval)
@@ -221,7 +221,8 @@ def main():
     # Split into galaxy, psf, and clean (target) images
     galaxy_images, psf_images, clean_images = split_combined_images(combined_images, has_psf=True, has_clean=True)
 
-    (galaxy_images, psf_images, clean_images), __ = normalize_data(galaxy_images, psf_images, clean_images)
+    if normalized :
+        (galaxy_images, psf_images, clean_images), __ = normalize_data(galaxy_images, psf_images, clean_images)
     
     print(f"Galaxy images shape: {galaxy_images.shape}")
     print(f"PSF images shape: {psf_images.shape}")
@@ -252,7 +253,6 @@ def main():
         patience=patience,
         lr=lr,
         weight_decay=weight_decay,
-        loss_config=weights + [nse_sd]
     )
 
     if plot_flag:

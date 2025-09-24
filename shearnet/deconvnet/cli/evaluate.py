@@ -46,6 +46,8 @@ Examples:
                        help='Path to configuration file (optional)')
     parser.add_argument('--seed', type=int, default=None, 
                        help='Random seed for test data generation (overrides config).')
+    parser.add_argument('--normalized', action='store_const', const=True, 
+                       help='normalized data')
     parser.add_argument('--test_samples', type=int, default=None, 
                        help='Number of test samples (overrides config).')
     parser.add_argument('--plot', action='store_const', const=True, 
@@ -109,6 +111,7 @@ def main():
         model_type = config.get('deconv.model_type', 'unet')
         psf_sigma = config.get('dataset.psf_sigma')
         nse_sd = config.get('dataset.nse_sd')
+        normalized = config.get('dataset.normalized')
         exp = config.get('dataset.exp')
         stamp_size = config.get('dataset.stamp_size')
         pixel_size = config.get('dataset.pixel_size')
@@ -205,9 +208,14 @@ def main():
     print("Evaluating Neural Deconvolution Model")
     print(f"{'='*50}")
     
-    neural_results = eval_model(
-        state, test_galaxy_images, test_psf_images, test_target_images, means, stds
-    )
+    if normalized:
+        neural_results = eval_model(
+            state, test_galaxy_images, test_psf_images, test_target_images, means, stds, normalized
+        )
+    else: 
+        neural_results = eval_model(
+            state, test_galaxy_images, test_psf_images, test_target_images, normalized
+        )
 
     # Always evaluate GalSim for comparison
     print(f"\n{'='*50}")
