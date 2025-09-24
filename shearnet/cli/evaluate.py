@@ -144,7 +144,7 @@ def main():
             snr_values.append(obs.get_s2n())
     if process_psf : 
         # Split into separate galaxy and PSF arrays
-        test_galaxy_images, test_psf_images = split_combined_images(test_images)
+        test_galaxy_images, test_psf_images = split_combined_images(test_images, has_psf=True, has_clean=False)
         
         print(f"Shape of test galaxy images: {test_galaxy_images.shape}")
         print(f"Shape of test PSF images: {test_psf_images.shape}")

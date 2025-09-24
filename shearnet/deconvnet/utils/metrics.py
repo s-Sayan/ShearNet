@@ -166,7 +166,7 @@ def _eval_batch_jit(state, galaxy_batch, psf_batch):
     return state.apply_fn(state.params, galaxy_batch, psf_batch, deterministic=True)
 
 def eval_model(state, galaxy_images: jnp.ndarray, psf_images: jnp.ndarray, 
-                     target_images: jnp.ndarray, means: jnp.ndarray, stds: jnp.ndarray, batch_size: int = 64) -> Dict[str, Any]:
+                     target_images: jnp.ndarray, means: jnp.ndarray = None, stds: jnp.ndarray = None, normalized: bool = False, batch_size: int = 64) -> Dict[str, Any]:
     """Evaluate a trained deconvolution model with comprehensive metrics."""
     
     # Pre-compile the function
@@ -210,7 +210,8 @@ def eval_model(state, galaxy_images: jnp.ndarray, psf_images: jnp.ndarray,
     target_std = float(jnp.std(target_images))
     normalized_mse = mse / (target_std ** 2) if target_std > 0 else mse
 
-    (predictions, __, __) = inverse_normalized_data(predictions, psf_images, target_images, means, stds)
+    if normalized:
+        (predictions, __, __) = inverse_normalized_data(predictions, psf_images, target_images, means, stds)
     
     total_time = time.time() - start_time
     
