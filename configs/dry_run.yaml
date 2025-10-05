@@ -1,15 +1,24 @@
-# configs/cnn6_experiment.yaml
+# configs/dry_run.yaml
 dataset:
   samples: 100
   psf_sigma: 0.25
   nse_sd: 1.0e-3
-  exp: "ideal"
+  exp: "superbit"
   seed: 42
   stamp_size: 53
   pixel_size: 0.141
+  # PSF shear configuration
+  apply_psf_shear: true
+  psf_shear_range: 0.05
 
 model:
-  type: "cnn"
+  process_psf: true
+  type: "fork-like"  # Options: mlp, cnn, resnet, forklens_psf, 
+               #          research_backed, and fork-like
+  galaxy:
+    type: "research_backed"
+  psf:
+    type: "forklens_psf"
   
 training:
   epochs: 10
@@ -21,7 +30,7 @@ evaluation:
   seed: 58
 
 output:
-  model_name: "dry_run"
+  model_name: "dry_run_new_psf"
   
 plotting:
   plot: true
