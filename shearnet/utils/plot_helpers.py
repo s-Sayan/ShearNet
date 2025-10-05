@@ -4,6 +4,7 @@ import numpy as np
 from ..methods.mcal import mcal_preds
 from scipy.stats import binned_statistic
 from flax.training import checkpoints, train_state
+from matplotlib.colors import LogNorm
 
 def plot_learning_curve(losses, train_loss=None, path=None):
     """Plot loss over epochs."""
@@ -76,17 +77,42 @@ def plot_residuals(true_labels, predicted_labels, path=None, mcal=False, preds_n
     else:
         plt.show()
 
-def visualize_samples(images, true_labels, predicted_labels, num_samples=5, path=None):
+def visualize_galaxy_samples(images, true_labels, predicted_labels, snr_values, num_samples=5, path=None):
     """Visualize true and predicted labels on test images."""
     fig, axes = plt.subplots(num_samples, 2, figsize=(10, 2 * num_samples))
     for i in range(num_samples):
         axes[i, 0].imshow(images[i], cmap='gray')
-        axes[i, 0].set_title(f"True e1: {true_labels[i, 0]:.2f}, e2: {true_labels[i, 1]:.2f}")
+        axes[i, 0].set_title(f"True e1: {true_labels[i, 0]:.2f}, e2: {true_labels[i, 1]:.2f}, SNR: {snr_values[i]:.2f}")
         axes[i, 0].axis('off')
 
         axes[i, 1].imshow(images[i], cmap='gray')
         axes[i, 1].set_title(f"Pred e1: {predicted_labels[i, 0]:.2f}, e2: {predicted_labels[i, 1]:.2f}")
         axes[i, 1].axis('off')
+
+    plt.tight_layout()
+    if path:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        plt.savefig(path)
+    else:
+        plt.show()
+
+def visualize_psf_samples(images, num_samples=10, path=None):
+    """Visualize PSF images with log-scaled colormap (shared scaling)."""
+    images = np.array(images)
+
+    positive_vals = images[images > 0]
+    vmin = positive_vals.min(initial=1e-8)
+    vmax = images.max()
+
+    fig, axes = plt.subplots(num_samples, 1, figsize=(10, 2 * num_samples))
+
+    if num_samples == 1:
+        axes = [axes]
+
+    for i in range(num_samples):
+        axes[i].imshow(images[i], cmap='gray', norm=LogNorm(vmin=vmin, vmax=vmax))
+        axes[i].set_title(f"Test PSF Image {i}")
+        axes[i].axis('off')
 
     plt.tight_layout()
     if path:

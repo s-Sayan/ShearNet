@@ -26,7 +26,7 @@ dependencies = [
     "jaxlib>=0.4.0", 
     "flax>=0.7.0",
     "optax>=0.1.0",
-    "orbax-checkpoint==0.11.13",
+    "orbax-checkpoint==0.11.20",
     "galsim>=2.3",
     "numba>=0.57.0",
     "pympler>=1.0",
@@ -60,6 +60,8 @@ Repository = "https://github.com/s-Sayan/ShearNet.git"
 [project.scripts]
 shearnet-train = "shearnet.cli.train:main"
 shearnet-eval = "shearnet.cli.evaluate:main"
+deconvnet-train = "shearnet.deconvnet.cli.train:main"
+deconvnet-eval = "shearnet.deconvnet.cli.evaluate:main"
 
 [tool.setuptools.packages.find]
 include = ["shearnet*"]
