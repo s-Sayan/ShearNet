@@ -39,7 +39,7 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp
         
         galaxy_images = obj_obs.image
         psf_images = obj_obs.psf.image
-        clean_images = obj_obs.clean_image
+        clean_images = obj_obs.meta['clean_image']
 
         if return_psf and return_clean:
             # Create (height, width, 3) array: [galaxy, psf, clean]
@@ -188,7 +188,7 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
         # Create a fallback zero image
         sheared_im = np.zeros((npix, npix))
         
-    obj_obs.clean_image = sheared_im
+    obj_obs.update_meta_data({'clean_image': sheared_im})
 
     return obj_obs
 
