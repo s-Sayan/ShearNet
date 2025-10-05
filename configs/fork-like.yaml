@@ -2,15 +2,15 @@
 dataset:
   samples: 100000
   psf_sigma: 0.25
-  exp: "ideal"
-  nse_sd: 1.0e-5
+  exp: "superbit"
+  nse_sd: 1.0e-3
   seed: 42
   stamp_size: 53
   pixel_size: 0.141
 
 # Model configuration  
 model:
-  process_psf: False
+  process_psf: true
   type: "fork-like"  # Options: mlp, cnn, resnet, forklens_psf, 
                #          research_backed, and fork-like
   galaxy:
@@ -24,7 +24,7 @@ training:
   batch_size: 128
   learning_rate: 1.0e-3
   weight_decay: 1.0e-4
-  patience: 50
+  patience: 25
   val_split: 0.2
   eval_interval: 1
   
@@ -37,7 +37,7 @@ evaluation:
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "fork-like_1"
+  model_name: "fork-like_-3_noise_superbits"
   
 # Plotting configuration
 plotting:
