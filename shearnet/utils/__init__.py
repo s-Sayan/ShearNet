@@ -7,6 +7,7 @@ from .plot_helpers import (
     plot_true_vs_predicted,
     animate_model_epochs,
 )
+
 from .metrics import (
     eval_model,
     eval_ngmix,
@@ -16,15 +17,28 @@ from .metrics import (
     loss_fn_mcal,
 )
 
+from .simutils import (
+    create_wcs_from_params,
+)
 
 from .device import get_device
+
+from .notebook_output_system import (
+    log_print,
+    save_plot,
+    log_array_stats,
+    experiment_section,
+    get_output_manager,
+)
+
 __all__ = [
     # Plotting
     "plot_residuals",
-    "visualize_galaxy_samples", 
-    "visualize_psf_samples", 
+    "visualize_galaxy_samples",
+    "visualize_psf_samples",
     "plot_true_vs_predicted",
     "animate_model_epochs",
+
     # Metrics and evaluation
     "eval_model",
     "eval_ngmix",
@@ -32,14 +46,17 @@ __all__ = [
     "loss_fn_eval",
     "loss_fn_ngmix",
     "loss_fn_mcal",
-    # device detection
-    "get_device"
-]
 
-from .notebook_output_system import (
-    log_print,
-    save_plot,
-    log_array_stats,
-    experiment_section,
-    get_output_manager
-)
+    # Simulation utilities
+    "create_wcs_from_params",
+
+    # Device utilities
+    "get_device",
+
+    # Notebook / output helpers
+    "log_print",
+    "save_plot",
+    "log_array_stats",
+    "experiment_section",
+    "get_output_manager",
+]
