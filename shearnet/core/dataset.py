@@ -6,13 +6,26 @@ import ngmix
 from scipy.signal import convolve2d
 from tqdm import tqdm
 from ..methods.ngmix import g1_g2_sigma_sample
+from ..utils import create_wcs_from_params
 import galsim.des
 
-XIMAGE_SIZE, YIMAGE_SIZE = 9600, 6422 # Usual size of SuperBIT single exposures in pixel unit
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+SHEARNET_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
+
+WCS_PARAMS = {
+    "image_xsize": 9600,
+    "image_ysize": 6422,
+    "pixel_scale": 0.1408,     # arcsec/pixel
+    "center_ra": 13.3,
+    "center_dec": 33.1,
+    "theta": 0.0            # optional
+}
 
 MARGIN = 200 # Margins that I wanna use for PSF Rendering
 
 PSF_DATA_DIR = "/home/adfield/SHEARNET_DATA"
+
+# PSF_DATA_DIR = os.path.join(SHEARNET_ROOT, "psf_data", "emp_psfs_best")
 
 def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05):
     images = []
@@ -213,7 +226,7 @@ def get_background_file(psf_file):
 
     return os.path.join(new_dir, new_fname)
 
-def import_psf(psf_files, ud, xsize=XIMAGE_SIZE, ysize=YIMAGE_SIZE, margin=MARGIN):
+def import_psf(psf_files, ud, xsize=WCS_PARAMS['image_xsize'], ysize=WCS_PARAMS['image_ysize'], margin=MARGIN):
     maxexp = len(psf_files)
     # random position
     x = margin + (xsize - 2*margin) * ud()
@@ -224,8 +237,8 @@ def import_psf(psf_files, ud, xsize=XIMAGE_SIZE, ysize=YIMAGE_SIZE, margin=MARGI
     image_pos = galsim.PositionD(x=x, y=y)  
     psf_file = psf_files[exp-1]
 
-    bk_image = get_background_file(psf_file)
-    psf = galsim.des.DES_PSFEx(psf_file, bk_image)
+    wcs = create_wcs_from_params(WCS_PARAMS)
+    psf = galsim.des.DES_PSFEx(psf_file, wcs=wcs)
     this_psf = psf.getPSF(image_pos)
 
     return this_psf
