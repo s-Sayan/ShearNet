@@ -1,0 +1,424 @@
+Proceeding with code...
+
+Using config file: configs/deconvnet/research_backed/superbit_psf/not_normalized/high_noise.yaml
+
+==================================================
+Training Configuration
+==================================================
+
+dataset:
+  samples: 100000
+  psf_sigma: 0.25
+  exp: superbit
+  nse_sd: 0.01
+  seed: 42
+  stamp_size: 53
+  pixel_size: 0.141
+  apply_psf_shear: True
+  psf_shear_range: 0.05
+  normalized: False
+
+model:
+  process_psf: False
+  type: cnn
+  galaxy: {'type': 'research_backed'}
+  psf: {'type': 'forklens_psf'}
+
+training:
+  epochs: 300
+  batch_size: 8
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  patience: 25
+  val_split: 0.2
+  eval_interval: 1
+
+output:
+  save_path: /home/adfield/ShearNet/model_checkpoint
+  plot_path: /home/adfield/ShearNet/plots
+  model_name: research_backed_superbit_not-normalized_high-noise
+
+plotting:
+  plot: True
+  num_plot_samples: 10
+==================================================
+
+Running on device: cuda:0
+Generating deconvolution dataset...
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 16424 x 16424, which requires 6.03 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 17946 x 17946, which requires 7.20 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 17064 x 17064, which requires 6.51 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 11584 x 11584, which requires 3.00 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 20362 x 20362, which requires 9.27 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 26980 x 26980, which requires 16.27 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 9260 x 9260, which requires 1.92 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 25054 x 25054, which requires 14.03 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+Galaxy images shape: (100000, 53, 53)
+PSF images shape: (100000, 53, 53)
+Target images shape: (100000, 53, 53)
+
+Training configuration saved to: /home/adfield/ShearNet/plots/research_backed_superbit_not-normalized_high-noise/training_config.yaml
+
+Epoch 1/300
+  Training Loss: 2.330323e-05
+  Validation Loss: 4.673479e-06
+  New best validation loss: 4.673479e-06
+
+Epoch 2/300
+  Training Loss: 2.154006e-06
+  Validation Loss: 2.981669e-06
+  New best validation loss: 2.981669e-06
+
+Epoch 3/300
+  Training Loss: 1.735462e-06
+  Validation Loss: 2.266493e-06
+  New best validation loss: 2.266493e-06
+
+Epoch 4/300
+  Training Loss: 1.587163e-06
+  Validation Loss: 2.138902e-06
+  New best validation loss: 2.138902e-06
+
+Epoch 5/300
+  Training Loss: 1.510128e-06
+  Validation Loss: 2.073484e-06
+  New best validation loss: 2.073484e-06
+
+Epoch 6/300
+  Training Loss: 1.448318e-06
+  Validation Loss: 2.308379e-06
+  No improvement. Patience: 1/25
+
+Epoch 7/300
+  Training Loss: 1.400623e-06
+  Validation Loss: 1.955317e-06
+  New best validation loss: 1.955317e-06
+
+Epoch 8/300
+  Training Loss: 1.358174e-06
+  Validation Loss: 1.415013e-06
+  New best validation loss: 1.415013e-06
+
+Epoch 9/300
+  Training Loss: 1.329752e-06
+  Validation Loss: 1.354643e-06
+  New best validation loss: 1.354643e-06
+
+Epoch 10/300
+  Training Loss: 1.298858e-06
+  Validation Loss: 1.529975e-06
+  No improvement. Patience: 1/25
+
+Epoch 11/300
+  Training Loss: 1.278010e-06
+  Validation Loss: 1.462739e-06
+  No improvement. Patience: 2/25
+
+Epoch 12/300
+  Training Loss: 1.255946e-06
+  Validation Loss: 1.375304e-06
+  No improvement. Patience: 3/25
+
+Epoch 13/300
+  Training Loss: 1.236814e-06
+  Validation Loss: 1.377618e-06
+  No improvement. Patience: 4/25
+
+Epoch 14/300
+  Training Loss: 1.223652e-06
+  Validation Loss: 1.092262e-06
+  New best validation loss: 1.092262e-06
+
+Epoch 15/300
+  Training Loss: 1.203065e-06
+  Validation Loss: 1.132613e-06
+  No improvement. Patience: 1/25
+
+Epoch 16/300
+  Training Loss: 1.187830e-06
+  Validation Loss: 1.044114e-06
+  New best validation loss: 1.044114e-06
+
+Epoch 17/300
+  Training Loss: 1.173778e-06
+  Validation Loss: 1.098235e-06
+  No improvement. Patience: 1/25
+
+Epoch 18/300
+  Training Loss: 1.160953e-06
+  Validation Loss: 1.072828e-06
+  No improvement. Patience: 2/25
+
+Epoch 19/300
+  Training Loss: 1.145933e-06
+  Validation Loss: 1.083313e-06
+  No improvement. Patience: 3/25
+
+Epoch 20/300
+  Training Loss: 1.132048e-06
+  Validation Loss: 1.192791e-06
+  No improvement. Patience: 4/25
+
+Epoch 21/300
+  Training Loss: 1.113737e-06
+  Validation Loss: 1.110358e-06
+  No improvement. Patience: 5/25
+
+Epoch 22/300
+  Training Loss: 1.087043e-06
+  Validation Loss: 1.059652e-06
+  No improvement. Patience: 6/25
+
+Epoch 23/300
+  Training Loss: 1.072244e-06
+  Validation Loss: 1.127983e-06
+  No improvement. Patience: 7/25
+
+Epoch 24/300
+  Training Loss: 1.055478e-06
+  Validation Loss: 1.029027e-06
+  New best validation loss: 1.029027e-06
+
+Epoch 25/300
+  Training Loss: 1.030153e-06
+  Validation Loss: 1.121892e-06
+  No improvement. Patience: 1/25
+
+Epoch 26/300
+  Training Loss: 1.012099e-06
+  Validation Loss: 1.090090e-06
+  No improvement. Patience: 2/25
+
+Epoch 27/300
+  Training Loss: 9.858222e-07
+  Validation Loss: 1.093585e-06
+  No improvement. Patience: 3/25
+
+Epoch 28/300
+  Training Loss: 9.674962e-07
+  Validation Loss: 1.071078e-06
+  No improvement. Patience: 4/25
+
+Epoch 29/300
+  Training Loss: 9.461772e-07
+  Validation Loss: 1.118431e-06
+  No improvement. Patience: 5/25
+
+Epoch 30/300
+  Training Loss: 9.217391e-07
+  Validation Loss: 1.135771e-06
+  No improvement. Patience: 6/25
+
+Epoch 31/300
+  Training Loss: 9.077831e-07
+  Validation Loss: 1.232711e-06
+  No improvement. Patience: 7/25
+
+Epoch 32/300
+  Training Loss: 8.891428e-07
+  Validation Loss: 1.203207e-06
+  No improvement. Patience: 8/25
+
+Epoch 33/300
+  Training Loss: 8.642734e-07
+  Validation Loss: 1.194656e-06
+  No improvement. Patience: 9/25
+
+Epoch 34/300
+  Training Loss: 8.428951e-07
+  Validation Loss: 1.256378e-06
+  No improvement. Patience: 10/25
+
+Epoch 35/300
+  Training Loss: 8.245544e-07
+  Validation Loss: 1.351152e-06
+  No improvement. Patience: 11/25
+
+Epoch 36/300
+  Training Loss: 7.977617e-07
+  Validation Loss: 1.266838e-06
+  No improvement. Patience: 12/25
+
+Epoch 37/300
+  Training Loss: 7.825843e-07
+  Validation Loss: 1.366150e-06
+  No improvement. Patience: 13/25
+
+Epoch 38/300
+  Training Loss: 7.626821e-07
+  Validation Loss: 1.539208e-06
+  No improvement. Patience: 14/25
+
+Epoch 39/300
+  Training Loss: 7.448687e-07
+  Validation Loss: 1.506804e-06
+  No improvement. Patience: 15/25
+
+Epoch 40/300
+  Training Loss: 7.226564e-07
+  Validation Loss: 1.711745e-06
+  No improvement. Patience: 16/25
+
+Epoch 41/300
+  Training Loss: 7.025923e-07
+  Validation Loss: 1.496216e-06
+  No improvement. Patience: 17/25
+
+Epoch 42/300
+  Training Loss: 6.841864e-07
+  Validation Loss: 1.525539e-06
+  No improvement. Patience: 18/25
+
+Epoch 43/300
+  Training Loss: 6.622353e-07
+  Validation Loss: 1.546299e-06
+  No improvement. Patience: 19/25
+
+Epoch 44/300
+  Training Loss: 6.458100e-07
+  Validation Loss: 1.592580e-06
+  No improvement. Patience: 20/25
+
+Epoch 45/300
+  Training Loss: 6.282184e-07
+  Validation Loss: 1.478885e-06
+  No improvement. Patience: 21/25
+
+Epoch 46/300
+  Training Loss: 6.109673e-07
+  Validation Loss: 1.571417e-06
+  No improvement. Patience: 22/25
+
+Epoch 47/300
+  Training Loss: 5.975504e-07
+  Validation Loss: 1.586436e-06
+  No improvement. Patience: 23/25
+
+Epoch 48/300
+  Training Loss: 5.798695e-07
+  Validation Loss: 1.853817e-06
+  No improvement. Patience: 24/25
+
+Epoch 49/300
+  Training Loss: 5.633324e-07
+  Validation Loss: 1.595233e-06
+  No improvement. Patience: 25/25
+
+ Early stopping triggered at epoch 49
+Checkpoint saved at step 49.
+
+ Training completed!
+Best validation loss: 1.029027e-06
+Plotting learning curve...
+Saving training and validation loss...
+
+Loading model config from: /home/adfield/ShearNet/plots/research_backed_superbit_not-normalized_high-noise/training_config.yaml
+
+==================================================
+Evaluation Configuration
+==================================================
+
+evaluation:
+  test_samples: 5000
+  seed: 58
+
+model:
+  process_psf: False
+  type: cnn
+  galaxy: {'type': 'research_backed'}
+  psf: {'type': 'forklens_psf'}
+
+plotting:
+  plot: True
+  num_plot_samples: 10
+
+comparison:
+  mcal: True
+  ngmix: True
+  psf_model: gauss
+  gal_model: gauss
+==================================================
+
+
+Generating test dataset...
+Test galaxy images shape: (5000, 53, 53)
+Test PSF images shape: (5000, 53, 53)
+Test target images shape: (5000, 53, 53)
+Loading checkpoint from directory: /home/adfield/ShearNet/model_checkpoint/research_backed_superbit_not-normalized_high-noise49
+Warming up model...
+Model warm-up complete
+Successfully loaded checkpoint from /home/adfield/ShearNet/model_checkpoint/research_backed_superbit_not-normalized_high-noise49
+
+==================================================
+Evaluating Neural Deconvolution Model
+==================================================
+Compiling evaluation function...
+Compilation complete. Running evaluation...
+
+[1m=== Neural Deconvolution Results ===[0m
+Mean Squared Error (MSE): [1m[93m1.315309e+00[0m
+Mean Absolute Error (MAE): [1m[93m7.782421e-01[0m
+Peak Signal-to-Noise Ratio (PSNR): [1m[96m38.41 dB[0m
+Structural Similarity Index (SSIM): [1m[96m0.2836[0m
+Approximate Perceptual Distance: [1m[96m3.163385e+00[0m
+Bias: [1m+2.282419e-04[0m
+Normalized MSE: [1m1.315309e+00[0m
+Evaluation time: [1m[96m36.18 seconds[0m
+
+[1m=== SANITY CHECKS ===[0m
+Prediction-Target Correlation: 0.337072
+
+==================================================
+Evaluating GalSim Deconvolution
+==================================================
+
+[1m=== GalSim Deconvolution (Using Pre-existing Obs) ===[0m
+Evaluation Time: [1m[96m22.65 seconds[0m
+Mean Squared Error (MSE): [1m[93m1.876211e+00[0m
+Mean Absolute Error (MAE): [1m[93m6.495762e-01[0m
+Peak Signal-to-Noise Ratio (PSNR): [1m[96m36.87 dB[0m
+Bias: [1m+1.102549e-03[0m
+
+==================================================
+Method Comparison
+==================================================
+MSE                       1.315e+00       1.876e+00       [92mNeural[0m
+MAE                       7.782e-01       6.496e-01       [91mGalSim[0m
+PSNR                      38.41           36.87           [92mNeural[0m
+SSIM                      0.2836          0.0800          [92mNeural[0m
+NORMALIZED_MSE            1.315e+00       1.876e+00       [92mNeural[0m
+TIME_TAKEN                36.18s          22.65s          [91mGalSim[0m
+
+======================================================================
+[1m[92mOverall Winner: Neural Network Deconvolution[0m
+Neural network wins 4 out of 5 key metrics
+
+Generating evaluation plots...
+Generating neural network predictions...
+Neural predictions shape: (5000, 53, 53)
+GalSim predictions shape: (5000, 53, 53)
+Target images shape: (5000, 53, 53)
+Creating comparison plot...
+Comparison plot saved to: /home/adfield/ShearNet/plots/research_backed_superbit_not-normalized_high-noise/comparison.png
+Creating spatial residuals heat map...
+Computing spatial residuals for 5000 images across 2 methods...
+Spatial residuals plot saved to: /home/adfield/ShearNet/plots/research_backed_superbit_not-normalized_high-noise/spatial_residual.png
+Plots saved to: /home/adfield/ShearNet/plots/research_backed_superbit_not-normalized_high-noise
+
+Evaluation complete!

@@ -1,0 +1,1077 @@
+Proceeding with code...
+
+[1mLoading model config from: /home/adfield/ShearNet/plots/fork-like_superbit_high-noise/training_config.yaml[0m
+
+==================================================
+Evaluation Configuration
+==================================================
+
+evaluation:
+  test_samples: 5000
+  seed: 58
+
+model:
+  process_psf: True
+  type: fork-like
+  galaxy: {'type': 'research_backed'}
+  psf: {'type': 'forklens_psf'}
+
+plotting:
+  plot: True
+
+comparison:
+  mcal: True
+  ngmix: True
+  psf_model: gauss
+  gal_model: gauss
+==================================================
+
+
+[1m==================================================
+Generating Test Dataset
+==================================================[0m
+Shape of test galaxy images: (5000, 53, 53)
+Shape of test PSF images: (5000, 53, 53)
+Shape of test labels: (5000, 4)
+SNR range: [-1.13, 11.99], mean: 5.62
+
+[1m==================================================
+Loading Model
+==================================================[0m
+Found 1 matching checkpoint(s):
+  1. fork-like_superbit_high-noise73
+
+[92mLoading checkpoint from: /home/adfield/ShearNet/model_checkpoint/fork-like_superbit_high-noise73[0m
+[92m✓ Model checkpoint loaded successfully[0m
+
+[1m==================================================
+Evaluating Neural Network
+==================================================[0m
+
+[1m=== Combined Metrics (ShearNet) ===[0m
+Mean Squared Error (MSE) from ShearNet: [1m[93m3.263121e-02[0m
+Average Bias from ShearNet: [1m[93m-1.026475e-02[0m
+Time taken: [1m[96m6.89 seconds[0m
+
+=== Per-Label Metrics ===
+             g1: MSE = 3.559840e-02, Bias = +8.473695e-02
+             g2: MSE = 2.510160e-02, Bias = -2.484592e-02
+  g1g2_combined: MSE = 3.035000e-02, Bias = +2.994552e-02
+          sigma: MSE = 1.491459e-02, Bias = -9.961508e-02
+           flux: MSE = 5.491026e-02, Bias = -1.334940e-03
+
+
+[1m==================================================
+Evaluating Comparison Methods
+==================================================[0m
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+[NaN Filter] Removed 37 rows with NaNs in predictions.
+
+[1m=== Combined Metrics (NGmix) ===[0m
+Mean Squared Error (MSE) from NGmix: [1m[93m5.678671e-02[0m
+Average Bias from NGmix: [1m[93m-6.868666e-02[0m
+Time taken: [1m[96m106.92 seconds[0m
+
+=== Per-Label Metrics ===
+             g1: MSE = 9.470231e-03, Bias = +1.865533e-02
+             g2: MSE = 9.650726e-03, Bias = +2.540920e-02
+  g1g2_combined: MSE = 9.560479e-03, Bias = +2.203227e-02
+          sigma: MSE = 2.261357e-02, Bias = +9.827671e-02
+           flux: MSE = 1.854123e-01, Bias = -4.170879e-01
+
+
+=== Combined Metrics (Moment-Based Approach) ===
+Mean Squared Error (MSE) from MOM: 2.459340e+03
+Average Bias from MOM: -4.617519e-01
+Time taken: 41.53 seconds
+
+=== Per-Label Metrics ===
+             g1: MSE = 3.073818e+02, Bias = +3.854351e-01
+             g2: MSE = 4.611299e+03, Bias = -1.308939e+00
+  g1g2_combined: MSE = 2.459340e+03, Bias = -4.617519e-01
+
+
+[1m==================================================
+Calculating Response Matrices
+==================================================[0m
+
+[1mCalculating Response Matrix...[0m
+Extracted 5000 galaxies with sheared images
+Shear step: ±0.01
+
+[1mResponse Matrix (averaged over 5000 galaxies):[0m
+[96mR = [[0.882691, 0.007582],[0m
+[96m     [0.006668, 0.861107]][0m
+
+Response matrix statistics:
+  R_11: mean=0.882690, std=0.248658
+  R_22: mean=0.861107, std=0.227251
+  R_12: mean=0.007582, std=0.153385
+  R_21: mean=0.006668, std=0.149261
+
+[1mCalculating NGmix Response Matrix...[0m
+Running NGmix on e1_positive images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e1_negative images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_positive images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_negative images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Valid galaxies after removing NaNs: 5000/5000
+
+[1mNGmix Response Matrix (averaged over 5000 galaxies):[0m
+[96mR = [[0.670555, 0.003817],[0m
+[96m     [0.010781, 0.665503]][0m
+
+[1mResponse Matrix Comparison:[0m
+
+[96mShearNet R matrix:[0m
+  [[+0.882691, +0.007582],
+   [+0.006668, +0.861107]]
+
+[96mNGmix R matrix:[0m
+  [[+0.670555, +0.003817],
+   [+0.010781, +0.665503]]
+
+[93mDifference (ShearNet - NGmix):[0m
+  [[+0.212136, +0.003765],
+   [-0.004113, +0.195603]]
+
+[92mResponse matrices saved to: /home/adfield/ShearNet/plots/fork-like_superbit_high-noise/response_matrices.npz[0m
+
+[1m==================================================
+Generating Bias Calibration Datasets
+==================================================[0m
+Shear step: ±0.02
+Samples per dataset: 5000
+
+[96mDataset A: g1 = +0.02[0m
+
+[96mDataset B: g1 = -0.02[0m
+
+[96mDataset C: g2 = +0.02[0m
+
+[96mDataset D: g2 = -0.02[0m
+
+[92m✓ Generated 4 bias datasets with PSF images[0m
+
+[1m==================================================
+Calculating Bias Calibration
+==================================================[0m
+
+[1m[93mShearNet Bias Calibration[0m
+
+[1m======================================================================
+CALCULATING MULTIPLICATIVE AND ADDITIVE BIAS
+======================================================================[0m
+True shear: ±0.02
+Response perturbation: ±0.01
+
+[1m[96m--- Component 1 (g1) ---[0m
+
+Dataset A (g1 = +0.02):
+
+[1mCalculating Response Matrix...[0m
+Extracted 5000 galaxies with sheared images
+Shear step: ±0.01
+
+[1mResponse Matrix (averaged over 5000 galaxies):[0m
+[96mR = [[0.885577, 0.011447],[0m
+[96m     [0.007056, 0.864571]][0m
+
+Response matrix statistics:
+  R_11: mean=0.885577, std=0.246675
+  R_22: mean=0.864570, std=0.223796
+  R_12: mean=0.011447, std=0.151803
+  R_21: mean=0.007056, std=0.149982
+
+Dataset B (g1 = -0.02):
+
+[1mCalculating Response Matrix...[0m
+Extracted 5000 galaxies with sheared images
+Shear step: ±0.01
+
+[1mResponse Matrix (averaged over 5000 galaxies):[0m
+[96mR = [[0.890025, 0.011127],[0m
+[96m     [0.007779, 0.864170]][0m
+
+Response matrix statistics:
+  R_11: mean=0.890025, std=0.236959
+  R_22: mean=0.864170, std=0.220144
+  R_12: mean=0.011127, std=0.150828
+  R_21: mean=0.007779, std=0.148387
+
+[96mSummary for g1:[0m
+  Dataset A: ⟨e₁⟩ = +0.017326, ⟨R₁₁⟩ = 0.885577, γ₁ᵉˢᵗ = +0.019565
+  Dataset B: ⟨e₁⟩ = -0.008450, ⟨R₁₁⟩ = 0.890025, γ₁ᵉˢᵗ = -0.009494
+
+[1m[96m--- Component 2 (g2) ---[0m
+
+Dataset C (g2 = +0.02):
+
+[1mCalculating Response Matrix...[0m
+Extracted 5000 galaxies with sheared images
+Shear step: ±0.01
+
+[1mResponse Matrix (averaged over 5000 galaxies):[0m
+[96mR = [[0.890304, 0.006631],[0m
+[96m     [0.005794, 0.860752]][0m
+
+Response matrix statistics:
+  R_11: mean=0.890304, std=0.242013
+  R_22: mean=0.860752, std=0.221885
+  R_12: mean=0.006631, std=0.153037
+  R_21: mean=0.005794, std=0.146716
+
+Dataset D (g2 = -0.02):
+
+[1mCalculating Response Matrix...[0m
+Extracted 5000 galaxies with sheared images
+Shear step: ±0.01
+
+[1mResponse Matrix (averaged over 5000 galaxies):[0m
+[96mR = [[0.890246, 0.009804],[0m
+[96m     [0.008398, 0.860349]][0m
+
+Response matrix statistics:
+  R_11: mean=0.890246, std=0.240298
+  R_22: mean=0.860349, std=0.220415
+  R_12: mean=0.009804, std=0.151502
+  R_21: mean=0.008398, std=0.152041
+
+[96mSummary for g2:[0m
+  Dataset C: ⟨e₂⟩ = +0.014476, ⟨R₂₂⟩ = 0.860752, γ₂ᵉˢᵗ = +0.016818
+  Dataset D: ⟨e₂⟩ = -0.015649, ⟨R₂₂⟩ = 0.860349, γ₂ᵉˢᵗ = -0.018189
+
+[1m======================================================================
+BIAS CALIBRATION RESULTS
+======================================================================[0m
+
+[1m[93mComponent 1:[0m
+[1m  m₁ = -0.273532  (-27.35%)[0m
+[1m  c₁ = +0.005035[0m
+
+[1m[93mComponent 2:[0m
+[1m  m₂ = -0.124833  (-12.48%)[0m
+[1m  c₂ = -0.000685[0m
+[1m======================================================================[0m
+
+
+[1m[93mNGmix Bias Calibration[0m
+
+[1m======================================================================
+CALCULATING MULTIPLICATIVE AND ADDITIVE BIAS (NGMIX)
+======================================================================[0m
+True shear: ±0.02
+Response perturbation: ±0.01
+
+[1m[96m--- Component 1 (g1) ---[0m
+
+Dataset A (g1 = +0.02):
+
+[1mCalculating NGmix Response Matrix...[0m
+Running NGmix on e1_positive images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e1_negative images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_positive images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_negative images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Valid galaxies after removing NaNs: 5000/5000
+
+[1mNGmix Response Matrix (averaged over 5000 galaxies):[0m
+[96mR = [[0.672258, 0.009401],[0m
+[96m     [0.004640, 0.659181]][0m
+
+Dataset B (g1 = -0.02):
+
+[1mCalculating NGmix Response Matrix...[0m
+Running NGmix on e1_positive images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e1_negative images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_positive images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_negative images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Valid galaxies after removing NaNs: 5000/5000
+
+[1mNGmix Response Matrix (averaged over 5000 galaxies):[0m
+[96mR = [[0.673530, 0.004454],[0m
+[96m     [-0.001626, 0.668644]][0m
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+
+[96mSummary for g1:[0m
+  Dataset A: ⟨e₁⟩ = +0.025010, ⟨R₁₁⟩ = 0.672258, γ₁ᵉˢᵗ = +0.037203
+  Dataset B: ⟨e₁⟩ = +0.006728, ⟨R₁₁⟩ = 0.673530, γ₁ᵉˢᵗ = +0.009990
+
+[1m[96m--- Component 2 (g2) ---[0m
+
+Dataset C (g2 = +0.02):
+
+[1mCalculating NGmix Response Matrix...[0m
+Running NGmix on e1_positive images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e1_negative images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_positive images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_negative images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Valid galaxies after removing NaNs: 5000/5000
+
+[1mNGmix Response Matrix (averaged over 5000 galaxies):[0m
+[96mR = [[0.680584, -0.001865],[0m
+[96m     [0.008688, 0.660022]][0m
+
+Dataset D (g2 = -0.02):
+
+[1mCalculating NGmix Response Matrix...[0m
+Running NGmix on e1_positive images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e1_negative images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_positive images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_negative images...
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Valid galaxies after removing NaNs: 5000/5000
+
+[1mNGmix Response Matrix (averaged over 5000 galaxies):[0m
+[96mR = [[0.679938, 0.002246],[0m
+[96m     [0.004565, 0.662960]][0m
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Starting NGmix ML fitting: num_gal: 5000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+
+[96mSummary for g2:[0m
+  Dataset C: ⟨e₂⟩ = +0.045609, ⟨R₂₂⟩ = 0.660022, γ₂ᵉˢᵗ = +0.069102
+  Dataset D: ⟨e₂⟩ = +0.020383, ⟨R₂₂⟩ = 0.662960, γ₂ᵉˢᵗ = +0.030746
+
+[1m======================================================================
+BIAS CALIBRATION RESULTS (NGMIX)
+======================================================================[0m
+
+[1m[93mComponent 1:[0m
+[1m  m₁ = -0.319668  (-31.97%)[0m
+[1m  c₁ = +0.023596[0m
+
+[1m[93mComponent 2:[0m
+[1m  m₂ = -0.041107  (-4.11%)[0m
+[1m  c₂ = +0.049924[0m
+[1m======================================================================[0m
+
+
+[1mBias Comparison:[0m
+
+[96mShearNet:[0m
+  m₁ = -0.273532 (-27.35%)
+  m₂ = -0.124833 (-12.48%)
+
+[96mNGmix:[0m
+  m₁ = -0.319668 (-31.97%)
+  m₂ = -0.041107 (-4.11%)
+
+[93mDifference (ShearNet - NGmix):[0m
+  Δm₁ = +0.046136
+  Δm₂ = -0.083726
+
+[92mBias calibration results saved to: /home/adfield/ShearNet/plots/fork-like_superbit_high-noise/bias_calibration.npz[0m
+[96mSaved parameters:[0m
+  • m₁ = -0.273532, c₁ = +0.005035
+  • m₂ = -0.124833, c₂ = -0.000685
+  • m₁ (NGmix) = -0.319668, c₁ = +0.023596
+  • m₂ (NGmix) = -0.041107, c₂ = +0.049924
+
+[1m==================================================
+Generating Plots
+==================================================[0m
+[NaN Filter] Removed 37 rows with NaNs in predictions.
+  → Plotting residuals...
+  → Plotting galaxy samples...
+  → Plotting PSF samples...
+  → Plotting scatter plots...
+  → Plotting psf systematics plots...
+Warning: Length mismatch detected!
+  predicted_labels: 4963
+  test_obs: 5000
+  Trimming test_obs to match predicted_labels length...
+Extracting PSF properties from observations...
+Valid PSF measurements: 4963/4963
+PSF property ranges:
+  e1: 0.793728
+  e2: 1.127554
+  T:  44.628840
+NGmix valid predictions: 4963/4963
+
+======================================================================
+PSF SYSTEMATICS - LINEAR FIT RESULTS
+======================================================================
+
+ShearNet: Applying response correction (R11 = 0.882691) to PSF e1 bins
+ShearNet - PSF e1 bins: galaxy counts = [249. 248. 248. 248. 248. 248. 248. 248. 248. 248. 249. 248. 248. 248.
+ 248. 248. 248. 248. 248. 249.]
+ShearNet - PSF e1 bins: error bars = [0.01580641 0.01678174 0.01502119 0.01740586 0.01669747 0.01572519
+ 0.01668985 0.01659989 0.01573639 0.01593467 0.01724386 0.0161464
+ 0.01660736 0.01719417 0.01690861 0.01617064 0.01656732 0.01603909
+ 0.01741193 0.01731617]
+
+ShearNet - PSF e1 (g1 vs PSF_e1):
+  Linear fit: g1 = (1.178114e-01 ± 9.843287e-02) * PSF_e1 + (3.743353e-03 ± 3.701904e-03)
+  α₁ (leakage coefficient) = 1.178114e-01 ± 9.843287e-02
+
+NGmix: Applying response correction (R11 = 0.670555) to PSF e1 bins
+NGmix - PSF e1 bins: galaxy counts = [249. 248. 248. 248. 248. 248. 248. 248. 248. 248. 249. 248. 248. 248.
+ 248. 248. 248. 248. 248. 249.]
+NGmix - PSF e1 bins: error bars = [0.01874411 0.01899346 0.01871208 0.01959175 0.01892734 0.01859441
+ 0.01852248 0.01935046 0.01864482 0.01819078 0.0202775  0.01853965
+ 0.01975411 0.0193981  0.01929614 0.01827771 0.01898551 0.01801783
+ 0.02004158 0.01990873]
+
+NGmix - PSF e1 (g1 vs PSF_e1):
+  Linear fit: g1 = (1.799826e-01 ± 1.134653e-01) * PSF_e1 + (2.202886e-02 ± 4.267251e-03)
+  α₁ (leakage coefficient) = 1.799826e-01 ± 1.134653e-01
+
+ShearNet: Applying response correction (R22 = 0.861107) to PSF e2 bins
+ShearNet - PSF e2 bins: galaxy counts = [249. 248. 248. 248. 248. 248. 248. 248. 248. 248. 249. 248. 248. 248.
+ 248. 248. 248. 248. 248. 249.]
+ShearNet - PSF e2 bins: error bars = [0.01545613 0.01620028 0.01695018 0.01616654 0.0162187  0.01685225
+ 0.01665116 0.01649709 0.01676844 0.01852016 0.01755961 0.01785207
+ 0.01723839 0.01697542 0.01572117 0.01746179 0.01730488 0.01734392
+ 0.0153759  0.01683602]
+
+ShearNet - PSF e2 (g2 vs PSF_e2):
+  Linear fit: g2 = (-6.312728e-02 ± 9.700262e-02) * PSF_e2 + (1.107341e-02 ± 7.342443e-03)
+  α₂ (leakage coefficient) = -6.312728e-02 ± 9.700262e-02
+
+NGmix: Applying response correction (R22 = 0.665503) to PSF e2 bins
+NGmix - PSF e2 bins: galaxy counts = [249. 248. 248. 248. 248. 248. 248. 248. 248. 248. 249. 248. 248. 248.
+ 248. 248. 248. 248. 248. 249.]
+NGmix - PSF e2 bins: error bars = [0.01745539 0.01839808 0.01864373 0.01798156 0.01853879 0.01919165
+ 0.01836932 0.01730371 0.01921335 0.02056077 0.02000581 0.02056572
+ 0.01910353 0.01900181 0.01848007 0.01976674 0.01898269 0.01942968
+ 0.01719156 0.01954326]
+
+NGmix - PSF e2 (g2 vs PSF_e2):
+  Linear fit: g2 = (-5.509262e-02 ± 1.090600e-01) * PSF_e2 + (6.001531e-02 ± 8.255104e-03)
+  α₂ (leakage coefficient) = -5.509262e-02 ± 1.090600e-01
+
+ShearNet - PSF T (g1 vs T_PSF):
+  Linear fit: g1 = (-4.781101e-04 ± 1.613618e-03) * T_PSF + (2.080114e-02 ± 5.794791e-02)
+  β₁ (size leakage coefficient) = -4.781101e-04 ± 1.613618e-03
+
+NGmix - PSF T (g1 vs T_PSF):
+  Linear fit: g1 = (-8.217406e-04 ± 1.860229e-03) * T_PSF + (5.136123e-02 ± 6.680417e-02)
+  β₁ (size leakage coefficient) = -8.217406e-04 ± 1.860229e-03
+
+ShearNet - PSF T (g2 vs T_PSF):
+  Linear fit: g2 = (1.475683e-03 ± 1.643149e-03) * T_PSF + (-4.591324e-02 ± 5.900842e-02)
+  β₂ (size leakage coefficient) = 1.475683e-03 ± 1.643149e-03
+
+NGmix - PSF T (g2 vs T_PSF):
+  Linear fit: g2 = (1.822995e-03 ± 1.847328e-03) * T_PSF + (-8.896554e-03 ± 6.634088e-02)
+  β₂ (size leakage coefficient) = 1.822995e-03 ± 1.847328e-03
+
+======================================================================
+
+PSF systematics plot saved to: /home/adfield/ShearNet/plots/fork-like_superbit_high-noise/psf_systematics.png
+
+[92m✓ All plots saved to: /home/adfield/ShearNet/plots/fork-like_superbit_high-noise[0m
+
+[1m======================================================================
+EVALUATION SUMMARY
+======================================================================[0m
+
+[1mConfiguration:[0m
+  Model: fork-like_superbit_high-noise
+  Architecture: fork-like
+  Test samples: 5000
+  Seed: 58
+
+[1mShearNet Performance:[0m
+  MSE: 3.263121e-02
+  Bias: -1.026475e-02
+  Time: 6.89s
+
+[1mNGmix Performance:[0m
+  MSE: 5.678671e-02
+  Bias: -6.868666e-02
+  Time: 106.92s
+
+[1mSpeedup:[0m [96m15.52x[0m
+
+[92m======================================================================
+✓ EVALUATION COMPLETE
+======================================================================[0m
+
+
+[1mLoading model config from: /home/adfield/ShearNet/plots/fork-like_superbit_high-noise/training_config.yaml[0m
+
+==================================================
+Evaluation Configuration
+==================================================
+
+evaluation:
+  test_samples: 5000
+  seed: 58
+
+model:
+  process_psf: True
+  type: fork-like
+  galaxy: {'type': 'research_backed'}
+  psf: {'type': 'forklens_psf'}
+
+plotting:
+  plot: True
+
+comparison:
+  mcal: True
+  ngmix: True
+  psf_model: gauss
+  gal_model: gauss
+==================================================
+
+
+[1m==================================================
+Generating Test Dataset
+==================================================[0m
+Shape of test galaxy images: (1000, 53, 53)
+Shape of test PSF images: (1000, 53, 53)
+Shape of test labels: (1000, 4)
+SNR range: [-2.38, 11.46], mean: 5.70
+
+[1m==================================================
+Loading Model
+==================================================[0m
+Found 1 matching checkpoint(s):
+  1. fork-like_superbit_high-noise73
+
+[92mLoading checkpoint from: /home/adfield/ShearNet/model_checkpoint/fork-like_superbit_high-noise73[0m
+[92m✓ Model checkpoint loaded successfully[0m
+
+[1m==================================================
+Evaluating Neural Network
+==================================================[0m
+
+[1m=== Combined Metrics (ShearNet) ===[0m
+Mean Squared Error (MSE) from ShearNet: [1m[93m3.211609e-02[0m
+Average Bias from ShearNet: [1m[93m-1.396424e-02[0m
+Time taken: [1m[96m6.61 seconds[0m
+
+=== Per-Label Metrics ===
+             g1: MSE = 3.462735e-02, Bias = +7.673135e-02
+             g2: MSE = 2.544248e-02, Bias = -1.946232e-02
+  g1g2_combined: MSE = 3.003491e-02, Bias = +2.863451e-02
+          sigma: MSE = 1.480632e-02, Bias = -1.000186e-01
+           flux: MSE = 5.358822e-02, Bias = -1.310739e-02
+
+
+[1m==================================================
+Evaluating Comparison Methods
+==================================================[0m
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+[NaN Filter] Removed 5 rows with NaNs in predictions.
+
+[1m=== Combined Metrics (NGmix) ===[0m
+Mean Squared Error (MSE) from NGmix: [1m[93m6.203790e-02[0m
+Average Bias from NGmix: [1m[93m-8.471591e-02[0m
+Time taken: [1m[96m54.82 seconds[0m
+
+=== Per-Label Metrics ===
+             g1: MSE = 8.635909e-03, Bias = +2.661380e-02
+             g2: MSE = 8.204418e-03, Bias = +5.252081e-03
+  g1g2_combined: MSE = 8.420164e-03, Bias = +1.593294e-02
+          sigma: MSE = 1.993075e-02, Bias = +8.551348e-02
+           flux: MSE = 2.113805e-01, Bias = -4.562430e-01
+
+
+=== Combined Metrics (Moment-Based Approach) ===
+Mean Squared Error (MSE) from MOM: 1.949192e+01
+Average Bias from MOM: -7.732246e-02
+Time taken: 8.37 seconds
+
+=== Per-Label Metrics ===
+             g1: MSE = 2.304233e+01, Bias = -3.935977e-01
+             g2: MSE = 1.594151e+01, Bias = +2.389528e-01
+  g1g2_combined: MSE = 1.949192e+01, Bias = -7.732246e-02
+
+
+[1m==================================================
+Calculating Response Matrices
+==================================================[0m
+
+[1mCalculating Response Matrix...[0m
+Extracted 1000 galaxies with sheared images
+Shear step: ±0.01
+
+[1mResponse Matrix (averaged over 1000 galaxies):[0m
+[96mR = [[0.880482, 0.008816],[0m
+[96m     [0.010423, 0.872684]][0m
+
+Response matrix statistics:
+  R_11: mean=0.880482, std=0.249404
+  R_22: mean=0.872684, std=0.240372
+  R_12: mean=0.008816, std=0.145600
+  R_21: mean=0.010423, std=0.141535
+
+[1mCalculating NGmix Response Matrix...[0m
+Running NGmix on e1_positive images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e1_negative images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_positive images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_negative images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Valid galaxies after removing NaNs: 1000/1000
+
+[1mNGmix Response Matrix (averaged over 1000 galaxies):[0m
+[96mR = [[0.698110, -0.001443],[0m
+[96m     [0.022493, 0.643091]][0m
+
+[1mResponse Matrix Comparison:[0m
+
+[96mShearNet R matrix:[0m
+  [[+0.880482, +0.008816],
+   [+0.010423, +0.872684]]
+
+[96mNGmix R matrix:[0m
+  [[+0.698110, -0.001443],
+   [+0.022493, +0.643091]]
+
+[93mDifference (ShearNet - NGmix):[0m
+  [[+0.182372, +0.010258],
+   [-0.012070, +0.229593]]
+
+[92mResponse matrices saved to: /home/adfield/ShearNet/plots/fork-like_superbit_high-noise/response_matrices.npz[0m
+
+[1m==================================================
+Generating Bias Calibration Datasets
+==================================================[0m
+Shear step: ±0.02
+Samples per dataset: 1000
+
+[96mDataset A: g1 = +0.02[0m
+
+[96mDataset B: g1 = -0.02[0m
+
+[96mDataset C: g2 = +0.02[0m
+
+[96mDataset D: g2 = -0.02[0m
+
+[92m✓ Generated 4 bias datasets with PSF images[0m
+
+[1m==================================================
+Calculating Bias Calibration
+==================================================[0m
+
+[1m[93mShearNet Bias Calibration[0m
+
+[1m======================================================================
+CALCULATING MULTIPLICATIVE AND ADDITIVE BIAS
+======================================================================[0m
+True shear: ±0.02
+Response perturbation: ±0.01
+
+[1m[96m--- Component 1 (g1) ---[0m
+
+Dataset A (g1 = +0.02):
+
+[1mCalculating Response Matrix...[0m
+Extracted 1000 galaxies with sheared images
+Shear step: ±0.01
+
+[1mResponse Matrix (averaged over 1000 galaxies):[0m
+[96mR = [[0.886016, 0.011089],[0m
+[96m     [0.015620, 0.869918]][0m
+
+Response matrix statistics:
+  R_11: mean=0.886016, std=0.242664
+  R_22: mean=0.869918, std=0.234155
+  R_12: mean=0.011089, std=0.143536
+  R_21: mean=0.015620, std=0.145167
+
+Dataset B (g1 = -0.02):
+
+[1mCalculating Response Matrix...[0m
+Extracted 1000 galaxies with sheared images
+Shear step: ±0.01
+
+[1mResponse Matrix (averaged over 1000 galaxies):[0m
+[96mR = [[0.896058, 0.006269],[0m
+[96m     [0.006862, 0.859825]][0m
+
+Response matrix statistics:
+  R_11: mean=0.896058, std=0.247793
+  R_22: mean=0.859825, std=0.221554
+  R_12: mean=0.006269, std=0.143461
+  R_21: mean=0.006862, std=0.142265
+
+[96mSummary for g1:[0m
+  Dataset A: ⟨e₁⟩ = +0.019301, ⟨R₁₁⟩ = 0.886016, γ₁ᵉˢᵗ = +0.021784
+  Dataset B: ⟨e₁⟩ = -0.011140, ⟨R₁₁⟩ = 0.896058, γ₁ᵉˢᵗ = -0.012432
+
+[1m[96m--- Component 2 (g2) ---[0m
+
+Dataset C (g2 = +0.02):
+
+[1mCalculating Response Matrix...[0m
+Extracted 1000 galaxies with sheared images
+Shear step: ±0.01
+
+[1mResponse Matrix (averaged over 1000 galaxies):[0m
+[96mR = [[0.899273, 0.013485],[0m
+[96m     [0.006129, 0.867567]][0m
+
+Response matrix statistics:
+  R_11: mean=0.899273, std=0.236880
+  R_22: mean=0.867567, std=0.210246
+  R_12: mean=0.013485, std=0.144949
+  R_21: mean=0.006129, std=0.141018
+
+Dataset D (g2 = -0.02):
+
+[1mCalculating Response Matrix...[0m
+Extracted 1000 galaxies with sheared images
+Shear step: ±0.01
+
+[1mResponse Matrix (averaged over 1000 galaxies):[0m
+[96mR = [[0.885158, 0.012250],[0m
+[96m     [0.014748, 0.848490]][0m
+
+Response matrix statistics:
+  R_11: mean=0.885158, std=0.242465
+  R_22: mean=0.848490, std=0.216934
+  R_12: mean=0.012250, std=0.140783
+  R_21: mean=0.014748, std=0.151914
+
+[96mSummary for g2:[0m
+  Dataset C: ⟨e₂⟩ = +0.014836, ⟨R₂₂⟩ = 0.867567, γ₂ᵉˢᵗ = +0.017101
+  Dataset D: ⟨e₂⟩ = -0.021947, ⟨R₂₂⟩ = 0.848490, γ₂ᵉˢᵗ = -0.025865
+
+[1m======================================================================
+BIAS CALIBRATION RESULTS
+======================================================================[0m
+
+[1m[93mComponent 1:[0m
+[1m  m₁ = -0.144614  (-14.46%)[0m
+[1m  c₁ = +0.004676[0m
+
+[1m[93mComponent 2:[0m
+[1m  m₂ = +0.074163  (+7.42%)[0m
+[1m  c₂ = -0.004382[0m
+[1m======================================================================[0m
+
+
+[1m[93mNGmix Bias Calibration[0m
+
+[1m======================================================================
+CALCULATING MULTIPLICATIVE AND ADDITIVE BIAS (NGMIX)
+======================================================================[0m
+True shear: ±0.02
+Response perturbation: ±0.01
+
+[1m[96m--- Component 1 (g1) ---[0m
+
+Dataset A (g1 = +0.02):
+
+[1mCalculating NGmix Response Matrix...[0m
+Running NGmix on e1_positive images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e1_negative images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_positive images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_negative images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Valid galaxies after removing NaNs: 1000/1000
+
+[1mNGmix Response Matrix (averaged over 1000 galaxies):[0m
+[96mR = [[0.708815, 0.003167],[0m
+[96m     [0.018125, 0.651675]][0m
+
+Dataset B (g1 = -0.02):
+
+[1mCalculating NGmix Response Matrix...[0m
+Running NGmix on e1_positive images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e1_negative images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_positive images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_negative images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Valid galaxies after removing NaNs: 1000/1000
+
+[1mNGmix Response Matrix (averaged over 1000 galaxies):[0m
+[96mR = [[0.709483, 0.006613],[0m
+[96m     [0.013777, 0.667150]][0m
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+
+[96mSummary for g1:[0m
+  Dataset A: ⟨e₁⟩ = +0.035083, ⟨R₁₁⟩ = 0.708815, γ₁ᵉˢᵗ = +0.049495
+  Dataset B: ⟨e₁⟩ = +0.010627, ⟨R₁₁⟩ = 0.709483, γ₁ᵉˢᵗ = +0.014978
+
+[1m[96m--- Component 2 (g2) ---[0m
+
+Dataset C (g2 = +0.02):
+
+[1mCalculating NGmix Response Matrix...[0m
+Running NGmix on e1_positive images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e1_negative images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_positive images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_negative images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Valid galaxies after removing NaNs: 1000/1000
+
+[1mNGmix Response Matrix (averaged over 1000 galaxies):[0m
+[96mR = [[0.725155, 0.014236],[0m
+[96m     [0.022620, 0.667517]][0m
+
+Dataset D (g2 = -0.02):
+
+[1mCalculating NGmix Response Matrix...[0m
+Running NGmix on e1_positive images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e1_negative images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_positive images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Running NGmix on e2_negative images...
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Valid galaxies after removing NaNs: 1000/1000
+
+[1mNGmix Response Matrix (averaged over 1000 galaxies):[0m
+[96mR = [[0.698833, 0.002103],[0m
+[96m     [0.003684, 0.667509]][0m
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+Starting NGmix ML fitting: num_gal: 1000 | psf_model: gauss | gal_model: gauss | num_cores: 96
+
+[96mSummary for g2:[0m
+  Dataset C: ⟨e₂⟩ = +0.027607, ⟨R₂₂⟩ = 0.667517, γ₂ᵉˢᵗ = +0.041358
+  Dataset D: ⟨e₂⟩ = -0.001165, ⟨R₂₂⟩ = 0.667509, γ₂ᵉˢᵗ = -0.001746
+
+[1m======================================================================
+BIAS CALIBRATION RESULTS (NGMIX)
+======================================================================[0m
+
+[1m[93mComponent 1:[0m
+[1m  m₁ = -0.137081  (-13.71%)[0m
+[1m  c₁ = +0.032236[0m
+
+[1m[93mComponent 2:[0m
+[1m  m₂ = +0.077602  (+7.76%)[0m
+[1m  c₂ = +0.019806[0m
+[1m======================================================================[0m
+
+
+[1mBias Comparison:[0m
+
+[96mShearNet:[0m
+  m₁ = -0.144614 (-14.46%)
+  m₂ = +0.074163 (+7.42%)
+
+[96mNGmix:[0m
+  m₁ = -0.137081 (-13.71%)
+  m₂ = +0.077602 (+7.76%)
+
+[93mDifference (ShearNet - NGmix):[0m
+  Δm₁ = -0.007534
+  Δm₂ = -0.003440
+
+[92mBias calibration results saved to: /home/adfield/ShearNet/plots/fork-like_superbit_high-noise/bias_calibration.npz[0m
+[96mSaved parameters:[0m
+  • m₁ = -0.144614, c₁ = +0.004676
+  • m₂ = +0.074163, c₂ = -0.004382
+  • m₁ (NGmix) = -0.137081, c₁ = +0.032236
+  • m₂ (NGmix) = +0.077602, c₂ = +0.019806
+
+[1m==================================================
+Generating Plots
+==================================================[0m
+[NaN Filter] Removed 5 rows with NaNs in predictions.
+  → Plotting residuals...
+  → Plotting galaxy samples...
+  → Plotting PSF samples...
+  → Plotting scatter plots...
+  → Plotting psf systematics plots...
+Warning: Length mismatch detected!
+  predicted_labels: 995
+  test_obs: 1000
+  Trimming test_obs to match predicted_labels length...
+Extracting PSF properties from observations...
+Valid PSF measurements: 995/995
+PSF property ranges:
+  e1: 0.778379
+  e2: 1.079833
+  T:  43.740702
+NGmix valid predictions: 995/995
+
+======================================================================
+PSF SYSTEMATICS - LINEAR FIT RESULTS
+======================================================================
+
+ShearNet: Applying response correction (R11 = 0.880482) to PSF e1 bins
+ShearNet - PSF e1 bins: galaxy counts = [50. 50. 50. 49. 50. 50. 49. 50. 50. 49. 50. 50. 50. 49. 50. 50. 49. 50.
+ 50. 50.]
+ShearNet - PSF e1 bins: error bars = [0.0387821  0.03369119 0.03577396 0.03727094 0.03912224 0.04404508
+ 0.03543257 0.03754674 0.03497823 0.03790909 0.0408403  0.0481103
+ 0.03758687 0.03217907 0.03479009 0.02893507 0.0371923  0.03518343
+ 0.04173816 0.03393453]
+
+ShearNet - PSF e1 (g1 vs PSF_e1):
+  Linear fit: g1 = (4.854397e-02 ± 2.163643e-01) * PSF_e1 + (4.699075e-03 ± 8.483010e-03)
+  α₁ (leakage coefficient) = 4.854397e-02 ± 2.163643e-01
+
+NGmix: Applying response correction (R11 = 0.698110) to PSF e1 bins
+NGmix - PSF e1 bins: galaxy counts = [50. 50. 50. 49. 50. 50. 49. 50. 50. 49. 50. 50. 50. 49. 50. 50. 49. 50.
+ 50. 50.]
+NGmix - PSF e1 bins: error bars = [0.0398552  0.03839973 0.04013678 0.0417445  0.04256372 0.04739507
+ 0.03954802 0.04138435 0.03902151 0.04128465 0.04830092 0.05620669
+ 0.04393169 0.03325423 0.04249161 0.0356843  0.03998737 0.03779207
+ 0.04553358 0.03700774]
+
+NGmix - PSF e1 (g1 vs PSF_e1):
+  Linear fit: g1 = (2.181276e-01 ± 2.409528e-01) * PSF_e1 + (3.340844e-02 ± 9.447054e-03)
+  α₁ (leakage coefficient) = 2.181276e-01 ± 2.409528e-01
+
+ShearNet: Applying response correction (R22 = 0.872684) to PSF e2 bins
+ShearNet - PSF e2 bins: galaxy counts = [50. 50. 50. 49. 50. 50. 49. 50. 50. 49. 50. 50. 50. 49. 50. 50. 49. 50.
+ 50. 50.]
+ShearNet - PSF e2 bins: error bars = [0.02974294 0.03373948 0.03555476 0.03736459 0.03335792 0.03616158
+ 0.0392788  0.0327756  0.04359622 0.03466839 0.03177656 0.03534228
+ 0.03681049 0.03884119 0.03737689 0.0434827  0.03523741 0.03877343
+ 0.03991258 0.02986318]
+
+ShearNet - PSF e2 (g2 vs PSF_e2):
+  Linear fit: g2 = (-2.360204e-01 ± 1.723747e-01) * PSF_e2 + (1.163505e-02 ± 1.383950e-02)
+  α₂ (leakage coefficient) = -2.360204e-01 ± 1.723747e-01
+
+NGmix: Applying response correction (R22 = 0.643091) to PSF e2 bins
+NGmix - PSF e2 bins: galaxy counts = [50. 50. 50. 49. 50. 50. 49. 50. 50. 49. 50. 50. 50. 49. 50. 50. 49. 50.
+ 50. 50.]
+NGmix - PSF e2 bins: error bars = [0.03465394 0.04163555 0.04075096 0.04285598 0.03935419 0.04271036
+ 0.05095937 0.04100801 0.04863674 0.04301132 0.03801223 0.04154184
+ 0.04362341 0.04547625 0.03939171 0.05105064 0.04253821 0.04590992
+ 0.04697481 0.03566906]
+
+NGmix - PSF e2 (g2 vs PSF_e2):
+  Linear fit: g2 = (-3.054667e-01 ± 2.038807e-01) * PSF_e2 + (3.877618e-02 ± 1.636904e-02)
+  α₂ (leakage coefficient) = -3.054667e-01 ± 2.038807e-01
+
+ShearNet - PSF T (g1 vs T_PSF):
+  Linear fit: g1 = (8.222378e-04 ± 3.448657e-03) * T_PSF + (-2.471959e-02 ± 1.235444e-01)
+  β₁ (size leakage coefficient) = 8.222378e-04 ± 3.448657e-03
+
+NGmix - PSF T (g1 vs T_PSF):
+  Linear fit: g1 = (2.123904e-03 ± 3.841582e-03) * T_PSF + (-4.264411e-02 ± 1.376205e-01)
+  β₁ (size leakage coefficient) = 2.123904e-03 ± 3.841582e-03
+
+ShearNet - PSF T (g2 vs T_PSF):
+  Linear fit: g2 = (2.595732e-03 ± 3.340915e-03) * T_PSF + (-9.638825e-02 ± 1.196847e-01)
+  β₂ (size leakage coefficient) = 2.595732e-03 ± 3.340915e-03
+
+NGmix - PSF T (g2 vs T_PSF):
+  Linear fit: g2 = (5.659346e-03 ± 3.949411e-03) * T_PSF + (-1.832270e-01 ± 1.414834e-01)
+  β₂ (size leakage coefficient) = 5.659346e-03 ± 3.949411e-03
+
+======================================================================
+
+PSF systematics plot saved to: /home/adfield/ShearNet/plots/fork-like_superbit_high-noise/psf_systematics.png
+
+[92m✓ All plots saved to: /home/adfield/ShearNet/plots/fork-like_superbit_high-noise[0m
+
+[1m======================================================================
+EVALUATION SUMMARY
+======================================================================[0m
+
+[1mConfiguration:[0m
+  Model: fork-like_superbit_high-noise
+  Architecture: fork-like
+  Test samples: 1000
+  Seed: 58
+
+[1mShearNet Performance:[0m
+  MSE: 3.211609e-02
+  Bias: -1.396424e-02
+  Time: 6.61s
+
+[1mNGmix Performance:[0m
+  MSE: 6.203790e-02
+  Bias: -8.471591e-02
+  Time: 54.82s
+
+[1mSpeedup:[0m [96m8.29x[0m
+
+[92m======================================================================
+✓ EVALUATION COMPLETE
+======================================================================[0m
+
+
+[1mLoading model config from: /home/adfield/ShearNet/plots/fork-like_superbit_high-noise/training_config.yaml[0m
+
+==================================================
+Evaluation Configuration
+==================================================
+
+evaluation:
+  test_samples: 5000
+  seed: 58
+
+model:
+  process_psf: True
+  type: fork-like
+  galaxy: {'type': 'research_backed'}
+  psf: {'type': 'forklens_psf'}
+
+plotting:
+  plot: True
+
+comparison:
+  mcal: True
+  ngmix: True
+  psf_model: gauss
+  gal_model: gauss
+==================================================
+
+
+[1m==================================================
+Generating Test Dataset
+==================================================[0m
+
+[1mLoading model config from: /home/adfield/ShearNet/plots/fork-like_superbit_high-noise/training_config.yaml[0m
+
+==================================================
+Evaluation Configuration
+==================================================
+
+evaluation:
+  test_samples: 5000
+  seed: 58
+
+model:
+  process_psf: True
+  type: fork-like
+  galaxy: {'type': 'research_backed'}
+  psf: {'type': 'forklens_psf'}
+
+plotting:
+  plot: True
+
+comparison:
+  mcal: True
+  ngmix: True
+  psf_model: gauss
+  gal_model: gauss
+==================================================
+
+
+[1m==================================================
+Generating Test Dataset
+==================================================[0m

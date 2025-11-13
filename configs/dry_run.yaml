@@ -2,7 +2,7 @@
 dataset:
   samples: 100
   psf_sigma: 0.25
-  nse_sd: 1.0e-3
+  nse_sd: 1.0e-2
   exp: "superbit"
   seed: 42
   stamp_size: 53
@@ -30,7 +30,7 @@ evaluation:
   seed: 58
 
 output:
-  model_name: "dry_run_new_psf"
+  model_name: "dry_run"
   
 plotting:
   plot: true

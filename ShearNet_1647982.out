@@ -1,0 +1,325 @@
+Proceeding with code...
+
+Using config file: configs/shearnet/forklike/superbit_psf/high_noise.yaml
+
+==================================================
+Training Configuration
+==================================================
+
+dataset:
+  samples: 100000
+  psf_sigma: 0.25
+  exp: superbit
+  nse_sd: 12.719674
+  seed: 42
+  stamp_size: 53
+  pixel_size: 0.141
+  apply_psf_shear: False
+  psf_shear_range: 0.05
+
+model:
+  process_psf: True
+  type: fork-like
+  galaxy: {'type': 'research_backed'}
+  psf: {'type': 'forklens_psf'}
+
+training:
+  epochs: 300
+  batch_size: 128
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  patience: 25
+  val_split: 0.2
+  eval_interval: 1
+
+output:
+  save_path: /home/adfield/ShearNet/model_checkpoint
+  plot_path: /home/adfield/ShearNet/plots
+  model_name: FIRST_const_sigma+flux_nse_sd_12_type_exp
+
+plotting:
+  plot: True
+==================================================
+
+Running on device: cuda:0
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 19418 x 19418, which requires 8.43 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 44354 x 44354, which requires 43.97 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 9344 x 9344, which requires 1.95 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 9484 x 9484, which requires 2.01 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 20796 x 20796, which requires 9.67 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 17336 x 17336, which requires 6.72 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 22072 x 22072, which requires 10.89 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 10632 x 10632, which requires 2.53 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 74518 x 74518, which requires 124.12 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 22070 x 22070, which requires 10.89 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 72870 x 72870, which requires 118.69 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 39136 x 39136, which requires 34.23 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 77374 x 77374, which requires 133.81 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 10974 x 10974, which requires 2.69 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 20790 x 20790, which requires 9.66 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 99802 x 99802, which requires 222.63 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 10652 x 10652, which requires 2.54 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 16620 x 16620, which requires 6.17 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 8972 x 8972, which requires 1.80 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 36760 x 36760, which requires 30.20 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 92072 x 92072, which requires 189.48 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 20456 x 20456, which requires 9.35 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 10546 x 10546, which requires 2.49 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+Shape of train PSF images: (100000, 53, 53)
+Shape of train images: (100000, 53, 53)
+Shape of train labels: (100000, 4)
+
+Training configuration saved to: /home/adfield/ShearNet/plots/FIRST_const_sigma+flux_nse_sd_12_type_exp/training_config.yaml
+Model architecture saved to: /home/adfield/ShearNet/plots/FIRST_const_sigma+flux_nse_sd_12_type_exp/architecture.py
+Epoch 1/300
+Validation Loss: 3.6644e+03
+New best validation loss: 3.6644e+03
+Epoch 2/300
+Validation Loss: 3.2436e+03
+New best validation loss: 3.2436e+03
+Epoch 3/300
+Validation Loss: 2.3021e+03
+New best validation loss: 2.3021e+03
+Epoch 4/300
+Validation Loss: 1.1272e+03
+New best validation loss: 1.1272e+03
+Epoch 5/300
+Validation Loss: 1.1870e+03
+No improvement in validation loss. Patience: 1/25
+Epoch 6/300
+Validation Loss: 5.3517e+02
+New best validation loss: 5.3517e+02
+Epoch 7/300
+Validation Loss: 3.3264e+02
+New best validation loss: 3.3264e+02
+Epoch 8/300
+Validation Loss: 1.3980e+02
+New best validation loss: 1.3980e+02
+Epoch 9/300
+Validation Loss: 5.1032e+02
+No improvement in validation loss. Patience: 1/25
+Epoch 10/300
+Validation Loss: 5.8004e+01
+New best validation loss: 5.8004e+01
+Epoch 11/300
+Validation Loss: 1.9416e+02
+No improvement in validation loss. Patience: 1/25
+Epoch 12/300
+Validation Loss: 5.4667e+01
+New best validation loss: 5.4667e+01
+Epoch 13/300
+Validation Loss: 2.5542e+01
+New best validation loss: 2.5542e+01
+Epoch 14/300
+Validation Loss: 1.7670e+01
+New best validation loss: 1.7670e+01
+Epoch 15/300
+Validation Loss: 1.8867e+02
+No improvement in validation loss. Patience: 1/25
+Epoch 16/300
+Validation Loss: 8.2067e+01
+No improvement in validation loss. Patience: 2/25
+Epoch 17/300
+Validation Loss: 2.5858e+01
+No improvement in validation loss. Patience: 3/25
+Epoch 18/300
+Validation Loss: 1.0390e+02
+No improvement in validation loss. Patience: 4/25
+Epoch 19/300
+Validation Loss: 3.2324e+00
+New best validation loss: 3.2324e+00
+Epoch 20/300
+Validation Loss: 2.2655e+02
+No improvement in validation loss. Patience: 1/25
+Epoch 21/300
+Validation Loss: 3.4706e+00
+No improvement in validation loss. Patience: 2/25
+Epoch 22/300
+Validation Loss: 2.3352e+01
+No improvement in validation loss. Patience: 3/25
+Epoch 23/300
+Validation Loss: 9.7672e+02
+No improvement in validation loss. Patience: 4/25
+Epoch 24/300
+Validation Loss: 1.3327e+01
+No improvement in validation loss. Patience: 5/25
+Epoch 25/300
+Validation Loss: 5.2303e+00
+No improvement in validation loss. Patience: 6/25
+Epoch 26/300
+Validation Loss: 4.1008e+01
+No improvement in validation loss. Patience: 7/25
+Epoch 27/300
+Validation Loss: 1.0568e+02
+No improvement in validation loss. Patience: 8/25
+Epoch 28/300
+Validation Loss: 5.0239e+00
+No improvement in validation loss. Patience: 9/25
+Epoch 29/300
+Validation Loss: 4.9360e-01
+New best validation loss: 4.9360e-01
+Epoch 30/300
+Validation Loss: 9.5347e+01
+No improvement in validation loss. Patience: 1/25
+Epoch 31/300
+Validation Loss: 7.7806e+00
+No improvement in validation loss. Patience: 2/25
+Epoch 32/300
+Validation Loss: 3.8084e+01
+No improvement in validation loss. Patience: 3/25
+Epoch 33/300
+Validation Loss: 1.0416e+02
+No improvement in validation loss. Patience: 4/25
+Epoch 34/300
+Validation Loss: 7.8179e+00
+No improvement in validation loss. Patience: 5/25
+Epoch 35/300
+Validation Loss: 9.4740e+00
+No improvement in validation loss. Patience: 6/25
+Epoch 36/300
+Validation Loss: 2.0361e+01
+No improvement in validation loss. Patience: 7/25
+Epoch 37/300
+Validation Loss: 5.5479e+01
+No improvement in validation loss. Patience: 8/25
+Epoch 38/300
+Validation Loss: 2.4838e+00
+No improvement in validation loss. Patience: 9/25
+Epoch 39/300
+Validation Loss: 6.5168e+00
+No improvement in validation loss. Patience: 10/25
+Epoch 40/300
+Validation Loss: 2.6665e+01
+No improvement in validation loss. Patience: 11/25
+Epoch 41/300
+Validation Loss: 2.5283e+01
+No improvement in validation loss. Patience: 12/25
+Epoch 42/300
+Validation Loss: 1.7320e+03
+No improvement in validation loss. Patience: 13/25
+Epoch 43/300
+Validation Loss: 4.0930e+00
+No improvement in validation loss. Patience: 14/25
+Epoch 44/300
+Validation Loss: 1.6375e+01
+No improvement in validation loss. Patience: 15/25
+Epoch 45/300
+Validation Loss: 4.4473e+02
+No improvement in validation loss. Patience: 16/25
+Epoch 46/300
+Validation Loss: 1.2742e+01
+No improvement in validation loss. Patience: 17/25
+Epoch 47/300
+Validation Loss: 8.4046e+00
+No improvement in validation loss. Patience: 18/25
+Epoch 48/300
+Validation Loss: 3.7044e+02
+No improvement in validation loss. Patience: 19/25
+Epoch 49/300
+Validation Loss: 1.7047e+00
+No improvement in validation loss. Patience: 20/25
+Epoch 50/300
+Validation Loss: 9.7907e+00
+No improvement in validation loss. Patience: 21/25
+Epoch 51/300
+Validation Loss: 1.3152e+02
+No improvement in validation loss. Patience: 22/25
+Epoch 52/300
+Validation Loss: 7.2981e+01
+No improvement in validation loss. Patience: 23/25
+Epoch 53/300
+Validation Loss: 1.0397e+01
+No improvement in validation loss. Patience: 24/25
+Epoch 54/300
+Validation Loss: 2.0312e+02
+No improvement in validation loss. Patience: 25/25
+Early stopping triggered.
+Checkpoint saved at step 54.
+Plotting learning curve...
+Saving training and validation loss...
+
+[1mLoading model config from: /home/adfield/ShearNet/plots/FIRST_const_sigma+flux_nse_sd_12_type_exp/training_config.yaml[0m
+
+==================================================
+Evaluation Configuration
+==================================================
+
+evaluation:
+  test_samples: 50000
+  seed: 58
+
+model:
+  process_psf: True
+  type: fork-like
+  galaxy: {'type': 'research_backed'}
+  psf: {'type': 'forklens_psf'}
+
+plotting:
+  plot: True
+
+comparison:
+  mcal: True
+  ngmix: True
+  psf_model: gauss
+  gal_model: gauss
+==================================================
+
+
+[1m==================================================
+Generating Test Dataset
+==================================================[0m
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 21388 x 21388, which requires 10.22 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 8822 x 8822, which requires 1.74 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
+GalSim error drawing clean galaxy: drawFFT requires an FFT that is too large.
+The required FFT size would be 20542 x 20542, which requires 9.43 GB of memory.
+If you can handle the large FFT, you may update gsparams.maximum_fft_size.
