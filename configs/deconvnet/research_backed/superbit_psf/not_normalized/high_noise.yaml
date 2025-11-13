@@ -34,7 +34,7 @@ evaluation:
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "research_backed_superbit_not-normalized_low-noise"
+  model_name: "research_backed_superbit_not-normalized_high-noise"
   
 # Plotting configuration
 plotting:

@@ -1,0 +1,32 @@
+Proceeding with code...
+
+[1mLoading model config from: /home/adfield/ShearNet/plots/fork-like_superbit_high-noise/training_config.yaml[0m
+
+==================================================
+Evaluation Configuration
+==================================================
+
+evaluation:
+  test_samples: 5000
+  seed: 58
+
+model:
+  process_psf: True
+  type: fork-like
+  galaxy: {'type': 'research_backed'}
+  psf: {'type': 'forklens_psf'}
+
+plotting:
+  plot: True
+
+comparison:
+  mcal: True
+  ngmix: True
+  psf_model: gauss
+  gal_model: gauss
+==================================================
+
+
+[1m==================================================
+Generating Test Dataset
+==================================================[0m
