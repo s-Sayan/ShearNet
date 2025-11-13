@@ -14,7 +14,7 @@ MARGIN = 200 # Margins that I wanna use for PSF Rendering
 
 PSF_DATA_DIR = "/home/adfield/SHEARNET_DATA"
 
-def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05):
+def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='exp', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05, base_shear_g1=0.0, base_shear_g2=0.0):
     images = []
     labels = []
     obs = []
@@ -28,14 +28,16 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp
         psf_files = None
     for i in tqdm(range(samples)):
         g1, g2 = g1_list[i], g2_list[i]
+        #sigma = 0.5
         sigma = sigma_list[i]
         #g1, g2 = np.random.uniform(-0.5, 0.5, size=2)  # Random shears
         #sigma = np.random.uniform(0.5, 1.5)  # Random sigma  
+        #flux = 12258.97
         flux=np.random.uniform(1, 5)  # Random flux
         #psf_sigma = np.random.uniform(0.5, 1.5)
         
         obj_obs = sim_func(g1, g2, sigma=sigma, flux=flux, psf_sigma=psf_sigma, 
-        nse_sd=nse_sd, type=type, npix=npix, scale=scale, seed=i, exp=exp, apply_psf_shear=apply_psf_shear, psf_shear_range=psf_shear_range, ud=ud, psf_files=psf_files)
+        nse_sd=nse_sd, type=type, npix=npix, scale=scale, seed=i, exp=exp, apply_psf_shear=apply_psf_shear, psf_shear_range=psf_shear_range, ud=ud, psf_files=psf_files, base_shear_g1=base_shear_g1, base_shear_g2=base_shear_g2)
         
         galaxy_images = obj_obs.image
         psf_images = obj_obs.psf.image
@@ -106,7 +108,7 @@ def split_combined_images(combined_images, has_psf=False, has_clean=False):
     else:
         raise ValueError(f"Unexpected number of channels: {combined_images.shape[-1]}")
 
-def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", apply_psf_shear=False, psf_shear_range=0.05, ud=None, psf_files=None):
+def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", apply_psf_shear=False, psf_shear_range=0.05, ud=None, psf_files=None, base_shear_g1=0.0, base_shear_g2=0.0):
 
     rng = np.random.RandomState(seed=seed)
 
@@ -128,6 +130,13 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
     dx, dy = 2.0 * (rng.uniform(size=2) - 0.5) * 0.2
     sheared_gal = gal.shift(dx, dy)
 
+    sheared_gal = sheared_gal.shear(g1=base_shear_g1, g2=base_shear_g2)
+    
+    sheared_gal_e1_positive = sheared_gal.shear(g1=0.01, g2=0.0)
+    sheared_gal_e1_negative = sheared_gal.shear(g1=-0.01, g2=0.0)
+    sheared_gal_e2_positive = sheared_gal.shear(g1=0.0, g2=0.01)
+    sheared_gal_e2_negative = sheared_gal.shear(g1=0.0, g2=-0.01)
+
     # Convolve with PSF
     if exp == 'ideal':
         #gsp = galsim.GSParams(maximum_fft_size=8192000)
@@ -137,16 +146,33 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
             psf = psf.shear(g1=psf_g1, g2=psf_g2)
 
         obj = galsim.Convolve(sheared_gal, psf)
+        
+        obj_e1_positive = galsim.Convolve(sheared_gal_e1_positive, psf)
+        obj_e1_negative = galsim.Convolve(sheared_gal_e1_negative, psf)
+        obj_e2_positive = galsim.Convolve(sheared_gal_e2_positive, psf)
+        obj_e2_negative = galsim.Convolve(sheared_gal_e2_negative, psf)
+
     elif exp == 'superbit':
         psf = import_psf(psf_files, ud)
         gsp=galsim.GSParams(maximum_fft_size=32768)
         obj = galsim.Convolve([psf, sheared_gal], gsparams=gsp)
+
+        obj_e1_positive = galsim.Convolve([sheared_gal_e1_positive, psf], gsparams=gsp)
+        obj_e1_negative = galsim.Convolve([sheared_gal_e1_negative, psf], gsparams=gsp)
+        obj_e2_positive = galsim.Convolve([sheared_gal_e2_positive, psf], gsparams=gsp)
+        obj_e2_negative = galsim.Convolve([sheared_gal_e2_negative, psf], gsparams=gsp)
+
     else:
         raise ValueError("For now only supported experiments are 'ideal' or 'superbit'")
 
     # Draw images
     obj_im = obj.drawImage(nx=npix, ny=npix, scale=scale).array
     psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
+
+    e1_positive_im = obj_e1_positive.drawImage(nx=npix, ny=npix, scale=scale).array
+    e1_negative_im = obj_e1_negative.drawImage(nx=npix, ny=npix, scale=scale).array
+    e2_positive_im = obj_e2_positive.drawImage(nx=npix, ny=npix, scale=scale).array
+    e2_negative_im = obj_e2_negative.drawImage(nx=npix, ny=npix, scale=scale).array
 
     # Add noise
     nse = rng.normal(size=obj_im.shape, scale=nse_sd)
@@ -171,13 +197,11 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
         jacobian=jac,
         bmask=np.zeros_like(nse_im, dtype=np.int32),
         ormask=np.zeros_like(nse_im, dtype=np.int32),
-        psf=psf_obs,
+        psf=psf_obs
     )
 
     # Calculate SNR using ngmix built-in method
     snr = obj_obs.get_s2n()
-    # Store SNR in metadata
-    obj_obs.update_meta_data({'snr': snr})
 
 
     # Store the clean image as an attribute
@@ -188,7 +212,14 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
         # Create a fallback zero image
         sheared_im = np.zeros((npix, npix))
         
-    obj_obs.update_meta_data({'clean_image': sheared_im})
+    obj_obs.update_meta_data({
+        'snr': snr,
+        'clean_image': sheared_im,
+        'e1_positive': e1_positive_im,
+        'e1_negative': e1_negative_im,
+        'e2_positive': e2_positive_im,
+        'e2_negative': e2_negative_im
+    })
 
     return obj_obs
 

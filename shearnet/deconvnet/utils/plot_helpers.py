@@ -82,14 +82,6 @@ def plot_spatial_residuals(target_images: jnp.ndarray,
         spatial_biases[method_name] = jnp.mean(predictions - target_images, axis=0)
         residual_stds[method_name] = jnp.std(predictions - target_images, axis=0)
     
-    # Find global scaling for bias maps
-    all_biases = jnp.array([bias for bias in spatial_biases.values()])
-    global_bias_vmax = jnp.max(jnp.abs(all_biases))
-    
-    # Find global scaling for std maps
-    all_stds = jnp.array([std for std in residual_stds.values()])
-    global_std_vmax = jnp.max(all_stds)
-    
     # Determine if we should plot difference (only if exactly 2 methods)
     plot_difference = len(predictions_dict) == 2
     
@@ -108,15 +100,17 @@ def plot_spatial_residuals(target_images: jnp.ndarray,
     
     method_names = list(predictions_dict.keys())
     
-    # Row 1: Bias maps
+    # Row 1: Bias maps (each with individual scale)
     for i, method_name in enumerate(method_names):
         ax_idx = i
+        bias_data = spatial_biases[method_name]
+        bias_vmax = jnp.max(jnp.abs(bias_data))
         im = axes[ax_idx].imshow(
-            spatial_biases[method_name], 
+            bias_data, 
             cmap='RdBu_r', 
             origin='lower',
-            vmin=-global_bias_vmax, 
-            vmax=global_bias_vmax
+            vmin=-bias_vmax, 
+            vmax=bias_vmax
         )
         axes[ax_idx].set_title(f'{method_name}\nSpatial Bias Map')
         axes[ax_idx].axis('off')
@@ -125,12 +119,13 @@ def plot_spatial_residuals(target_images: jnp.ndarray,
     # If exactly 2 methods, plot difference
     if plot_difference:
         bias_diff = spatial_biases[method_names[0]] - spatial_biases[method_names[1]]
+        bias_diff_vmax = jnp.max(jnp.abs(bias_diff))
         im = axes[2].imshow(
             bias_diff,
             cmap='RdBu_r',
             origin='lower',
-            vmin=-global_bias_vmax,
-            vmax=global_bias_vmax
+            vmin=-bias_diff_vmax,
+            vmax=bias_diff_vmax
         )
         axes[2].set_title(f'Bias Difference\n({method_names[0]} - {method_names[1]})')
         axes[2].axis('off')
@@ -140,15 +135,13 @@ def plot_spatial_residuals(target_images: jnp.ndarray,
     else:
         row2_start = n_methods
     
-    # Row 2: Standard deviation maps
+    # Row 2: Standard deviation maps (each with individual scale)
     for i, method_name in enumerate(method_names):
         ax_idx = row2_start + i
         im = axes[ax_idx].imshow(
             residual_stds[method_name],
             cmap='viridis',
-            origin='lower',
-            vmin=0,
-            vmax=global_std_vmax
+            origin='lower'
         )
         axes[ax_idx].set_title(f'{method_name}\nResidual Std Dev')
         axes[ax_idx].axis('off')

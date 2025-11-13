@@ -209,6 +209,7 @@ def main():
     print(f"{'='*50}")
     
     if normalized:
+        print("****** normalized! *******")
         neural_results = eval_model(
             state, test_galaxy_images, test_psf_images, test_target_images, means, stds, normalized
         )
