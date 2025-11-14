@@ -644,7 +644,7 @@ def calculate_response_matrix(state, observations, batch_size=32, h=0.01, model_
     return R, R_per_galaxy
 
 
-def calculate_ngmix_response_matrix(observations, test_labels, h=0.1, seed=1234, psf_model='gauss', gal_model='gauss'):
+def calculate_ngmix_response_matrix(observations, test_labels, h=0.01, seed=1234, psf_model='gauss', gal_model='gauss'):
     """
     Calculate response matrix for NGmix estimator.
     
