@@ -1,0 +1,18 @@
+Submitted job with ID: 2871216
+Job started at: Thursday 20 November 2025 06:33:28 AM EST
+Starting NGmix ML fitting: num_gal: 30000 | psf_model: gauss | gal_model: gauss | num_cores: 128
+  Processing objects 0–9999 (chunk size=10000)
+  Processing objects 10000–19999 (chunk size=10000)
+  Processing objects 20000–29999 (chunk size=10000)
+Starting NGmix ML fitting: num_gal: 30000 | psf_model: gauss | gal_model: gauss | num_cores: 128
+  Processing objects 0–9999 (chunk size=10000)
+  Processing objects 10000–19999 (chunk size=10000)
+  Processing objects 20000–29999 (chunk size=10000)
+Starting NGmix ML fitting: num_gal: 30000 | psf_model: gauss | gal_model: gauss | num_cores: 128
+  Processing objects 0–9999 (chunk size=10000)
+  Processing objects 10000–19999 (chunk size=10000)
+  Processing objects 20000–29999 (chunk size=10000)
+m = -2.079389e-03 ± 5.138553e-04
+c = 8.261106e-06 ± 1.504554e-06
+Job finished at: Thursday 20 November 2025 09:24:15 AM EST
+Total runtime: 170.78 minutes (2.85 hours)

@@ -554,3 +554,55 @@ def fork_eval_model(state, test_images, test_psf_images, test_labels, batch_size
         'all_preds': jnp.concatenate(all_preds) if all_preds else None,
         'time_taken': total_time
     }
+
+def get_admoms_ngmix_fit(obs: "ngmix.Observation", reduced: bool = False) -> dict:
+    """
+    Measure adaptive moments (ADMOM) of an image using ngmix and GalSim.
+
+    Parameters
+    ----------
+    obs : ngmix.Observation
+        The observation containing the image and jacobian.
+    reduced : bool, optional
+        If True, return reduced shear (g1, g2) instead of ellipticity (e1, e2).
+
+    Returns
+    -------
+    result : dict
+        Dictionary containing:
+            - "e1" / "g1": ellipticity or reduced shear component 1
+            - "e2" / "g2": ellipticity or reduced shear component 2
+            - "T": size measure (2 * sigma^2)
+            - "flag": int (0 = success, 1 = failure)
+    """
+    jac = obs._jacobian
+    scale = jac.get_scale()
+    image = obs.image
+
+    # --- Normalize positive flux ---
+    norm = np.sum(image[image > 0])
+    if norm <= 0:
+        key1, key2 = ("g1", "g2") if reduced else ("e1", "e2")
+        return {key1: np.nan, key2: np.nan, "T": np.nan, "flag": 1}
+
+    # --- Measure moments with ngmix ---
+    obs_norm = ngmix.Observation(image=image / norm, jacobian=jac)
+    am = ngmix.admom.AdmomFitter()
+    res = am.go(obs_norm, guess=0.5)
+    e1, e2, T_ngmix = res["e1"], res["e2"], res["T"]
+
+    # --- Measure size using GalSim ---
+    gal_image = galsim.Image(image / norm, scale=scale)
+    admoms = galsim.hsm.FindAdaptiveMom(gal_image)
+    sigma = admoms.moments_sigma * scale
+    T_galsim = 2 * sigma**2
+
+    # --- Set flag based on both results ---
+    flag = 0 if (admoms.moments_status == 0 and res["flags"] == 0) else 1
+
+    # --- Convert to reduced shear if requested ---
+    if reduced:
+        g1, g2 = e1e2_to_g1g2(e1, e2)
+        return {"g1": g1, "g2": g2, "T": T_galsim, "flag": flag}
+
+    return {"e1": e1, "e2": e2, "T": T_galsim, "flag": flag}
