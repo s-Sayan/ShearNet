@@ -5,7 +5,7 @@ from tqdm import tqdm
 import multiprocessing as mp
 from multiprocessing import Pool, cpu_count
 import sys
-
+from ..utils.metrics import get_admoms_ngmix_fit
 
 # Function to remove NaN values and count them
 def clean_and_report_nans(data_list, name):
@@ -193,9 +193,13 @@ def make_struct(res, obs, shear_type):
     try:
         tpsf_list.append(obs.psf.meta['result']['T'])
     except:
-        print(f"No PSF T found for observation")
-            
-    data['Tpsf'] = np.mean(tpsf_list)
+        admom_dict = get_admoms_ngmix_fit(obs.psf, reduced=True)
+        if admom_dict['flag'] == 0:
+            g1psf, g2psf, Tpsf = admom_dict['g1'], admom_dict['g2'], admom_dict['T']
+        else:
+            g1psf, g2psf, Tpsf = np.nan, np.nan, np.nan            
+    valid = np.array(tpsf_list)[np.isfinite(tpsf_list)]
+    data['Tpsf'] = np.mean(valid) if valid.size > 0 else np.nan
 
     return data
 
@@ -257,7 +261,7 @@ def process_obs(obs, boot):
     dlist = [make_struct(res=sres, obs=obsdict[stype], shear_type=stype) for stype, sres in resdict.items()]
     return np.hstack(dlist)
 
-def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_pars= {'psf': 'dilate', 'mcal_shear': 0.01}):
+def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_pars= {'psf': 'dilate', 'mcal_shear': 0.01}, chunk_size=10000):
     """
     Multiprocessing version of original _fit_one()
 
@@ -322,8 +326,20 @@ def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_p
     num_cores = cpu_count()
     print(f"Starting NGmix ML fitting: num_gal: {len(obslist)} | psf_model: {psf_model} | gal_model: {gal_model} | num_cores: {num_cores}")
 
+    data_list = []
+
     with Pool(num_cores) as pool:
-        data_list = list(pool.starmap(process_obs, [(obs, boot) for obs in obslist]))
+        n_total = len(obslist)
+        for start in range(0, n_total, chunk_size):
+            end = min(start + chunk_size, n_total)
+            chunk = obslist[start:end]
+            print(f"  Processing objects {start}–{end-1} (chunk size={len(chunk)})")
+
+            chunk_results = pool.starmap(
+                process_obs,
+                [(obs, boot) for obs in chunk],
+            )
+            data_list.extend(chunk_results)
 
     return data_list
 
