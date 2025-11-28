@@ -427,7 +427,7 @@ def generate_bias_calibration_datasets(config):
 
 def calculate_bias_calibration(state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_g2_neg,
                                psf_g1_pos, psf_g1_neg, psf_g2_pos, psf_g2_neg,
-                               config, calculate_ngmix_bias=False):
+                               config, calculate_ngmix_bias=False, R_nn=None, R_ngmix=None):
     """
     Calculate multiplicative and additive bias for ShearNet (and optionally NGmix).
     
@@ -456,7 +456,7 @@ def calculate_bias_calibration(state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_g2
         h=0.01,
         model_type='fork' if config['process_psf'] else 'standard',
         psf_g1_pos=psf_g1_pos, psf_g1_neg=psf_g1_neg,
-        psf_g2_pos=psf_g2_pos, psf_g2_neg=psf_g2_neg
+        psf_g2_pos=psf_g2_pos, psf_g2_neg=psf_g2_neg, R=R_nn
     )
     time_nn = time.time() - time_start_nn
     
@@ -476,7 +476,7 @@ def calculate_bias_calibration(state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_g2
             h=0.01,
             seed=config['seed'],
             psf_model=psf_model_type,
-            gal_model=dataset_type
+            gal_model=dataset_type, R=R_ngmix
         )
         time_ngmix = time.time() - time_start_ngmix
         
@@ -531,10 +531,7 @@ def save_bias_results(bias_results_nn, bias_results_ngmix, time_nn, time_ngmix, 
         'gamma_est_g1_neg': bias_results_nn['gamma_est_g1_neg'],
         'gamma_est_g2_pos': bias_results_nn['gamma_est_g2_pos'],
         'gamma_est_g2_neg': bias_results_nn['gamma_est_g2_neg'],
-        'R_g1_pos': bias_results_nn['R_g1_pos'],
-        'R_g1_neg': bias_results_nn['R_g1_neg'],
-        'R_g2_pos': bias_results_nn['R_g2_pos'],
-        'R_g2_neg': bias_results_nn['R_g2_neg'],
+        'R': bias_results_nn['R'],
         'time_shearnet': time_nn,
     }
     
@@ -549,10 +546,7 @@ def save_bias_results(bias_results_nn, bias_results_ngmix, time_nn, time_ngmix, 
             'gamma_est_g1_neg_ngmix': bias_results_ngmix['gamma_est_g1_neg'],
             'gamma_est_g2_pos_ngmix': bias_results_ngmix['gamma_est_g2_pos'],
             'gamma_est_g2_neg_ngmix': bias_results_ngmix['gamma_est_g2_neg'],
-            'R_g1_pos_ngmix': bias_results_ngmix['R_g1_pos'],
-            'R_g1_neg_ngmix': bias_results_ngmix['R_g1_neg'],
-            'R_g2_pos_ngmix': bias_results_ngmix['R_g2_pos'],
-            'R_g2_neg_ngmix': bias_results_ngmix['R_g2_neg'],
+            'R_ngmix': bias_results_ngmix['R'],
             'time_ngmix': time_ngmix,
             'speedup': time_ngmix / time_nn if time_ngmix else None,
         })
@@ -742,7 +736,7 @@ def main():
     bias_results_nn, bias_results_ngmix, time_nn, time_ngmix = calculate_bias_calibration(
         state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_g2_neg,
         psf_g1_pos, psf_g1_neg, psf_g2_pos, psf_g2_neg,
-        config, calculate_ngmix_bias=config['mcal']
+        config, calculate_ngmix_bias=config['mcal'], R_nn=R_nn, R_ngmix=R_ngmix
     )
     
     # Save bias results with timing
