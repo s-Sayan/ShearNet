@@ -733,13 +733,13 @@ def calculate_multiplicative_bias(state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs
                                   true_shear_step=0.02, batch_size=32, h=0.01,
                                   model_type='standard', 
                                   psf_g1_pos=None, psf_g1_neg=None, 
-                                  psf_g2_pos=None, psf_g2_neg=None):
+                                  psf_g2_pos=None, psf_g2_neg=None, 
+                                  R=None):
     """
     Calculate multiplicative (m) and additive (c) bias for both shear components.
     
     Uses the two-dataset method:
     - Generate datasets at γ_true = ±shear_step for each component
-    - Calculate response matrix and mean ellipticity for each
     - Solve: γ_est = (1+m)γ_true + c
     - m = [γ_est(+) - γ_est(-)] / (2*shear_step) - 1
     - c = [γ_est(+) + γ_est(-)] / 2
@@ -755,6 +755,7 @@ def calculate_multiplicative_bias(state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs
         h: Response matrix perturbation size (default 0.01)
         model_type: 'standard' or 'fork'
         psf_*: PSF images for fork models
+        R: Response matrix (will be calculated if None)
     
     Returns:
         dict: {
@@ -762,8 +763,7 @@ def calculate_multiplicative_bias(state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs
             'm2': float, 'c2': float,
             'gamma_est_g1_pos': float, 'gamma_est_g1_neg': float,
             'gamma_est_g2_pos': float, 'gamma_est_g2_neg': float,
-            'R_g1_pos': array, 'R_g1_neg': array,
-            'R_g2_pos': array, 'R_g2_neg': array
+            'R': array,
         }
     """
     import jax.numpy as jnp
@@ -779,16 +779,13 @@ def calculate_multiplicative_bias(state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs
     
     # Calculate response matrices
     print(f"\nDataset A (g1 = +{true_shear_step}):")
-    R_g1_pos, _ = calculate_response_matrix(
-        state, obs_g1_pos, batch_size=batch_size, h=h,
-        model_type=model_type, psf_images=psf_g1_pos
-    )
+    if R is None: 
+        R, _ = calculate_response_matrix(
+            state, obs_g1_pos, batch_size=batch_size, h=h,
+            model_type=model_type, psf_images=psf_g1_pos
+        )
     
     print(f"\nDataset B (g1 = -{true_shear_step}):")
-    R_g1_neg, _ = calculate_response_matrix(
-        state, obs_g1_neg, batch_size=batch_size, h=h,
-        model_type=model_type, psf_images=psf_g1_neg
-    )
     
     # Get mean ellipticities and calculate estimated shears
     def get_gamma_est(observations, response_matrix, component_idx, psf_imgs=None):
@@ -814,8 +811,8 @@ def calculate_multiplicative_bias(state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs
         R_diag = response_matrix[component_idx, component_idx]
         return float(mean_e / R_diag), float(mean_e), float(R_diag)
     
-    gamma_est_g1_pos, mean_e1_pos, R11_pos = get_gamma_est(obs_g1_pos, R_g1_pos, 0, psf_g1_pos)
-    gamma_est_g1_neg, mean_e1_neg, R11_neg = get_gamma_est(obs_g1_neg, R_g1_neg, 0, psf_g1_neg)
+    gamma_est_g1_pos, mean_e1_pos, R11_pos = get_gamma_est(obs_g1_pos, R, 0, psf_g1_pos)
+    gamma_est_g1_neg, mean_e1_neg, R11_neg = get_gamma_est(obs_g1_neg, R, 0, psf_g1_neg)
     
     # Calculate m1 and c1
     m1 = (gamma_est_g1_pos - gamma_est_g1_neg) / (2 * true_shear_step) - 1
@@ -828,21 +825,12 @@ def calculate_multiplicative_bias(state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs
     # ========== Component 2 (g2) ==========
     print(f"\n{BOLD}{CYAN}--- Component 2 (g2) ---{END}")
     
-    # Calculate response matrices
     print(f"\nDataset C (g2 = +{true_shear_step}):")
-    R_g2_pos, _ = calculate_response_matrix(
-        state, obs_g2_pos, batch_size=batch_size, h=h,
-        model_type=model_type, psf_images=psf_g2_pos
-    )
     
     print(f"\nDataset D (g2 = -{true_shear_step}):")
-    R_g2_neg, _ = calculate_response_matrix(
-        state, obs_g2_neg, batch_size=batch_size, h=h,
-        model_type=model_type, psf_images=psf_g2_neg
-    )
     
-    gamma_est_g2_pos, mean_e2_pos, R22_pos = get_gamma_est(obs_g2_pos, R_g2_pos, 1, psf_g2_pos)
-    gamma_est_g2_neg, mean_e2_neg, R22_neg = get_gamma_est(obs_g2_neg, R_g2_neg, 1, psf_g2_neg)
+    gamma_est_g2_pos, mean_e2_pos, R22_pos = get_gamma_est(obs_g2_pos, R, 1, psf_g2_pos)
+    gamma_est_g2_neg, mean_e2_neg, R22_neg = get_gamma_est(obs_g2_neg, R, 1, psf_g2_neg)
     
     # Calculate m2 and c2
     m2 = (gamma_est_g2_pos - gamma_est_g2_neg) / (2 * true_shear_step) - 1
@@ -871,8 +859,7 @@ def calculate_multiplicative_bias(state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs
         'gamma_est_g1_neg': gamma_est_g1_neg,
         'gamma_est_g2_pos': gamma_est_g2_pos,
         'gamma_est_g2_neg': gamma_est_g2_neg,
-        'R_g1_pos': R_g1_pos, 'R_g1_neg': R_g1_neg,
-        'R_g2_pos': R_g2_pos, 'R_g2_neg': R_g2_neg
+        'R': R
     }
 
 def save_bias_results(bias_results, config, bias_ngmix=None):
@@ -905,10 +892,7 @@ def save_bias_results(bias_results, config, bias_ngmix=None):
         'gamma_est_g2_neg': bias_results['gamma_est_g2_neg'],
         
         # Response matrices for each dataset
-        'R_g1_pos': bias_results['R_g1_pos'],
-        'R_g1_neg': bias_results['R_g1_neg'],
-        'R_g2_pos': bias_results['R_g2_pos'],
-        'R_g2_neg': bias_results['R_g2_neg'],
+        'R': bias_results['R'],
     }
     
     # Add NGmix results if provided
@@ -922,10 +906,7 @@ def save_bias_results(bias_results, config, bias_ngmix=None):
             'gamma_est_g1_neg_ngmix': bias_ngmix['gamma_est_g1_neg'],
             'gamma_est_g2_pos_ngmix': bias_ngmix['gamma_est_g2_pos'],
             'gamma_est_g2_neg_ngmix': bias_ngmix['gamma_est_g2_neg'],
-            'R_g1_pos_ngmix': bias_ngmix['R_g1_pos'],
-            'R_g1_neg_ngmix': bias_ngmix['R_g1_neg'],
-            'R_g2_pos_ngmix': bias_ngmix['R_g2_pos'],
-            'R_g2_neg_ngmix': bias_ngmix['R_g2_neg'],
+            'R_ngmix': bias_ngmix['R'],
         })
     
     # Save to file
@@ -943,7 +924,7 @@ def save_bias_results(bias_results, config, bias_ngmix=None):
 
 def calculate_multiplicative_bias_ngmix(obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_g2_neg,
                                        true_shear_step=0.02, h=0.01,
-                                       seed=1234, psf_model='gauss', gal_model='gauss'):
+                                       seed=1234, psf_model='gauss', gal_model='gauss', R=None):
     """
     Calculate multiplicative (m) and additive (c) bias for NGmix estimator.
     
@@ -962,6 +943,7 @@ def calculate_multiplicative_bias_ngmix(obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_
         seed: Random seed for NGmix
         psf_model: PSF model for NGmix
         gal_model: Galaxy model for NGmix
+        R: response matrix of for NGmix (will calculate if not inputted)
     
     Returns:
         dict: Same structure as calculate_multiplicative_bias
@@ -982,16 +964,13 @@ def calculate_multiplicative_bias_ngmix(obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_
     
     # Calculate response matrices
     print(f"\nDataset A (g1 = +{true_shear_step}):")
-    R_g1_pos, _ = calculate_ngmix_response_matrix(
-        obs_g1_pos, None, h=h, seed=seed,
-        psf_model=psf_model, gal_model=gal_model
-    )
+    if R is None:
+        R, _ = calculate_ngmix_response_matrix(
+            obs_g1_pos, None, h=h, seed=seed,
+            psf_model=psf_model, gal_model=gal_model
+        )
     
     print(f"\nDataset B (g1 = -{true_shear_step}):")
-    R_g1_neg, _ = calculate_ngmix_response_matrix(
-        obs_g1_neg, None, h=h, seed=seed,
-        psf_model=psf_model, gal_model=gal_model
-    )
     
     # Get mean ellipticities for each dataset using NGmix
     def get_gamma_est_ngmix(observations, response_matrix, component_idx):
@@ -1012,8 +991,8 @@ def calculate_multiplicative_bias_ngmix(obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_
         R_diag = response_matrix[component_idx, component_idx]
         return float(mean_e / R_diag), float(mean_e), float(R_diag)
     
-    gamma_est_g1_pos, mean_e1_pos, R11_pos = get_gamma_est_ngmix(obs_g1_pos, R_g1_pos, 0)
-    gamma_est_g1_neg, mean_e1_neg, R11_neg = get_gamma_est_ngmix(obs_g1_neg, R_g1_neg, 0)
+    gamma_est_g1_pos, mean_e1_pos, R11_pos = get_gamma_est_ngmix(obs_g1_pos, R, 0)
+    gamma_est_g1_neg, mean_e1_neg, R11_neg = get_gamma_est_ngmix(obs_g1_neg, R, 0)
     
     # Calculate m1 and c1
     m1 = (gamma_est_g1_pos - gamma_est_g1_neg) / (2 * true_shear_step) - 1
@@ -1026,21 +1005,12 @@ def calculate_multiplicative_bias_ngmix(obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_
     # ========== Component 2 (g2) ==========
     print(f"\n{BOLD}{CYAN}--- Component 2 (g2) ---{END}")
     
-    # Calculate response matrices
     print(f"\nDataset C (g2 = +{true_shear_step}):")
-    R_g2_pos, _ = calculate_ngmix_response_matrix(
-        obs_g2_pos, None, h=h, seed=seed,
-        psf_model=psf_model, gal_model=gal_model
-    )
     
     print(f"\nDataset D (g2 = -{true_shear_step}):")
-    R_g2_neg, _ = calculate_ngmix_response_matrix(
-        obs_g2_neg, None, h=h, seed=seed,
-        psf_model=psf_model, gal_model=gal_model
-    )
     
-    gamma_est_g2_pos, mean_e2_pos, R22_pos = get_gamma_est_ngmix(obs_g2_pos, R_g2_pos, 1)
-    gamma_est_g2_neg, mean_e2_neg, R22_neg = get_gamma_est_ngmix(obs_g2_neg, R_g2_neg, 1)
+    gamma_est_g2_pos, mean_e2_pos, R22_pos = get_gamma_est_ngmix(obs_g2_pos, R, 1)
+    gamma_est_g2_neg, mean_e2_neg, R22_neg = get_gamma_est_ngmix(obs_g2_neg, R, 1)
     
     # Calculate m2 and c2
     m2 = (gamma_est_g2_pos - gamma_est_g2_neg) / (2 * true_shear_step) - 1
@@ -1069,6 +1039,5 @@ def calculate_multiplicative_bias_ngmix(obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_
         'gamma_est_g1_neg': gamma_est_g1_neg,
         'gamma_est_g2_pos': gamma_est_g2_pos,
         'gamma_est_g2_neg': gamma_est_g2_neg,
-        'R_g1_pos': R_g1_pos, 'R_g1_neg': R_g1_neg,
-        'R_g2_pos': R_g2_pos, 'R_g2_neg': R_g2_neg
+        'R': R,
     }
