@@ -28,12 +28,12 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='exp', exp='
         psf_files = None
     for i in tqdm(range(samples)):
         g1, g2 = g1_list[i], g2_list[i]
-        #sigma = 0.5
-        sigma = sigma_list[i]
+        sigma = 0.5
+        #sigma = sigma_list[i]
         #g1, g2 = np.random.uniform(-0.5, 0.5, size=2)  # Random shears
         #sigma = np.random.uniform(0.5, 1.5)  # Random sigma  
-        #flux = 12258.97
-        flux=np.random.uniform(1, 5)  # Random flux
+        flux = 12258.97
+        #flux=np.random.uniform(1, 5)  # Random flux
         #psf_sigma = np.random.uniform(0.5, 1.5)
         
         obj_obs = sim_func(g1, g2, sigma=sigma, flux=flux, psf_sigma=psf_sigma, 
@@ -114,7 +114,7 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
 
     # Create a galaxy object
     if type == 'exp':
-        gal = galsim.Exponential(half_light_radius=sigma).shear(g1=g1, g2=g2)
+        gal = galsim.Exponential(half_light_radius=sigma, flux=flux).shear(g1=g1, g2=g2)
     elif type == 'gauss':
         gal = galsim.Gaussian(sigma=sigma, flux=flux).shear(g1=g1, g2=g2)
     else:
@@ -140,7 +140,7 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
     # Convolve with PSF
     if exp == 'ideal':
         #gsp = galsim.GSParams(maximum_fft_size=8192000)
-        psf = galsim.Gaussian(sigma=psf_sigma)
+        psf = galsim.Gaussian(fwhm=psf_sigma)
 
         if apply_psf_shear:
             psf = psf.shear(g1=psf_g1, g2=psf_g2)
