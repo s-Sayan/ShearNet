@@ -139,18 +139,18 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
 
     # Convolve with PSF
     if exp == 'ideal':
-        #gsp = galsim.GSParams(maximum_fft_size=8192000)
+        gsp = galsim.GSParams(maximum_fft_size=32768)
         psf = galsim.Gaussian(fwhm=psf_sigma)
 
         if apply_psf_shear:
             psf = psf.shear(g1=psf_g1, g2=psf_g2)
 
-        obj = galsim.Convolve(sheared_gal, psf)
+        obj = galsim.Convolve([sheared_gal, psf], gsparams=gsp)
         
-        obj_e1_positive = galsim.Convolve(sheared_gal_e1_positive, psf)
-        obj_e1_negative = galsim.Convolve(sheared_gal_e1_negative, psf)
-        obj_e2_positive = galsim.Convolve(sheared_gal_e2_positive, psf)
-        obj_e2_negative = galsim.Convolve(sheared_gal_e2_negative, psf)
+        obj_e1_positive = galsim.Convolve([sheared_gal_e1_positive, psf], gsparams=gsp)
+        obj_e1_negative = galsim.Convolve([sheared_gal_e1_negative, psf], gsparams=gsp)
+        obj_e2_positive = galsim.Convolve([sheared_gal_e2_positive, psf], gsparams=gsp)
+        obj_e2_negative = galsim.Convolve([sheared_gal_e2_negative, psf], gsparams=gsp)
 
     elif exp == 'superbit':
         psf = import_psf(psf_files, ud)
@@ -205,12 +205,7 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
 
 
     # Store the clean image as an attribute
-    try :
-        sheared_im = sheared_gal.drawImage(nx=npix, ny=npix, scale=scale).array
-    except (galsim.errors.GalSimFFTSizeError, galsim.errors.GalSimError) as e:
-        print(f"GalSim error drawing clean galaxy: {e}")
-        # Create a fallback zero image
-        sheared_im = np.zeros((npix, npix))
+    sheared_im = sheared_gal.drawImage(nx=npix, ny=npix, scale=scale).array
         
     obj_obs.update_meta_data({
         'snr': snr,
