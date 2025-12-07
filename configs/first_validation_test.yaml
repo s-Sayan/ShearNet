@@ -1,11 +1,11 @@
 # Dataset configuration
 dataset:
-  samples: 1000
+  samples: 100000
   psf_sigma: 0.25
   exp: "ideal"
   nse_sd: 12.719674
   seed: 42
-  stamp_size: 63
+  stamp_size: 53
   pixel_size: 0.141
 
 # Model configuration  
@@ -30,7 +30,7 @@ training:
   
 # Evaluation configuration
 evaluation:
-  test_samples: 50
+  test_samples: 30000
   seed: 58
   
 # Output configuration
