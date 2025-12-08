@@ -112,6 +112,8 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
 
     rng = np.random.RandomState(seed=seed)
 
+    gsp = galsim.GSParams(maximum_fft_size=32768)
+
     # Create a galaxy object
     if type == 'exp':
         gal = galsim.Exponential(half_light_radius=sigma, flux=flux).shear(g1=g1, g2=g2)
@@ -139,7 +141,6 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
 
     # Convolve with PSF
     if exp == 'ideal':
-        gsp = galsim.GSParams(maximum_fft_size=32768)
         psf = galsim.Gaussian(fwhm=psf_sigma)
 
         if apply_psf_shear:
@@ -154,7 +155,6 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
 
     elif exp == 'superbit':
         psf = import_psf(psf_files, ud)
-        gsp=galsim.GSParams(maximum_fft_size=32768)
         obj = galsim.Convolve([psf, sheared_gal], gsparams=gsp)
 
         obj_e1_positive = galsim.Convolve([sheared_gal_e1_positive, psf], gsparams=gsp)
@@ -205,8 +205,12 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
 
 
     # Store the clean image as an attribute
-    sheared_im = sheared_gal.drawImage(nx=npix, ny=npix, scale=scale).array
-        
+    try:
+        sheared_im = sheared_gal.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
+    except galsim.errors.GalSimFFTSizeError:
+        # Only use slow real_space rendering if FFT fails
+        sheared_im = sheared_gal.drawImage(nx=npix, ny=npix, scale=scale, method='real_space').array
+
     obj_obs.update_meta_data({
         'snr': snr,
         'clean_image': sheared_im,

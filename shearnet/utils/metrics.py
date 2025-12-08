@@ -499,7 +499,7 @@ def fork_eval_model(state, test_images, test_psf_images, test_labels, batch_size
 
     for i in range(0, len(test_images), batch_size):
         batch_images = test_images[i:i + batch_size]
-        batch_psf_images = test_images[i:i + batch_size]
+        batch_psf_images = test_psf_images[i:i + batch_size]
         batch_labels = test_labels[i:i + batch_size]
         loss, preds, loss_per_label, bias_per_label = fork_eval_step(state, batch_images, batch_psf_images, batch_labels)
         
