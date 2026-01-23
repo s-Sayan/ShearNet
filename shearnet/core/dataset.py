@@ -7,6 +7,7 @@ from scipy.signal import convolve2d
 from tqdm import tqdm
 from ..methods.ngmix import g1_g2_sigma_sample
 import galsim.des
+from astropy.table import Table
 
 XIMAGE_SIZE, YIMAGE_SIZE = 9600, 6422 # Usual size of SuperBIT single exposures in pixel unit
 
@@ -14,11 +15,19 @@ MARGIN = 200 # Margins that I wanna use for PSF Rendering
 
 PSF_DATA_DIR = "/home/adfield/SHEARNET_DATA"
 
+cosmos_cat_fname = "/home/adfield/ShearNet/cosmos15_superbit2023_phot_shapes_with_sigma.csv"
+cosmos_cat = Table.read(cosmos_cat_fname, format="csv")
+
 def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='exp', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05, base_shear_g1=0.0, base_shear_g2=0.0):
     images = []
     labels = []
     obs = []
-    g1_list, g2_list, sigma_list = g1_g2_sigma_sample(num_samples=samples, seed=seed)
+    g1_list, g2_list, __ = g1_g2_sigma_sample(num_samples=samples, seed=seed)
+
+    q = cosmos_cat['c10_sersic_fit_q']
+    sigma_list = cosmos_cat['c10_sersic_fit_hlr']*0.03*np.sqrt(q)
+    sigma_list = sigma_list[(sigma_list > np.percentile(sigma_list, 1)) & (sigma_list < np.percentile(sigma_list, 99))]
+
     ud = galsim.UniformDeviate(seed)
     if exp=="superbit":
         psf_files = search_psf_files(path=PSF_DATA_DIR)
@@ -28,8 +37,8 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='exp', exp='
         psf_files = None
     for i in tqdm(range(samples)):
         g1, g2 = g1_list[i], g2_list[i]
-        sigma = 0.5
-        #sigma = sigma_list[i]
+        #sigma = 0.5
+        sigma = sigma_list[i]
         #g1, g2 = np.random.uniform(-0.5, 0.5, size=2)  # Random shears
         #sigma = np.random.uniform(0.5, 1.5)  # Random sigma  
         flux = 12258.97
@@ -59,7 +68,8 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='exp', exp='
             # Just galaxy images
             images.append(galaxy_images)
 
-        labels.append(np.array([g1, g2, sigma, flux], dtype=np.float32))
+        # temporarily removed `, sigma, flux` from the append
+        labels.append(np.array([g1, g2, sigma], dtype=np.float32))
         obs.append(obj_obs)
     
     if return_obs:

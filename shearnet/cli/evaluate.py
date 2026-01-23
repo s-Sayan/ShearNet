@@ -5,6 +5,8 @@ import argparse
 import jax.random as random
 import jax.numpy as jnp
 import numpy as np
+from astropy.io import fits
+from astropy.table import Table
 import optax
 import time
 from flax.training import checkpoints, train_state
@@ -699,6 +701,105 @@ def print_summary(config, nn_results, ngmix_results):
     print("✓ EVALUATION COMPLETE")
     print(f"{'='*70}{END}\n")
 
+def save_evaluation_to_fits(
+    test_galaxy_images, test_psf_images, test_labels, test_obs,
+    nn_predictions, ngmix_predictions,
+    config, output_path
+):
+    """
+    Save complete evaluation dataset to FITS file.
+    
+    Structure:
+    - HDU 0 (Primary): Metadata header
+    - HDU 1: Main catalog table
+    """
+    
+    # Prepare data for catalog table
+    n_samples = len(test_labels)
+    npix = test_galaxy_images.shape[1]  # Should be 53
+    
+    # Flatten images for storage
+    galaxy_images_flat = test_galaxy_images.reshape(n_samples, -1)
+    psf_images_flat = test_psf_images.reshape(n_samples, -1) if test_psf_images is not None else None
+    
+    # Extract clean images and response images from observations
+    clean_images = np.array([obs.meta['clean_image'].flatten() for obs in test_obs])
+    e1_pos = np.array([obs.meta['e1_positive'].flatten() for obs in test_obs])
+    e1_neg = np.array([obs.meta['e1_negative'].flatten() for obs in test_obs])
+    e2_pos = np.array([obs.meta['e2_positive'].flatten() for obs in test_obs])
+    e2_neg = np.array([obs.meta['e2_negative'].flatten() for obs in test_obs])
+    
+    # Extract SNR and jacobian info
+    snr_values = np.array([obs.meta.get('snr', obs.get_s2n()) for obs in test_obs])
+    jac_scale = np.array([obs.jacobian.scale for obs in test_obs])
+    jac_row = np.array([obs.jacobian.row0 for obs in test_obs])
+    jac_col = np.array([obs.jacobian.col0 for obs in test_obs])
+    
+    # Build catalog table
+    catalog_data = {
+        # True values
+        'TRUE_G1': test_labels[:, 0],
+        'TRUE_G2': test_labels[:, 1],
+        'TRUE_SIGMA': test_labels[:, 2] if test_labels.shape[1] > 2 else np.zeros(test_labels[:, 0].shape),
+        'TRUE_FLUX': test_labels[:, 3] if test_labels.shape[1] > 3 else np.zeros(test_labels[:, 0].shape),
+        
+        # ShearNet predictions
+        'NN_G1': nn_predictions['all_preds'][:, 0],
+        'NN_G2': nn_predictions['all_preds'][:, 1],
+        'NN_SIGMA': nn_predictions['all_preds'][:, 2] if nn_predictions['all_preds'].shape[1] > 2 else np.zeros(nn_predictions['all_preds'][:, 0].shape),
+        'NN_FLUX': nn_predictions['all_preds'][:, 3] if nn_predictions['all_preds'].shape[1] > 3 else np.zeros(nn_predictions['all_preds'][:, 0].shape),
+        
+        # Observation properties
+        'SNR': snr_values,
+        'JAC_SCALE': jac_scale,
+        'JAC_ROW': jac_row,
+        'JAC_COL': jac_col,
+        
+        # Images (flattened)
+        'GALAXY_IMAGE': galaxy_images_flat,
+        'CLEAN_IMAGE': clean_images,
+        'E1_POS_IMAGE': e1_pos,
+        'E1_NEG_IMAGE': e1_neg,
+        'E2_POS_IMAGE': e2_pos,
+        'E2_NEG_IMAGE': e2_neg,
+    }
+    
+    # Add PSF images if available
+    if psf_images_flat is not None:
+        catalog_data['PSF_IMAGE'] = psf_images_flat
+    print(ngmix_predictions)
+    # Add NGmix predictions if available
+    if ngmix_predictions is not None:
+        catalog_data['NGMIX_G1'] = ngmix_predictions['preds'][:, 0]
+        catalog_data['NGMIX_G2'] = ngmix_predictions['preds'][:, 1]
+        catalog_data['NGMIX_SIGMA'] = ngmix_predictions['preds'][:, 2] if ngmix_predictions['preds'].shape[1] > 2 else np.zeros(ngmix_predictions['preds'][:, 0].shape)
+        catalog_data['NGMIX_FLUX'] = ngmix_predictions['preds'][:, 3] if ngmix_predictions['preds'].shape[1] > 3 else np.zeros(ngmix_predictions['preds'][:, 0].shape)
+    
+    catalog_table = Table(catalog_data)
+    
+    # Create primary HDU with metadata
+    primary_hdu = fits.PrimaryHDU()
+    primary_hdu.header['NSAMPLES'] = n_samples
+    primary_hdu.header['NPIX'] = npix
+    primary_hdu.header['SCALE'] = config['pixel_size']
+    primary_hdu.header['PSF_SIG'] = config['psf_sigma']
+    primary_hdu.header['NSE_SD'] = config['nse_sd']
+    primary_hdu.header['MODELNAM'] = config['model_name']
+    primary_hdu.header['SEED'] = config['seed']
+    primary_hdu.header['EXP'] = config['exp']
+    primary_hdu.header['COMMENT'] = 'ShearNet evaluation dataset'
+    
+    # Create catalog binary table HDU
+    catalog_hdu = fits.BinTableHDU(catalog_table, name='CATALOG')
+    
+    # Write FITS file
+    hdul = fits.HDUList([primary_hdu, catalog_hdu])
+    hdul.writeto(output_path, overwrite=True)
+    
+    print(f"\n{GREEN}✓ Evaluation data saved to: {output_path}{END}")
+    print(f"{CYAN}FITS structure:{END}")
+    print(f"  HDU 0 (Primary): Metadata")
+    print(f"  HDU 1 (CATALOG): {n_samples} galaxies with images and predictions")
 
 def main():
     """Main evaluation function."""
@@ -718,37 +819,45 @@ def main():
     
     # Evaluate comparison methods (if requested)
     ngmix_results, mcal_results = evaluate_comparison_methods(test_obs, test_galaxy_images, test_labels, config)
-    
-    # Calculate response matrices
-    R_nn, R_per_gal_nn, R_ngmix, R_per_gal_ngmix = calculate_response_matrices(
-        state, test_obs, test_galaxy_images, test_psf_images, 
-        test_labels, config, ngmix_results
+
+    # Save everything to FITS
+    fits_output_path = os.path.join(config['plot_path'], config['model_name'], 'evaluation_data.fits')
+    save_evaluation_to_fits(
+        test_galaxy_images, test_psf_images, test_labels, test_obs,
+        nn_results, ngmix_results if ngmix_results else None,
+        config, fits_output_path
     )
     
-    # Save response matrices
-    save_response_matrices(R_nn, R_per_gal_nn, R_ngmix, R_per_gal_ngmix, config)
+    # # Calculate response matrices
+    # R_nn, R_per_gal_nn, R_ngmix, R_per_gal_ngmix = calculate_response_matrices(
+    #     state, test_obs, test_galaxy_images, test_psf_images, 
+    #     test_labels, config, ngmix_results
+    # )
     
-    # Generate bias calibration datasets
-    (obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_g2_neg,
-     psf_g1_pos, psf_g1_neg, psf_g2_pos, psf_g2_neg) = generate_bias_calibration_datasets(config)
+    # # Save response matrices
+    # save_response_matrices(R_nn, R_per_gal_nn, R_ngmix, R_per_gal_ngmix, config)
     
-    # Calculate multiplicative and additive bias with timing
-    bias_results_nn, bias_results_ngmix, time_nn, time_ngmix = calculate_bias_calibration(
-        state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_g2_neg,
-        psf_g1_pos, psf_g1_neg, psf_g2_pos, psf_g2_neg,
-        config, calculate_ngmix_bias=config['mcal'], R_nn=R_nn, R_ngmix=R_ngmix
-    )
+    # # Generate bias calibration datasets
+    # (obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_g2_neg,
+    #  psf_g1_pos, psf_g1_neg, psf_g2_pos, psf_g2_neg) = generate_bias_calibration_datasets(config)
     
-    # Save bias results with timing
-    save_bias_results(bias_results_nn, bias_results_ngmix, time_nn, time_ngmix, config)
+    # # Calculate multiplicative and additive bias with timing
+    # bias_results_nn, bias_results_ngmix, time_nn, time_ngmix = calculate_bias_calibration(
+    #     state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_g2_neg,
+    #     psf_g1_pos, psf_g1_neg, psf_g2_pos, psf_g2_neg,
+    #     config, calculate_ngmix_bias=config['mcal'], R_nn=R_nn, R_ngmix=R_ngmix
+    # )
     
-    # Generate plots (if requested)
-    if config['plot']:
-        generate_plots(state, test_obs, test_galaxy_images, test_psf_images, 
-                      test_labels, snr_values, ngmix_results, R_nn, R_ngmix, config)
+    # # Save bias results with timing
+    # save_bias_results(bias_results_nn, bias_results_ngmix, time_nn, time_ngmix, config)
     
-    # Generate animation (if requested)
-    generate_animation(state, test_labels, ngmix_results, config)
+    # # Generate plots (if requested)
+    # if config['plot']:
+    #     generate_plots(state, test_obs, test_galaxy_images, test_psf_images, 
+    #                   test_labels, snr_values, ngmix_results, R_nn, R_ngmix, config)
+    
+    # # Generate animation (if requested)
+    # generate_animation(state, test_labels, ngmix_results, config)
     
     # Print summary
     print_summary(config, nn_results, ngmix_results)
