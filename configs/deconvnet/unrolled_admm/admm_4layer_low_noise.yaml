@@ -1,0 +1,44 @@
+# Configuration for 4-Layer Unrolled ADMM
+# Balanced model for good performance
+
+dataset:
+  samples: 100000
+  psf_sigma: 0.25
+  exp: "superbit"
+  nse_sd: 1.0e-2
+  normalized: true
+  seed: 42
+  stamp_size: 53
+  pixel_size: 0.141
+  apply_psf_shear: true
+  psf_shear_range: 0.05
+
+# Model configuration
+deconv:
+  model_type: "unrolled_admm_4"
+  
+# Training configuration
+training:
+  epochs: 250
+  batch_size: 12
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4
+  patience: 30
+  val_split: 0.2
+  eval_interval: 1
+  
+# Evaluation configuration
+evaluation:
+  test_samples: 5000
+  seed: 58
+  
+# Output configuration
+output:
+  save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
+  plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
+  model_name: "unrolled_admm_4layer_high_noise"
+  
+# Plotting configuration
+plotting:
+  plot: true
+  num_plot_samples: 10

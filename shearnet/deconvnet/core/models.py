@@ -879,3 +879,252 @@ class ResearchBackedPSFDeconvolutionUNet(nn.Module):
             output = residual + output
         
         return output
+
+# ==================================================================================
+# UNROLLED ADMM MODELS
+# ==================================================================================
+
+class ADMMXUpdate(nn.Module):
+    """X-update step in ADMM using FFT-based quadratic solution."""
+    
+    @nn.compact
+    def __call__(self, z, v_residual, HtH, rho1, rho2):
+        """
+        Solve: x = argmin_x { (rho1/2)||x-z||^2 + (rho2/2)||Hx-v||^2 }
+        
+        Args:
+            z: Previous z estimate
+            v_residual: H^T(v - u2)
+            HtH: |H|^2 in frequency domain
+            rho1, rho2: ADMM penalty parameters
+        """
+        # Frequency domain solution
+        rhs = jnp.fft.fftn(rho1 * z + rho2 * v_residual, axes=(-2, -1))
+        lhs = rho1 * HtH + rho2
+        x_fft = rhs / (lhs + 1e-8)
+        x = jnp.fft.ifftn(x_fft, axes=(-2, -1)).real
+        return x
+
+
+class ADMMVUpdate(nn.Module):
+    """V-update step in ADMM (data fidelity term)."""
+    
+    @nn.compact
+    def __call__(self, Hx_plus_u, y, rho2):
+        """
+        Gaussian noise model: v = (rho2*(Hx+u2) + y) / (1 + rho2)
+        
+        Args:
+            Hx_plus_u: H*x + u2
+            y: Observed noisy image
+            rho2: ADMM penalty parameter
+        """
+        return (rho2 * Hx_plus_u + y) / (1.0 + rho2)
+
+
+class ADMMZUpdate(nn.Module):
+    """Z-update step in ADMM using learned denoiser (proximal operator)."""
+    features: Tuple[int, ...] = (32, 64, 128, 64, 32)
+    
+    @nn.compact
+    def __call__(self, x_plus_u, deterministic: bool = False):
+        """
+        Learn the proximal operator: z = prox(x + u1)
+        
+        This is a simple CNN denoiser without aggressive downsampling.
+        """
+        input_x = x_plus_u
+        
+        # Simple convolutional path at full resolution (no pooling)
+        x = input_x
+        for feat in self.features:
+            x = nn.Conv(feat, (3, 3), padding='SAME')(x)
+            x = nn.GroupNorm(num_groups=min(feat // 4, 32))(x)
+            x = nn.elu(x)
+        
+        # Output convolution
+        x = nn.Conv(input_x.shape[-1], (1, 1), padding='SAME')(x)
+        
+        # Residual connection - shapes guaranteed to match
+        return input_x + x
+
+
+class HyperparameterNet(nn.Module):
+    """
+    Learns optimal ADMM hyperparameters (rho1, rho2) for each iteration.
+    
+    This network analyzes the PSF and noise level to adaptively set
+    the penalty parameters for each ADMM iteration.
+    """
+    n_iters: int
+    
+    @nn.compact
+    def __call__(self, psf_image):
+        """
+        Args:
+            psf_image: PSF image [batch, H, W, 1]
+        Returns:
+            (rho1_values, rho2_values): Penalty parameters for each iteration
+        """
+        # Extract features from PSF
+        x = psf_image
+        x = nn.Conv(16, (3, 3), padding='SAME')(x)
+        x = nn.elu(x)
+        x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
+        
+        x = nn.Conv(32, (3, 3), padding='SAME')(x)
+        x = nn.elu(x)
+        x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
+        
+        x = nn.Conv(64, (3, 3), padding='SAME')(x)
+        x = nn.elu(x)
+        
+        # Global pooling
+        x = jnp.mean(x, axis=(1, 2))  # [batch, 64]
+        
+        # Predict hyperparameters
+        x = nn.Dense(128)(x)
+        x = nn.elu(x)
+        x = nn.Dense(self.n_iters * 2)(x)
+        x = nn.softplus(x) + 0.01  # Ensure positive values
+        
+        # Split into rho1 and rho2 for each iteration
+        rho1 = x[:, :self.n_iters]
+        rho2 = x[:, self.n_iters:]
+        
+        return rho1, rho2
+
+
+class UnrolledADMM(nn.Module):
+    """
+    Unrolled ADMM network for PSF deconvolution.
+    
+    This implements an unrolled optimization algorithm where each ADMM iteration
+    is a layer in the network. The proximal operators (especially Z-update) are
+    replaced with learned CNNs.
+    
+    Args:
+        n_iters: Number of ADMM iterations (2, 4, or 8)
+        learn_hyperparams: Whether to learn rho1, rho2 or use fixed values
+        z_features: Architecture for Z-update CNN
+    """
+    n_iters: int = 8
+    learn_hyperparams: bool = True
+    z_features: Tuple[int, ...] = (32, 64, 128, 64, 32)
+    output_channels: int = 1
+    
+    def setup(self):
+        # ADMM update modules
+        self.x_update = ADMMXUpdate()
+        self.v_update = ADMMVUpdate()
+        
+        # Z-update (learned denoiser/regularizer) - separate for each iteration
+        self.z_updates = [ADMMZUpdate(self.z_features) for _ in range(self.n_iters)]
+        
+        # Hyperparameter network
+        if self.learn_hyperparams:
+            self.hyperparam_net = HyperparameterNet(self.n_iters)
+    
+    def init_x_wiener(self, y, H, Ht, HtH):
+        """Initialize x using Wiener deconvolution."""
+        rhs = jnp.fft.fftn(jnp.fft.ifftn(Ht * jnp.fft.fftn(y, axes=(-2, -1)), axes=(-2, -1)).real, axes=(-2, -1))
+        lhs = HtH + 0.01
+        x0 = jnp.fft.ifftn(rhs / lhs, axes=(-2, -1)).real
+        return jnp.clip(x0, 0, None)
+    
+    def psf_to_otf(self, psf, target_shape):
+        """Convert PSF to OTF (Optical Transfer Function)."""
+        # Pad PSF to target shape
+        pad_h = target_shape[1] - psf.shape[1]
+        pad_w = target_shape[2] - psf.shape[2]
+        
+        psf_padded = jnp.pad(psf, 
+                            ((0, 0), 
+                             (pad_h//2, pad_h - pad_h//2),
+                             (pad_w//2, pad_w - pad_w//2),
+                             (0, 0)))
+        
+        # FFT shift and transform
+        H = jnp.fft.fftn(jnp.fft.ifftshift(psf_padded, axes=(1, 2)), axes=(1, 2))
+        return H
+    
+    @nn.compact
+    def __call__(self, galaxy_image, psf_image, deterministic: bool = False):
+        """
+        Forward pass through unrolled ADMM.
+        
+        Args:
+            galaxy_image: Observed galaxy [batch, H, W, 1]
+            psf_image: PSF [batch, H, W, 1]
+            deterministic: Training mode flag
+            
+        Returns:
+            Deconvolved galaxy image
+        """
+        # Ensure proper dimensions
+        if galaxy_image.ndim == 3:
+            galaxy_image = jnp.expand_dims(galaxy_image, axis=-1)
+        if psf_image.ndim == 3:
+            psf_image = jnp.expand_dims(psf_image, axis=-1)
+        
+        y = galaxy_image
+        batch_size = y.shape[0]
+        
+        # Compute PSF in frequency domain
+        H = self.psf_to_otf(psf_image, y.shape)
+        Ht = jnp.conj(H)
+        HtH = jnp.abs(H) ** 2
+        
+        # Learn or use fixed hyperparameters
+        if self.learn_hyperparams:
+            rho1_all, rho2_all = self.hyperparam_net(psf_image)
+        else:
+            rho1_all = jnp.ones((batch_size, self.n_iters)) * 0.5
+            rho2_all = jnp.ones((batch_size, self.n_iters)) * 0.5
+        
+        # Initialize ADMM variables
+        x = self.init_x_wiener(y, H, Ht, HtH)
+        z = x
+        u1 = jnp.zeros_like(x)
+        u2 = jnp.zeros_like(y)
+        
+        # Unrolled ADMM iterations
+        for iter_idx in range(self.n_iters):
+            # Get hyperparameters for this iteration
+            rho1 = rho1_all[:, iter_idx:iter_idx+1, None, None]
+            rho2 = rho2_all[:, iter_idx:iter_idx+1, None, None]
+            
+            # V-update (data fidelity)
+            Hx = jnp.fft.ifftn(H * jnp.fft.fftn(x, axes=(-2, -1)), axes=(-2, -1)).real
+            v = self.v_update(Hx + u2, y, rho2)
+            
+            # Z-update (learned regularizer)
+            z = self.z_updates[iter_idx](x + u1, deterministic=deterministic)
+            
+            # X-update (consistency)
+            v_residual = jnp.fft.ifftn(Ht * jnp.fft.fftn(v - u2, axes=(-2, -1)), axes=(-2, -1)).real
+            x = self.x_update(z - u1, v_residual, HtH, rho1, rho2)
+            
+            # Dual variable updates
+            u1 = u1 + x - z
+            u2 = u2 + Hx - v
+        
+        return x
+
+
+class UnrolledADMM_2Layer(UnrolledADMM):
+    """2-layer unrolled ADMM variant (fast inference)."""
+    n_iters: int = 2
+    z_features: Tuple[int, ...] = (32, 64, 32)  # Lighter architecture
+
+
+class UnrolledADMM_4Layer(UnrolledADMM):
+    """4-layer unrolled ADMM variant (balanced performance)."""
+    n_iters: int = 4
+    z_features: Tuple[int, ...] = (32, 64, 128, 64, 32)
+
+
+class UnrolledADMM_8Layer(UnrolledADMM):
+    """8-layer unrolled ADMM variant (maximum quality)."""
+    n_iters: int = 8
+    z_features: Tuple[int, ...] = (32, 64, 128, 256, 128, 64, 32)
