@@ -64,7 +64,6 @@ ShearNet/
 ├── scripts/        # Setup scripts
 ├── Makefile        # Installation
 └── pyproject.toml  # Dependencies
-
 ```
 
 ## Python API

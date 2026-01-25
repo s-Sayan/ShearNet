@@ -40,7 +40,7 @@ evaluation:
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "first_validation_test"
+  model_name: "first_validation_test_4_params"
   
 # Plotting configuration
 plotting:

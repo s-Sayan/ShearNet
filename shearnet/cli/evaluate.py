@@ -10,6 +10,7 @@ from astropy.table import Table
 import optax
 import time
 from flax.training import checkpoints, train_state
+from datetime import datetime
 
 from ..config.config_handler import Config
 from ..core.dataset import generate_dataset, split_combined_images
@@ -711,23 +712,54 @@ def save_evaluation_to_fits(
     
     Structure:
     - HDU 0 (Primary): Metadata header
-    - HDU 1: Main catalog table
+    - HDU 1 (CATALOG): Scalar measurements table
+    - HDU 2 (CLEAN_IMAGES): True galaxy images without PSF/noise (N, H, W)
+    - HDU 3 (GALAXY_IMAGES): Observed galaxy images (N, H, W)
+    - HDU 4 (PSF_IMAGES): PSF images (N, H, W)
+    - HDU 5 (NOISE_IMAGES): Noise realizations (N, H, W)
+    - HDU 6 (WEIGHT_MAPS): Weight maps (N, H, W)
     """
     
-    # Prepare data for catalog table
     n_samples = len(test_labels)
-    npix = test_galaxy_images.shape[1]  # Should be 53
+    npix = test_galaxy_images.shape[1]
     
-    # Flatten images for storage
-    galaxy_images_flat = test_galaxy_images.reshape(n_samples, -1)
-    psf_images_flat = test_psf_images.reshape(n_samples, -1) if test_psf_images is not None else None
+    print(f"\n{BOLD}{CYAN}Creating FITS file with comprehensive evaluation data...{END}")
     
-    # Extract clean images and response images from observations
-    clean_images = np.array([obs.meta['clean_image'].flatten() for obs in test_obs])
-    e1_pos = np.array([obs.meta['e1_positive'].flatten() for obs in test_obs])
-    e1_neg = np.array([obs.meta['e1_negative'].flatten() for obs in test_obs])
-    e2_pos = np.array([obs.meta['e2_positive'].flatten() for obs in test_obs])
-    e2_neg = np.array([obs.meta['e2_negative'].flatten() for obs in test_obs])
+    # ========== HDU 0: Primary Header with Metadata ==========
+    primary_hdu = fits.PrimaryHDU()
+    
+    # Dataset parameters
+    primary_hdu.header['NSAMPLES'] = (n_samples, 'Number of galaxies')
+    primary_hdu.header['NPIX'] = (npix, 'Image stamp size (pixels)')
+    primary_hdu.header['SCALE'] = (config['pixel_size'], 'Pixel scale (arcsec/pixel)')
+    
+    # Simulation parameters
+    primary_hdu.header['PSF_SIG'] = (config['psf_sigma'], 'PSF sigma')
+    primary_hdu.header['NSE_SD'] = (config['nse_sd'], 'Noise standard deviation')
+    primary_hdu.header['EXP'] = (config['exp'], 'Experiment type')
+    primary_hdu.header['SEED'] = (config['seed'], 'Random seed')
+    
+    # Model information
+    primary_hdu.header['MODELNAM'] = (config['model_name'], 'Model name')
+    primary_hdu.header['MODELTYP'] = (config['nn'], 'Model architecture type')
+    
+    # PSF shear information (if applicable)
+    if config.get('apply_psf_shear', False):
+        primary_hdu.header['PSFSHEAR'] = (True, 'PSF shear applied')
+        primary_hdu.header['PSFSHRNG'] = (config['psf_shear_range'], 'PSF shear range')
+    else:
+        primary_hdu.header['PSFSHEAR'] = (False, 'PSF shear not applied')
+    
+    # Processing flags
+    primary_hdu.header['PROCPSF'] = (config['process_psf'], 'Separate PSF processing')
+    
+    # Timestamp
+    primary_hdu.header['DATE'] = (datetime.now().isoformat(), 'File creation date')
+    
+    primary_hdu.header['COMMENT'] = 'ShearNet evaluation dataset'
+    primary_hdu.header['COMMENT'] = 'Contains all data needed for shear estimation analysis'
+    
+    # ========== HDU 1: Catalog Table with Scalar Data ==========
     
     # Extract SNR and jacobian info
     snr_values = np.array([obs.meta.get('snr', obs.get_s2n()) for obs in test_obs])
@@ -737,17 +769,20 @@ def save_evaluation_to_fits(
     
     # Build catalog table
     catalog_data = {
+        # Galaxy ID
+        'ID': np.arange(n_samples),
+        
         # True values
         'TRUE_G1': test_labels[:, 0],
         'TRUE_G2': test_labels[:, 1],
-        'TRUE_SIGMA': test_labels[:, 2] if test_labels.shape[1] > 2 else np.zeros(test_labels[:, 0].shape),
-        'TRUE_FLUX': test_labels[:, 3] if test_labels.shape[1] > 3 else np.zeros(test_labels[:, 0].shape),
+        'TRUE_SIGMA': test_labels[:, 2] if test_labels.shape[1] > 2 else np.zeros(n_samples),
+        'TRUE_FLUX': test_labels[:, 3] if test_labels.shape[1] > 3 else np.zeros(n_samples),
         
         # ShearNet predictions
         'NN_G1': nn_predictions['all_preds'][:, 0],
         'NN_G2': nn_predictions['all_preds'][:, 1],
-        'NN_SIGMA': nn_predictions['all_preds'][:, 2] if nn_predictions['all_preds'].shape[1] > 2 else np.zeros(nn_predictions['all_preds'][:, 0].shape),
-        'NN_FLUX': nn_predictions['all_preds'][:, 3] if nn_predictions['all_preds'].shape[1] > 3 else np.zeros(nn_predictions['all_preds'][:, 0].shape),
+        'NN_SIGMA': nn_predictions['all_preds'][:, 2] if nn_predictions['all_preds'].shape[1] > 2 else np.zeros(n_samples),
+        'NN_FLUX': nn_predictions['all_preds'][:, 3] if nn_predictions['all_preds'].shape[1] > 3 else np.zeros(n_samples),
         
         # Observation properties
         'SNR': snr_values,
@@ -755,51 +790,101 @@ def save_evaluation_to_fits(
         'JAC_ROW': jac_row,
         'JAC_COL': jac_col,
         
-        # Images (flattened)
-        'GALAXY_IMAGE': galaxy_images_flat,
-        'CLEAN_IMAGE': clean_images,
-        'E1_POS_IMAGE': e1_pos,
-        'E1_NEG_IMAGE': e1_neg,
-        'E2_POS_IMAGE': e2_pos,
-        'E2_NEG_IMAGE': e2_neg,
+        # Per-galaxy flags
+        'FLAGS': np.zeros(n_samples, dtype=np.int32),  # Can be used to flag problematic galaxies
     }
     
-    # Add PSF images if available
-    if psf_images_flat is not None:
-        catalog_data['PSF_IMAGE'] = psf_images_flat
-    print(ngmix_predictions)
     # Add NGmix predictions if available
-    if ngmix_predictions is not None:
-        catalog_data['NGMIX_G1'] = ngmix_predictions['preds'][:, 0]
-        catalog_data['NGMIX_G2'] = ngmix_predictions['preds'][:, 1]
-        catalog_data['NGMIX_SIGMA'] = ngmix_predictions['preds'][:, 2] if ngmix_predictions['preds'].shape[1] > 2 else np.zeros(ngmix_predictions['preds'][:, 0].shape)
-        catalog_data['NGMIX_FLUX'] = ngmix_predictions['preds'][:, 3] if ngmix_predictions['preds'].shape[1] > 3 else np.zeros(ngmix_predictions['preds'][:, 0].shape)
+    if ngmix_predictions is not None and ngmix_predictions.get('preds') is not None:
+        preds = ngmix_predictions['preds']
+        catalog_data['NGMIX_G1'] = preds[:, 0]
+        catalog_data['NGMIX_G2'] = preds[:, 1]
+        catalog_data['NGMIX_SIGMA'] = preds[:, 2] if preds.shape[1] > 2 else np.zeros(n_samples)
+        catalog_data['NGMIX_FLUX'] = preds[:, 3] if preds.shape[1] > 3 else np.zeros(n_samples)
+        
+        # Flag NaN predictions
+        nan_mask = np.any(np.isnan(preds), axis=1)
+        catalog_data['FLAGS'][nan_mask] |= 1  # Bit 0: NGmix failed
     
     catalog_table = Table(catalog_data)
-    
-    # Create primary HDU with metadata
-    primary_hdu = fits.PrimaryHDU()
-    primary_hdu.header['NSAMPLES'] = n_samples
-    primary_hdu.header['NPIX'] = npix
-    primary_hdu.header['SCALE'] = config['pixel_size']
-    primary_hdu.header['PSF_SIG'] = config['psf_sigma']
-    primary_hdu.header['NSE_SD'] = config['nse_sd']
-    primary_hdu.header['MODELNAM'] = config['model_name']
-    primary_hdu.header['SEED'] = config['seed']
-    primary_hdu.header['EXP'] = config['exp']
-    primary_hdu.header['COMMENT'] = 'ShearNet evaluation dataset'
-    
-    # Create catalog binary table HDU
     catalog_hdu = fits.BinTableHDU(catalog_table, name='CATALOG')
     
-    # Write FITS file
-    hdul = fits.HDUList([primary_hdu, catalog_hdu])
+    # Add column descriptions
+    catalog_hdu.header['TTYPE1'] = ('ID', 'Galaxy identifier')
+    catalog_hdu.header['TTYPE2'] = ('TRUE_G1', 'True shear component 1')
+    catalog_hdu.header['TTYPE3'] = ('TRUE_G2', 'True shear component 2')
+    catalog_hdu.header['TTYPE4'] = ('NN_G1', 'ShearNet predicted g1')
+    catalog_hdu.header['TTYPE5'] = ('NN_G2', 'ShearNet predicted g2')
+    catalog_hdu.header['COMMENT'] = 'Scalar measurements for each galaxy'
+    
+    # ========== HDU 2-6: Image Extensions ==========
+    
+    # Clean galaxy images (no PSF, no noise) - THE TRUTH
+    clean_images = np.array([obs.meta['clean_image'] for obs in test_obs])
+    clean_hdu = fits.ImageHDU(clean_images, name='CLEAN_IMAGES')
+    clean_hdu.header['EXTNAME'] = 'CLEAN_IMAGES'
+    clean_hdu.header['COMMENT'] = 'True galaxy images (no PSF, no noise)'
+    clean_hdu.header['BUNIT'] = 'counts'
+    
+    # Observed galaxy images (with PSF and noise) - WHAT WE MEASURE
+    galaxy_hdu = fits.ImageHDU(test_galaxy_images, name='GALAXY_IMAGES')
+    galaxy_hdu.header['EXTNAME'] = 'GALAXY_IMAGES'
+    galaxy_hdu.header['COMMENT'] = 'Observed galaxy images (PSF-convolved + noise)'
+    galaxy_hdu.header['BUNIT'] = 'counts'
+    
+    # PSF images
+    if test_psf_images is not None:
+        psf_hdu = fits.ImageHDU(test_psf_images, name='PSF_IMAGES')
+        psf_hdu.header['EXTNAME'] = 'PSF_IMAGES'
+        psf_hdu.header['COMMENT'] = 'Point Spread Function images'
+        psf_hdu.header['BUNIT'] = 'normalized'
+    else:
+        # If PSF images not provided, extract from observations
+        psf_images = np.array([obs.psf.image for obs in test_obs])
+        psf_hdu = fits.ImageHDU(psf_images, name='PSF_IMAGES')
+        psf_hdu.header['EXTNAME'] = 'PSF_IMAGES'
+        psf_hdu.header['COMMENT'] = 'Point Spread Function images'
+        psf_hdu.header['BUNIT'] = 'normalized'
+    
+    # Noise realizations
+    noise_images = np.array([obs.noise for obs in test_obs])
+    noise_hdu = fits.ImageHDU(noise_images, name='NOISE_IMAGES')
+    noise_hdu.header['EXTNAME'] = 'NOISE_IMAGES'
+    noise_hdu.header['COMMENT'] = 'Noise realizations added to images'
+    noise_hdu.header['BUNIT'] = 'counts'
+    
+    # Weight maps
+    weight_maps = np.array([obs.weight for obs in test_obs])
+    weight_hdu = fits.ImageHDU(weight_maps, name='WEIGHT_MAPS')
+    weight_hdu.header['EXTNAME'] = 'WEIGHT_MAPS'
+    weight_hdu.header['COMMENT'] = 'Inverse variance weight maps'
+    weight_hdu.header['BUNIT'] = '1/counts^2'
+    
+    # ========== Construct HDU List ==========
+    hdul = fits.HDUList([
+        primary_hdu,      # HDU 0: Metadata
+        catalog_hdu,      # HDU 1: Scalar data table
+        clean_hdu,        # HDU 2: Clean galaxies (truth)
+        galaxy_hdu,       # HDU 3: Observed galaxies (measurement)
+        psf_hdu,          # HDU 4: PSF images
+        noise_hdu,        # HDU 5: Noise realizations
+        weight_hdu,       # HDU 6: Weight maps
+    ])
+    
+    # Write to file
     hdul.writeto(output_path, overwrite=True)
     
+    # Print summary
     print(f"\n{GREEN}✓ Evaluation data saved to: {output_path}{END}")
-    print(f"{CYAN}FITS structure:{END}")
-    print(f"  HDU 0 (Primary): Metadata")
-    print(f"  HDU 1 (CATALOG): {n_samples} galaxies with images and predictions")
+    print(f"\n{CYAN}FITS structure:{END}")
+    print(f"  HDU 0 (Primary): Metadata header")
+    print(f"  HDU 1 (CATALOG): {n_samples} galaxies with measurements")
+    print(f"  HDU 2 (CLEAN_IMAGES): True images {clean_images.shape}")
+    print(f"  HDU 3 (GALAXY_IMAGES): Observed images {test_galaxy_images.shape}")
+    print(f"  HDU 4 (PSF_IMAGES): PSF images")
+    print(f"  HDU 5 (NOISE_IMAGES): Noise realizations {noise_images.shape}")
+    print(f"  HDU 6 (WEIGHT_MAPS): Weight maps {weight_maps.shape}")
+    print(f"\n{CYAN}File size: {os.path.getsize(output_path) / 1024**2:.2f} MB{END}")
 
 def main():
     """Main evaluation function."""

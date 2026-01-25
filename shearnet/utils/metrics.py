@@ -135,7 +135,7 @@ def loss_fn_ngmix(obs_list, labels, seed=1234, psf_model='gauss', gal_model='gau
     preds = ngmix_pred(datalist)
 
     pred_filtered, labels_filtered = remove_nan_preds(preds, labels)
-    pred_filtered = pred_filtered[:, 0:3]
+    pred_filtered = pred_filtered[:, 0:4]
     
     # Combined loss
     loss = optax.l2_loss(pred_filtered, labels_filtered).mean()
@@ -146,7 +146,7 @@ def loss_fn_ngmix(obs_list, labels, seed=1234, psf_model='gauss', gal_model='gau
         'g2': optax.l2_loss(pred_filtered[:, 1], labels_filtered[:, 1]).mean(),
         'g1g2_combined': optax.l2_loss(pred_filtered[:, :2], labels_filtered[:, :2]).mean(),  # Combined g1,g2
         'sigma': optax.l2_loss(pred_filtered[:, 2], labels_filtered[:, 2]).mean(),
-        #'flux': optax.l2_loss(pred_filtered[:, 3], labels_filtered[:, 3]).mean()
+        'flux': optax.l2_loss(pred_filtered[:, 3], labels_filtered[:, 3]).mean()
     }
 
     # Per-label biases
@@ -155,7 +155,7 @@ def loss_fn_ngmix(obs_list, labels, seed=1234, psf_model='gauss', gal_model='gau
         'g2': (pred_filtered[:, 1] - labels_filtered[:, 1]).mean(),
         'g1g2_combined': (pred_filtered[:, :2] - labels_filtered[:, :2]).mean(),  # Average bias for g1,g2
         'sigma': (pred_filtered[:, 2] - labels_filtered[:, 2]).mean(),
-        #'flux': (pred_filtered[:, 3] - labels_filtered[:, 3]).mean()
+        'flux': (pred_filtered[:, 3] - labels_filtered[:, 3]).mean()
     }
 
     return loss, preds, loss_per_label, bias, bias_per_label
