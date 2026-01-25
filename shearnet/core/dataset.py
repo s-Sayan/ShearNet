@@ -69,7 +69,7 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='exp', exp='
             images.append(galaxy_images)
 
         # temporarily removed `, sigma, flux` from the append
-        labels.append(np.array([g1, g2, sigma], dtype=np.float32))
+        labels.append(np.array([g1, g2, sigma, flux], dtype=np.float32))
         obs.append(obj_obs)
     
     if return_obs:
