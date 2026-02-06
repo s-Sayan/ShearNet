@@ -456,5 +456,5 @@ class ForkLike(nn.Module):
         x = nn.relu(x)
 
         # Final predictions of [g1, g2, sigma, flux]
-        x = nn.Dense(4)(x) # temporary reduce to 2 (just g1 and g2)
+        x = nn.Dense(2)(x) # temporary reduce to 2 (just g1 and g2)
         return x
