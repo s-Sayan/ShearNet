@@ -8,6 +8,7 @@ from tqdm import tqdm
 from ..methods.ngmix import g1_g2_sigma_sample
 import galsim.des
 from astropy.table import Table
+from ..utils.metrics import get_admoms_ngmix_fit
 
 XIMAGE_SIZE, YIMAGE_SIZE = 9600, 6422 # Usual size of SuperBIT single exposures in pixel unit
 
@@ -37,8 +38,8 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='exp', exp='
         psf_files = None
     for i in tqdm(range(samples)):
         g1, g2 = g1_list[i], g2_list[i]
-        #sigma = 0.5
-        sigma = sigma_list[i]
+        sigma = 0.5
+        #sigma = sigma_list[i]
         #g1, g2 = np.random.uniform(-0.5, 0.5, size=2)  # Random shears
         #sigma = np.random.uniform(0.5, 1.5)  # Random sigma  
         flux = 12258.97
@@ -69,7 +70,7 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='exp', exp='
             images.append(galaxy_images)
 
         # temporarily removed `, sigma, flux` from the append
-        labels.append(np.array([g1, g2, sigma, flux], dtype=np.float32))
+        labels.append(np.array([g1, g2], dtype=np.float32))
         obs.append(obj_obs)
     
     if return_obs:
@@ -200,6 +201,14 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
         weight=np.ones_like(psf_im) / target_psf_noise**2,
         jacobian=psf_jac,
     )
+    admom_psf_measurement = get_admoms_ngmix_fit(obs=psf_obs, reduced=True)
+    psf_obs.update_meta_data({
+        'e1': admom_psf_measurement['e1'],
+        'e2': admom_psf_measurement['e2'],
+        'T': admom_psf_measurement['T'],
+        'admom_flags': admom_psf_measurement['flags']
+    })
+    
     obj_obs = ngmix.Observation(
         image=obj_im + nse,
         noise=nse_im,
