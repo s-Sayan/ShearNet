@@ -257,7 +257,7 @@ def process_obs(obs, boot):
     dlist = [make_struct(res=sres, obs=obsdict[stype], shear_type=stype) for stype, sres in resdict.items()]
     return np.hstack(dlist)
 
-def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_pars= {'psf': 'dilate', 'mcal_shear': 0.01}):
+def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_pars= {'psf': 'dilate', 'mcal_shear': 0.01}, weight_fwhm=1.0):
     """
     Multiprocessing version of original _fit_one()
 
@@ -268,6 +268,7 @@ def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_p
     - obslist: Observation list for MEDS object of given ID
     - prior: ngmix mcal priors
     - mcal_pars: mcal running parameters
+    - weight_fwhm is just for gaussmom psf and gal models
 
     TO DO: add a label indicating whether the galaxy passed the selection
     cuts for each shear step (i.e. no_shear,1p,1m,2p,2m).
@@ -276,35 +277,50 @@ def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_p
     import multiprocessing as mp
     mp.set_start_method('spawn', force=True)
     
-    # get image pixel scale (assumes constant across list)
+     # Get image pixel scale
     jacobian = obslist[0]._jacobian
-    Tguess = 4*jacobian.get_scale()**2
-    ntry = 20
-    lm_pars = {'maxfev':2000, 'xtol':5.0e-5, 'ftol':5.0e-5}
-    psf_lm_pars={'maxfev': 4000, 'xtol':5.0e-5,'ftol':5.0e-5}
+    scale = jacobian.get_scale()
+    
+    # GaussMom setup (if using moments-based measurement)
+    if gal_model == 'gaussmom':
+        # FWHM of Gaussian weight function (in arcsec, typically)
+        # Rule of thumb: ~1-2x your typical PSF FWHM
+        weight_fwhm = 1.2  # You can adjust this
+        fitter = ngmix.gaussmom.GaussMom(fwhm=weight_fwhm)
+        runner = ngmix.runners.Runner(fitter=fitter)
+    else:
+        # Original ML fitting setup
+        Tguess = 4 * scale**2
+        ntry = 20
+        lm_pars = {'maxfev': 2000, 'xtol': 5.0e-5, 'ftol': 5.0e-5}
+        fitter = ngmix.fitting.Fitter(model=gal_model, prior=prior, fit_pars=lm_pars)
+        guesser = ngmix.guessers.TPSFFluxAndPriorGuesser(rng=rng, T=Tguess, prior=prior)
+        runner = ngmix.runners.Runner(fitter=fitter, guesser=guesser, ntry=ntry)
 
-    fitter = ngmix.fitting.Fitter(model=gal_model, prior=prior, fit_pars=lm_pars)
-    guesser = ngmix.guessers.TPSFFluxAndPriorGuesser(rng=rng, T=Tguess, prior=prior)
-
-    # psf fitting
-    if 'em' in psf_model:
-        em_pars={'tol': 1.0e-6, 'maxiter': 50000}
+    # PSF fitting setup
+    if psf_model == 'gaussmom':
+        weight_fwhm = 1.2  # Same or different from galaxy weight
+        psf_fitter = ngmix.gaussmom.GaussMom(fwhm=weight_fwhm)
+        psf_runner = ngmix.runners.PSFRunner(fitter=psf_fitter)
+    elif 'em' in psf_model:
+        em_pars = {'tol': 1.0e-6, 'maxiter': 50000}
         psf_ngauss = get_em_ngauss(psf_model)
         psf_fitter = ngmix.em.EMFitter(maxiter=em_pars['maxiter'], tol=em_pars['tol'])
         psf_guesser = ngmix.guessers.GMixPSFGuesser(rng=rng, ngauss=psf_ngauss)
+        psf_runner = ngmix.runners.PSFRunner(fitter=psf_fitter, guesser=psf_guesser, ntry=20)
     elif 'coellip' in psf_model:
+        psf_lm_pars = {'maxfev': 4000, 'xtol': 5.0e-5, 'ftol': 5.0e-5}
         psf_ngauss = get_coellip_ngauss(psf_model)
         psf_fitter = ngmix.fitting.CoellipFitter(ngauss=psf_ngauss, fit_pars=psf_lm_pars)
         psf_guesser = ngmix.guessers.CoellipPSFGuesser(rng=rng, ngauss=psf_ngauss)
+        psf_runner = ngmix.runners.PSFRunner(fitter=psf_fitter, guesser=psf_guesser, ntry=20)
     elif psf_model == 'gauss':
+        psf_lm_pars = {'maxfev': 4000, 'xtol': 5.0e-5, 'ftol': 5.0e-5}
         psf_fitter = ngmix.fitting.Fitter(model='gauss', fit_pars=psf_lm_pars)
         psf_guesser = ngmix.guessers.SimplePSFGuesser(rng=rng)
+        psf_runner = ngmix.runners.PSFRunner(fitter=psf_fitter, guesser=psf_guesser, ntry=20)
     else:
-        raise ValueError('psf_model must be one of emn, coellipn, or gauss')
-
-    psf_runner = ngmix.runners.PSFRunner(fitter=psf_fitter, guesser=psf_guesser, ntry=ntry)
-
-    runner = ngmix.runners.Runner(fitter=fitter, guesser=guesser, ntry=ntry)
+        raise ValueError('psf_model must be gaussmom, emN, coellipN, or gauss')
 
     #types = ['noshear', '1p', '1m', '2p', '2m']
     psf = mcal_pars['psf']
