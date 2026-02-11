@@ -327,14 +327,24 @@ def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_p
 
     return data_list
 
-def ngmix_pred(data_list):
+def ngmix_pred(data_list, return_bad_indices=False):
     g1 = np.array([d[0][3][0] for d in data_list])
     g2 = np.array([d[0][3][1] for d in data_list])
     T = np.array([d[0][4] for d in data_list])
+    
+    # Detect bad T values
+    bad_mask = (T <= 0) | np.isnan(T)
+    bad_indices = np.where(bad_mask)[0]
+    
     # T = 2 * sigma**2
-    sigma = np.sqrt(T / 2)
+    with np.errstate(invalid='ignore'):  # Suppress warning during calculation
+        sigma = np.sqrt(T / 2)
+    
     flux = np.array([d[0][5] for d in data_list])
     preds = np.vstack((g1, g2, sigma, flux)).T
+    
+    if return_bad_indices:
+        return preds, bad_indices
     return preds
 
 def mp_fit_one_single(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_pars= {'psf': 'dilate', 'mcal_shear': 0.01}):
