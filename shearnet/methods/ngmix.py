@@ -307,7 +307,6 @@ def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_p
         raise ValueError('psf_model must be one of emn, coellipn, or gauss')
 
     psf_runner = ngmix.runners.PSFRunner(fitter=psf_fitter, guesser=psf_guesser, ntry=ntry)
-
     runner = ngmix.runners.Runner(fitter=fitter, guesser=guesser, ntry=ntry)
 
     #types = ['noshear', '1p', '1m', '2p', '2m']
@@ -333,7 +332,6 @@ def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_p
         for start in range(0, n_total, chunk_size):
             end = min(start + chunk_size, n_total)
             chunk = obslist[start:end]
-            print(f"  Processing objects {start}–{end-1} (chunk size={len(chunk)})")
 
             chunk_results = pool.starmap(
                 process_obs,
@@ -417,7 +415,7 @@ def mp_fit_one_single(obslist, prior, rng, psf_model='gauss', gal_model='gauss',
     data_list  = []
     resdict_list = []
     obsdict_list = []
-    for i in tqdm(range(len(obslist))):
+    for i in range(len(obslist)):
         resdict, obsdict = boot.go(obslist[i])
         dlist = []
         for stype, sres in resdict.items():
@@ -444,7 +442,7 @@ def get_memory_usage(obj):
 def response_calculation(data_list, mcal_shear):
     r11_list, r22_list, r12_list, r21_list, c1_list, c2_list, c1_psf_list, c2_psf_list = [], [], [], [], [], [], [], []
 
-    for i in tqdm(range(len(data_list))):
+    for i in range(len(data_list)):
         g_noshear = data_list[i][0][3]
         g_1p = data_list[i][1][3]
         g_1m = data_list[i][2][3]
