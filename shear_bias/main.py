@@ -127,8 +127,18 @@ def make_data(rng, noise, shear_true):
     psf = galsim.Gaussian(fwhm=psf_fwhm)
 
     obj0 = galsim.Exponential(half_light_radius=gal_hlr, flux=gal_flux).shear(q=q, beta=phi)
-    objp = obj0.shear(g1=shear_true, g2=0.0).shift(dx=dx, dy=dy)
-    objm = obj0.shear(g1=-shear_true, g2=0.0).shift(dx=dx, dy=dy)
+    objp = obj0.shear(g1=shear_true, g2=0.0)
+    objm = obj0.shear(g1=-shear_true, g2=0.0)
+
+    # Inferring input theory values from galsim jacobians
+    g1_th_p, g2_th_p, _, _, _ = utils.g_from_gal_jac(objp)
+    g1_th_m, g2_th_m, _, _, _ = utils.g_from_gal_jac(objm)
+
+    g_th_p = np.array([g1_th_p, g2_th_p])
+    g_th_m = np.array([g1_th_m, g2_th_m])
+
+    objp = objp.shift(dx=dx, dy=dy)
+    objm = objm.shift(dx=dx, dy=dy)
 
     obj0_psf = galsim.Convolve(psf, obj0)
     objp_psf = galsim.Convolve(psf, objp)
@@ -162,7 +172,7 @@ def make_data(rng, noise, shear_true):
     obsp = ngmix.Observation(im_p, weight=wt, jacobian=jacobian, psf=psf_obs)
     obsm = ngmix.Observation(im_m, weight=wt, jacobian=jacobian, psf=psf_obs)
 
-    return obs0, obsp, obsm
+    return obs0, obsp, obsm, g_th_p, g_th_m
 
 def process_single_object(args):
     i, base_seed, noise, shear_true, state = args
@@ -197,16 +207,16 @@ def process_single_object(args):
         types=TYPES,
     )
 
-    obs0, obsp, obsm = make_data(rng=rng, noise=noise, shear_true=shear_true)
+    obs0, obsp, obsm, g_th_p, g_th_m = make_data(rng=rng, noise=noise, shear_true=shear_true)
 
     if state is not None:
         data_p, g_sn_raw_p = process_obs(obsp, boot, state=state)
         data_m, g_sn_raw_m = process_obs(obsm, boot, state=state)
-        return data_p, data_m, g_sn_raw_p, g_sn_raw_m
+        return data_p, data_m, g_th_p, g_th_m, g_sn_raw_p, g_sn_raw_m,
     else:
         data_p = process_obs(obsp, boot, state=state)
         data_m = process_obs(obsm, boot, state=state)
-        return data_p, data_m
+        return data_p, data_m, g_th_p, g_th_m
 
 
 args = [(i, SEED, NOISE, SHEAR_TRUE, STATE) for i in range(NOBS)]
@@ -216,13 +226,17 @@ with Pool(processes=nproc) as pool:
 
 data_list_p = [r[0] for r in results]
 data_list_m = [r[1] for r in results]
+gth_list_p  = [r[2] for r in results] 
+gth_list_m  = [r[3] for r in results] 
 if STATE is not None:
-    g_sn_raw_list_p = [r[2] for r in results]
-    g_sn_raw_list_m = [r[3] for r in results]
+    g_sn_raw_list_p = [r[4] for r in results]
+    g_sn_raw_list_m = [r[5] for r in results]
 
 tab_p = shear_data_to_table(data_list_p)
 tab_m = shear_data_to_table(data_list_m)
 
+tab_p["g_th"] = np.asarray(gth_list_p)
+tab_m["g_th"] = np.asarray(gth_list_m)
 
 N = len(tab_p)
 
