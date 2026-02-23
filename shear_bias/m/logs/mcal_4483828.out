@@ -1,0 +1,14 @@
+====================================
+SLURM JOB STARTED
+Job ID: 4483828
+Node: d0100
+Start time: Friday 20 February 2026 05:53:26 PM EST
+====================================
+Saved tables to metacal_results.fits
+Shear Bias results for 100000 objects
+m = (-3.802 ± 2.662) × 10⁻³
+c = (2.284 ± 1.041) × 10⁻³
+====================================
+Job finished at: Friday 20 February 2026 06:09:07 PM EST
+Total runtime: 00:15:39 (HH:MM:SS)
+====================================
