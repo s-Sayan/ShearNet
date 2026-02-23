@@ -14,6 +14,29 @@ def get_sn_output(state, obs):
     preds = state.apply_fn(state.params, obs_im, psf_im, deterministic=True)
     return preds
 
+def get_em_ngauss(name):
+    ngauss=int( name[2:] )
+    return ngauss
+
+def get_coellip_ngauss(name):
+    ngauss=int( name[7:] )
+    return ngauss
+
+def get_init_guess(obs):
+    gm = GaussMom(1.2).go(obs)
+    if gm['flags'] == 0:
+        flux_guess = gm['flux']
+        Tguess = gm['T']
+    else:
+        gm = GaussMom(1.2).go(obs.psf)
+        if gm['flags'] == 0:
+            Tguess = 2 * gm['T']
+        else:
+            jacobian = obs._jacobian
+            Tguess = 4*jacobian.get_scale()**2
+        flux_guess = np.sum(obs.image)    
+    return Tguess, flux_guess
+
 def _get_priors(seed):
     rng = np.random.RandomState(seed)
 

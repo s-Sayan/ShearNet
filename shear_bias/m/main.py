@@ -18,13 +18,16 @@ import os
 
 nproc = int(os.environ.get("SLURM_CPUS_PER_TASK", 8))
 
-from helpers_ngmix_mcal import (
+from helpers import (
     _get_priors,
     progress,
     make_struct,
     process_obs,
     shear_data_to_table,
     jackknife_mc_v2,
+    get_em_ngauss,
+    get_coellip_ngauss,
+    get_init_guess,
     superscript,
 )
 
@@ -52,25 +55,6 @@ args = parse_args()
 _config = load_config(args.config)
 
 # ----- Simulation controls -----
-hlr        = _config["simulation"]["hlr"]
-flux       = _config["simulation"]["flux"]
-psf_fwhm   = _config["simulation"]["psf_fwhm"]
-scale      = _config["simulation"]["scale"]
-npix       = _config["simulation"]["npix"]
-nse_sd     = _config["simulation"]["nse_sd"]
-seed       = _config["simulation"]["seed"]
-n_obs      = _config["simulation"]["n_obs"]
-Njack      = _config["simulation"]["Njack"]
-shear_true = _config["simulation"]["shear_true"]    # true applied shear for + and -
-
-# ----- Models -----
-PSF_MODEL = _config["models"]["psf_model"]
-GAL_MODEL = _config["models"]["gal_model"]
-
-# ----- Catalog -----
-COSMOS_CAT_FNAME = _config["catalog"]["cosmos_cat_fname"]
-cosmos_cat = Table.read(COSMOS_CAT_FNAME, format="csv")
-
 SEED = _config["simulation"]["seed"]
 SHEAR_TRUE = _config["simulation"]["shear_true"]
 
@@ -88,6 +72,14 @@ PSF_NPIX = _config["simulation"]["psf_npix"]
 NOBS = _config["simulation"]["n_obs"]
 NJAC = _config["simulation"]["Njack"]
 
+# ----- Models -----
+PSF_MODEL = _config["models"]["psf_model"]
+GAL_MODEL = _config["models"]["gal_model"]
+
+# ----- Catalog -----
+COSMOS_CAT_FNAME = _config["catalog"]["cosmos_cat_fname"]
+cosmos_cat = Table.read(COSMOS_CAT_FNAME, format="csv")
+
 # ========= Output ============
 OUTPUT_FITS = _config["output"]["results_fits"]
 
@@ -95,6 +87,7 @@ TGUESS = 4 * SCALE**2
 NTRY = 20
 LM_PARS = {"maxfev": 2000, "xtol": 5.0e-5, "ftol": 5.0e-5}
 PSF_LM_PARS = {"maxfev": 4000, "xtol": 5.0e-5, "ftol": 5.0e-5}
+EM_PARS={'tol': 1.0e-6, 'maxiter': 50000}
 MCAL_PARS = {"psf": "dilate", "mcal_shear": 0.01}
 TYPES = ["noshear", "1p", "1m"]
 
@@ -180,8 +173,12 @@ def process_single_object(args):
     # independent RNG per worker
     rng = np.random.RandomState(base_seed + i)
 
+    obs0, obsp, obsm, g_th_p, g_th_m = make_data(rng=rng, noise=noise, shear_true=shear_true)
+
     # create priors & runners locally (safe)
     prior = _get_priors(base_seed + i)
+
+    TGUESS, _ = get_init_guess(obs0)
 
     fitter = ngmix.fitting.Fitter(model=GAL_MODEL, prior=prior, fit_pars=LM_PARS)
     guesser = ngmix.guessers.TPSFFluxAndPriorGuesser(
@@ -190,6 +187,19 @@ def process_single_object(args):
 
     psf_fitter = ngmix.fitting.Fitter(model=PSF_MODEL, fit_pars=PSF_LM_PARS)
     psf_guesser = ngmix.guessers.SimplePSFGuesser(rng=rng)
+
+    if 'em' in PSF_MODEL:
+        psf_ngauss = get_em_ngauss(PSF_MODEL)
+        psf_fitter = ngmix.em.EMFitter(maxiter=EM_PARS['maxiter'], tol=EM_PARS['tol'])
+        psf_guesser = ngmix.guessers.GMixPSFGuesser(rng=rng, ngauss=psf_ngauss)
+    elif 'coellip' in PSF_MODEL:
+        psf_ngauss = get_coellip_ngauss(PSF_MODEL)
+        psf_fitter = ngmix.fitting.CoellipFitter(ngauss=psf_ngauss, fit_pars=PSF_LM_PARS)
+        psf_guesser = ngmix.guessers.CoellipPSFGuesser(rng=rng, ngauss=psf_ngauss)
+    elif PSF_MODEL == 'gauss':
+        psf_fitter = ngmix.fitting.Fitter(model='gauss', fit_pars=PSF_LM_PARS)
+        psf_guesser = ngmix.guessers.SimplePSFGuesser(rng=rng)
+
 
     psf_runner = ngmix.runners.PSFRunner(
         fitter=psf_fitter, guesser=psf_guesser, ntry=NTRY
@@ -207,7 +217,6 @@ def process_single_object(args):
         types=TYPES,
     )
 
-    obs0, obsp, obsm, g_th_p, g_th_m = make_data(rng=rng, noise=noise, shear_true=shear_true)
 
     if state is not None:
         data_p, g_sn_raw_p = process_obs(obsp, boot, state=state)
