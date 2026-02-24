@@ -23,7 +23,7 @@ def get_coellip_ngauss(name):
     return ngauss
 
 def get_init_guess(obs):
-    gm = GaussMom(1.2).go(obs)
+    gm = ngmix.gaussmom.GaussMom(1.2).go(obs)
     if gm['flags'] == 0:
         flux_guess = gm['flux']
         Tguess = gm['T']

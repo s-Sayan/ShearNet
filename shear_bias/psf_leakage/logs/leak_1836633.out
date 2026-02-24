@@ -1,0 +1,21 @@
+====================================
+SLURM JOB STARTED
+Job ID: 1836633
+Node: compute-2-06
+Start time: Mon 23 Feb 2026 08:31:13 PM EST
+====================================
+====================================
+Job finished at: Mon 23 Feb 2026 08:53:06 PM EST
+Total runtime: 00:21:53 (HH:MM:SS)
+====================================
+Job ID: 1836633
+Cluster: slurm
+User/Group: adfield/adfield
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 18
+CPU Utilized: 06:07:07
+CPU Efficiency: 93.20% of 06:33:54 core-walltime
+Job Wall-clock time: 00:21:53
+Memory Utilized: 19.78 GB
+Memory Efficiency: 41.21% of 48.00 GB
