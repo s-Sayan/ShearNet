@@ -92,8 +92,18 @@ MCAL_PARS = {"psf": "dilate", "mcal_shear": 0.01}
 TYPES = ["noshear", "1p", "1m"]
 
 # ========== Load up ShearNet state here =========
-# state = 
+#from shearnet.cli.evaluate import initialize_model as _initialize_model, load_config as _eval_load_config
+import jax.numpy as jnp
 
+#eval_args = argparse.Namespace(
+#    model_name="second_validation_test_3_params", config=None, seed=None,
+#    test_samples=None, mcal=False, plot=False, plot_animation=False,
+#    process_psf=None, galaxy_type=None, psf_type=None,
+#    apply_psf_shear=None, psf_shear_range=None
+#)
+#eval_config = _eval_load_config(eval_args)
+#dummy_images = jnp.ones((1, NPIX, NPIX))
+#STATE = _initialize_model(eval_config, dummy_images, dummy_images)
 STATE = None
 
 # ============================================================
@@ -168,7 +178,7 @@ def make_data(rng, noise, shear_true):
     return obs0, obsp, obsm, g_th_p, g_th_m
 
 def process_single_object(args):
-    i, base_seed, noise, shear_true, state = args
+    i, base_seed, noise, shear_true = args
 
     # independent RNG per worker
     rng = np.random.RandomState(base_seed + i)
@@ -218,28 +228,66 @@ def process_single_object(args):
     )
 
 
-    if state is not None:
-        data_p, g_sn_raw_p = process_obs(obsp, boot, state=state)
-        data_m, g_sn_raw_m = process_obs(obsm, boot, state=state)
-        return data_p, data_m, g_th_p, g_th_m, g_sn_raw_p, g_sn_raw_m,
-    else:
-        data_p = process_obs(obsp, boot, state=state)
-        data_m = process_obs(obsm, boot, state=state)
-        return data_p, data_m, g_th_p, g_th_m
-
+    # Always return images so main process can run ShearNet
+    data_p, mcal_images_p = process_obs(obsp, boot, return_images=True)
+    data_m, mcal_images_m = process_obs(obsm, boot, return_images=True)
+    raw_p   = obsp.image.copy()
+    raw_m   = obsm.image.copy()
+    psf_im  = obsp.psf.image.copy()
+    return data_p, data_m, g_th_p, g_th_m, mcal_images_p, mcal_images_m, raw_p, raw_m, psf_im
 
 args = [(i, SEED, NOISE, SHEAR_TRUE, STATE) for i in range(NOBS)]
 
-with Pool(processes=nproc) as pool:
-    results = list(pool.imap(process_single_object, args))
+BATCH_SIZE = 500
 
-data_list_p = [r[0] for r in results]
-data_list_m = [r[1] for r in results]
-gth_list_p  = [r[2] for r in results] 
-gth_list_m  = [r[3] for r in results] 
-if STATE is not None:
-    g_sn_raw_list_p = [r[4] for r in results]
-    g_sn_raw_list_m = [r[5] for r in results]
+args_list = [(i, SEED, NOISE, SHEAR_TRUE) for i in range(NOBS)]
+
+data_list_p, data_list_m = [], []
+gth_list_p, gth_list_m   = [], []
+g_sn_raw_list_p, g_sn_raw_list_m = [], []
+img_buffer = []
+
+def _run_shearnet_batch(buf):
+    if STATE is None:
+        return
+    n = len(buf)
+    base = len(data_list_p) - n
+    stypes = list(buf[0][4].keys())  # mcal_images_p keys
+
+    for stype in stypes:
+        gal_p = jnp.stack([r[4][stype][0] for r in buf])
+        psf_p = jnp.stack([r[4][stype][1] for r in buf])
+        gal_m = jnp.stack([r[5][stype][0] for r in buf])
+        psf_m = jnp.stack([r[5][stype][1] for r in buf])
+
+        preds_p = np.array(STATE.apply_fn(STATE.params, gal_p, psf_p, deterministic=True))
+        preds_m = np.array(STATE.apply_fn(STATE.params, gal_m, psf_m, deterministic=True))
+
+        for k in range(n):
+            idx_p = np.where(data_list_p[base + k]["shear_type"] == stype)[0][0]
+            idx_m = np.where(data_list_m[base + k]["shear_type"] == stype)[0][0]
+            data_list_p[base + k][idx_p]["g_sn"] = preds_p[k][:2]
+            data_list_m[base + k][idx_m]["g_sn"] = preds_m[k][:2]
+
+    raw_p  = jnp.stack([r[6] for r in buf])
+    raw_m  = jnp.stack([r[7] for r in buf])
+    psf_raw = jnp.stack([r[8] for r in buf])
+    g_sn_raw_list_p.append(np.array(STATE.apply_fn(STATE.params, raw_p, psf_raw, deterministic=True))[:, :2])
+    g_sn_raw_list_m.append(np.array(STATE.apply_fn(STATE.params, raw_m, psf_raw, deterministic=True))[:, :2])
+
+with Pool(processes=nproc) as pool:
+    for result in pool.imap(process_single_object, args_list):
+        data_list_p.append(result[0])
+        data_list_m.append(result[1])
+        gth_list_p.append(result[2])
+        gth_list_m.append(result[3])
+        img_buffer.append(result)
+        if len(img_buffer) == BATCH_SIZE:
+            _run_shearnet_batch(img_buffer)
+            img_buffer.clear()
+    if img_buffer:
+        _run_shearnet_batch(img_buffer)
+        img_buffer.clear()
 
 tab_p = shear_data_to_table(data_list_p)
 tab_m = shear_data_to_table(data_list_m)
@@ -255,8 +303,8 @@ g_sn_raw_m = np.full((N, 2), np.nan)
 
 # overwrite if available
 if STATE is not None:
-    g_sn_raw_p[:] = np.asarray(g_sn_raw_list_p)
-    g_sn_raw_m[:] = np.asarray(g_sn_raw_list_m)
+    g_sn_raw_p[:] = np.concatenate(g_sn_raw_list_p, axis=0)
+    g_sn_raw_m[:] = np.concatenate(g_sn_raw_list_m, axis=0)
 
 # always add columns
 tab_p["g_sn_raw"] = g_sn_raw_p
@@ -309,3 +357,27 @@ print(f"Shear Bias results for {NOBS} objects")
 print(f"m = ({m_scaled:.3f} ± {merr_scaled:.3f}) × 10{superscript(exp_m)}")
 print(f"c = ({c_scaled:.3f} ± {cerr_scaled:.3f}) × 10{superscript(exp_c)}")
 
+if STATE is not None:
+    (
+        _,
+        _,
+        m_sn,
+        merr_sn,
+        c_sn,
+        cerr_sn,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+    ) = jackknife_mc_v2(tab_p, tab_m, SHEAR_TRUE, njac=NJAC, g_col="g_sn_noshear", r11_col="r11_sn")
+
+    exp_m_sn = int(np.floor(np.log10(abs(m_sn)))) if m_sn != 0 else 0
+    exp_c_sn = int(np.floor(np.log10(abs(c_sn)))) if c_sn != 0 else 0
+
+    print(f"\nShearNet Bias results for {NOBS} objects")
+    print(f"m = ({m_sn/10**exp_m_sn:.3f} ± {merr_sn/10**exp_m_sn:.3f}) × 10{superscript(exp_m_sn)}")
+    print(f"c = ({c_sn/10**exp_c_sn:.3f} ± {cerr_sn/10**exp_c_sn:.3f}) × 10{superscript(exp_c_sn)}")

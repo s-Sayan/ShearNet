@@ -5,9 +5,10 @@
 #SBATCH -p short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --gres=gpu:0
 #SBATCH --cpus-per-task=18
 #SBATCH --time=01:00:00
-#SBATCH --mem=48G
+#SBATCH --mem=96G
 
 # ================================
 # Print job info
