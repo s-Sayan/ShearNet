@@ -1,0 +1,54 @@
+====================================
+SLURM JOB STARTED
+Job ID: 1836510
+Node: gpu-4-11.int.turing.wpi.edu
+Start time: Mon 23 Feb 2026 06:39:58 PM EST
+====================================
+
+[1mLoading model config from: /home/adfield/ShearNet/plots/second_validation_test_3_params/training_config.yaml[0m
+
+==================================================
+Evaluation Configuration
+==================================================
+
+evaluation:
+  test_samples: 30000
+  seed: 58
+
+model:
+  process_psf: True
+  type: fork-like
+  galaxy: {'type': 'research_backed'}
+  psf: {'type': 'forklens_psf'}
+
+plotting:
+  plot: True
+
+comparison:
+  mcal: True
+  ngmix: True
+  psf_model: gauss
+  gal_model: gauss
+==================================================
+
+
+[1m==================================================
+Loading Model
+==================================================[0m
+Found 1 matching checkpoint(s):
+  1. second_validation_test_3_params153
+
+[92mLoading checkpoint from: /home/adfield/ShearNet/model_checkpoint/second_validation_test_3_params153[0m
+[92m✓ Model checkpoint loaded successfully[0m
+Saved tables to metacal_results_with_sn.fits
+Shear Bias results for 100000 objects
+m = (2.027 ± 3.781) × 10⁻³
+c = (2.352 ± 1.020) × 10⁻³
+
+ShearNet Bias results for 100000 objects
+m = (4.303 ± 0.084) × 10⁻²
+c = (-2.334 ± 1.084) × 10⁻³
+====================================
+Job finished at: Mon 23 Feb 2026 07:02:38 PM EST
+Total runtime: 00:22:39 (HH:MM:SS)
+====================================
