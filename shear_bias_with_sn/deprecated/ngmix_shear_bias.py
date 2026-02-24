@@ -7,27 +7,46 @@ from matplotlib.backends.backend_pdf import PdfPages
 from astropy.table import Table
 from shearnet.methods.ngmix import _get_priors, mp_fit_one, ngmix_pred, response_calculation, mp_fit_one_single
 
+import yaml
+import argparse
+
+# ========================== CONFIG LOADING ==========================
+def load_config(path):
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Shear calibration simulation with ngmix")
+    parser.add_argument(
+        "-c", "--config",
+        default="config.yaml",
+        help="Path to YAML configuration file (default: config.yaml)",
+    )
+    return parser.parse_args()
+
+args = parse_args()
+_config = load_config(args.config)
+
 # ----- Simulation controls -----
-hlr = 0.5
-flux = 12258.97
-psf_fwhm  = 0.9
-psf_g1 = 0.02
-psf_g2 = -0.01
-scale = 0.141
-npix = 63
-nse_sd = 12.719674
-seed = 42
-n_obs = 30000
-Njack = 20
-shear_true = 0.01    # true applied shear for + and -
-pdf_name = "sample_galaxies_triplet.pdf"
+hlr        = _config["simulation"]["hlr"]
+flux       = _config["simulation"]["flux"]
+psf_fwhm   = _config["simulation"]["psf_fwhm"]
+scale      = _config["simulation"]["scale"]
+npix       = _config["simulation"]["npix"]
+nse_sd     = _config["simulation"]["nse_sd"]
+seed       = _config["simulation"]["seed"]
+n_obs      = _config["simulation"]["n_obs"]
+Njack      = _config["simulation"]["Njack"]
+shear_true = _config["simulation"]["shear_true"]    # true applied shear for + and -
+
+pdf_name   = _config["output"]["pdf_name"]
 
 # ----- Models -----
-psf_model = "gauss"
-gal_model = "gauss"
+psf_model = _config["models"]["psf_model"]
+gal_model = _config["models"]["gal_model"]
 
 # ----- Catalog -----
-cosmos_cat_fname = "./cosmos15_superbit2023_phot_shapes_with_sigma.csv"
+cosmos_cat_fname = _config["catalog"]["cosmos_cat_fname"]
 cosmos_cat = Table.read(cosmos_cat_fname, format="csv")
 
 def main():
@@ -39,24 +58,16 @@ def main():
     observations_p = []  # g1 = +shear_true
     observations_m = []  # g1 = -shear_true
 
-    print('starting dataset gen')
-    
     for _ in range(n_obs):
-        q = cosmos_cat['c10_sersic_fit_q']
-        #sigma_list = cosmos_cat['c10_sersic_fit_hlr']*0.03*np.sqrt(q)
-        #sigma_list = sigma_list[(sigma_list > np.percentile(sigma_list, 1)) & (sigma_list < np.percentile(sigma_list, 99))]
-        #index = rng.randint(len(sigma_list))
         index = rng.randint(len(cosmos_cat))
         phi = cosmos_cat[index]['c10_sersic_fit_phi'] * galsim.radians
-        q   = q[index]
-        #hlr = sigma_list[index]
+        q   = cosmos_cat[index]['c10_sersic_fit_q']
 
         base_gal = galsim.Exponential(half_light_radius=hlr, flux=flux)
         if q > 1.0:
             q = 1/q
-        #base_gal = base_gal.shear(q=q, beta=phi)
+        base_gal = base_gal.shear(q=q, beta=phi)
         psf = galsim.Gaussian(fwhm=psf_fwhm)
-        psf = psf.shear(g1=psf_g1, g2=psf_g2)
 
         gal_0 = base_gal
         gal_p = base_gal.shear(g1=+shear_true, g2=0.0)

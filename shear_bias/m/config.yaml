@@ -1,0 +1,24 @@
+simulation:
+  hlr: 0.5
+  flux: 1.0
+  psf_fwhm: 0.5
+  psf_npix: 51
+  psf_noise: 1.0e-6
+  scale: 0.141
+  npix: 64
+  nse_sd: 1.0e-6
+  seed: 150
+  n_obs: 100000
+  Njack: 20
+  shear_true: 0.01
+
+output:
+  results_fits: "metacal_results.fits"
+  # pdf_name: "sample_galaxies_triplet.pdf"
+
+models:
+  psf_model: "gauss"
+  gal_model: "gauss"
+
+catalog:
+  cosmos_cat_fname: "/projects/mccleary_group/superbit/galsim_data/cosmos15_superbit2023_phot_shapes_with_sigma.csv"
