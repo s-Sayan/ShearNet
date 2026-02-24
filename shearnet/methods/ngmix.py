@@ -255,7 +255,7 @@ def get_coellip_ngauss(name):
 def process_obs(obs, boot):
     resdict, obsdict = boot.go(obs)
     dlist = [make_struct(res=sres, obs=obsdict[stype], shear_type=stype) for stype, sres in resdict.items()]
-    return np.hstack(dlist)
+    return np.hstack(dlist), obsdict
 
 def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_pars= {'psf': 'dilate', 'mcal_shear': 0.01}, weight_fwhm=1.0):
     """
@@ -339,9 +339,13 @@ def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_p
     print(f"Starting NGmix ML fitting: num_gal: {len(obslist)} | psf_model: {psf_model} | gal_model: {gal_model} | num_cores: {num_cores}")
 
     with Pool(num_cores) as pool:
-        data_list = list(pool.starmap(process_obs, [(obs, boot) for obs in obslist]))
-
-    return data_list
+        results_list = list(pool.starmap(process_obs, [(obs, boot) for obs in obslist]))
+    
+    # Separate data_list and obsdict_list
+    data_list = [r[0] for r in results_list]
+    obsdict_list = [r[1] for r in results_list]
+    
+    return data_list, obsdict_list
 
 def ngmix_pred(data_list, return_bad_indices=False):
     g1 = np.array([d[0][3][0] for d in data_list])
