@@ -1,13 +1,12 @@
 #!/bin/bash
-#SBATCH -J leakage
-#SBATCH --output=logs/leak_%j.out
-#SBATCH --error=logs/leak_%j.err
+#SBATCH -J mcal_ngmix
+#SBATCH --output=logs/mcal_%j.out
+#SBATCH --error=logs/mcal_%j.err
 #SBATCH -p short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=18
-#SBATCH --gres=gpu:L40S:1
-#SBATCH --time=02:00:00
+#SBATCH --time=01:00:00
 #SBATCH --mem=96G
 
 # ================================
