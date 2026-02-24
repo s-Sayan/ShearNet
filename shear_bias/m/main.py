@@ -294,7 +294,7 @@ print(f"Saved tables to {fname}")
     _,
     _,
     _,
-) = jackknife_mc_v2(tab_p, tab_m, shear_true, njac=NJAC)
+) = jackknife_mc_v2(tab_p, tab_m, SHEAR_TRUE, njac=NJAC)
 
 exp_m = int(np.floor(np.log10(abs(m)))) if m != 0 else 0
 exp_c = int(np.floor(np.log10(abs(c)))) if c != 0 else 0
@@ -308,3 +308,4 @@ cerr_scaled = cerr / 10**exp_c
 print(f"Shear Bias results for {NOBS} objects")
 print(f"m = ({m_scaled:.3f} ± {merr_scaled:.3f}) × 10{superscript(exp_m)}")
 print(f"c = ({c_scaled:.3f} ± {cerr_scaled:.3f}) × 10{superscript(exp_c)}")
+

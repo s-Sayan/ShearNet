@@ -8,7 +8,7 @@ simulation:
   nse_sd: 1.0e-6
   seed: 150
   n_obs: 200000
-  psfex_model_file: "/projects/mccleary_group/superbit/emp_psfs/emp_psfs_best/psfex-output/superbit_psf_emp01.psf"
+  psfex_model_file: "/home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1683033980_clean_starcat.psf"
 
 output:
   results_fits: "psf_leakage_results_200k.fits"
@@ -18,4 +18,4 @@ models:
   gal_model: "gauss"
 
 catalog:
-  cosmos_cat_fname: "/projects/mccleary_group/superbit/galsim_data/cosmos15_superbit2023_phot_shapes_with_sigma.csv"
+  cosmos_cat_fname: "/home/adfield/ShearNet/cosmos15_superbit2023_phot_shapes_with_sigma.csv"

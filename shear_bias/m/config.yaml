@@ -21,4 +21,4 @@ models:
   gal_model: "gauss"
 
 catalog:
-  cosmos_cat_fname: "/projects/mccleary_group/superbit/galsim_data/cosmos15_superbit2023_phot_shapes_with_sigma.csv"
+  cosmos_cat_fname: "/home/adfield/ShearNet/cosmos15_superbit2023_phot_shapes_with_sigma.csv"
