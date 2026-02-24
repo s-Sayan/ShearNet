@@ -1,0 +1,65 @@
+====================================
+SLURM JOB STARTED
+Job ID: 1836879
+Node: gpu-5-22.int.turing.wpi.edu
+Start time: Tue 24 Feb 2026 03:20:44 AM EST
+====================================
+
+[1mLoading model config from: /home/adfield/ShearNet/plots/second_validation_test_3_params/training_config.yaml[0m
+
+==================================================
+Evaluation Configuration
+==================================================
+
+evaluation:
+  test_samples: 30000
+  seed: 58
+
+model:
+  process_psf: True
+  type: fork-like
+  galaxy: {'type': 'research_backed'}
+  psf: {'type': 'forklens_psf'}
+
+plotting:
+  plot: True
+
+comparison:
+  mcal: True
+  ngmix: True
+  psf_model: gauss
+  gal_model: gauss
+==================================================
+
+
+[1m==================================================
+Loading Model
+==================================================[0m
+Found 1 matching checkpoint(s):
+  1. second_validation_test_3_params153
+
+[92mLoading checkpoint from: /home/adfield/ShearNet/model_checkpoint/second_validation_test_3_params153[0m
+[92m✓ Model checkpoint loaded successfully[0m
+Saved tables to metacal_results_with_sn.fits
+Shear Bias results for 100000 objects
+m = (1.746 ± 3.788) × 10⁻³
+c = (2.352 ± 1.020) × 10⁻³
+
+ShearNet Bias results for 100000 objects
+m = (3.334 ± 5.264) × 10⁻³
+c = (5.898 ± 1.048) × 10⁻³
+====================================
+Job finished at: Tue 24 Feb 2026 03:35:12 AM EST
+Total runtime: 00:14:26 (HH:MM:SS)
+====================================
+Job ID: 1836879
+Cluster: slurm
+User/Group: adfield/adfield
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 18
+CPU Utilized: 03:47:26
+CPU Efficiency: 87.34% of 04:20:24 core-walltime
+Job Wall-clock time: 00:14:28
+Memory Utilized: 71.69 GB
+Memory Efficiency: 74.67% of 96.00 GB
