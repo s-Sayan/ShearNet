@@ -1,0 +1,25 @@
+====================================
+SLURM JOB STARTED
+Job ID: 1836928
+Node: compute-2-02
+Start time: Tue 24 Feb 2026 03:44:51 AM EST
+====================================
+Saved tables to metacal_results.fits
+Shear Bias results for 100000 objects
+m = (1.747 ± 3.788) × 10⁻³
+c = (2.352 ± 1.020) × 10⁻³
+====================================
+Job finished at: Tue 24 Feb 2026 03:56:13 AM EST
+Total runtime: 00:11:20 (HH:MM:SS)
+====================================
+Job ID: 1836928
+Cluster: slurm
+User/Group: adfield/adfield
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 18
+CPU Utilized: 02:42:20
+CPU Efficiency: 79.34% of 03:24:36 core-walltime
+Job Wall-clock time: 00:11:22
+Memory Utilized: 20.42 GB
+Memory Efficiency: 21.27% of 96.00 GB

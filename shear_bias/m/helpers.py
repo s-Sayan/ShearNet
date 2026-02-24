@@ -4,10 +4,6 @@ import ngmix
 from astropy.table import Table
 import superbit_lensing.utils as utils
 
-
-## the trained state should be imported here
-# state = checkpoints.restore_checkpoint(ckpt_dir=model_dir, target=state)
-
 def get_sn_output(state, obs):
     obs_im = obs.image
     psf_im = obs.psf.image
@@ -23,7 +19,7 @@ def get_coellip_ngauss(name):
     return ngauss
 
 def get_init_guess(obs):
-    gm = GaussMom(1.2).go(obs)
+    gm = ngmix.gaussmom.GaussMom(1.2).go(obs)
     if gm['flags'] == 0:
         flux_guess = gm['flux']
         Tguess = gm['T']
@@ -127,18 +123,22 @@ def make_struct(res, obs, shear_type, state=None):
 
     return data
 
-def process_obs(obs, boot, state=None):
+def process_obs(obs, boot, state=None, return_images=False):
     resdict, obsdict = boot.go(obs)
-    if state is not None:
-        sn_preds_raw = get_sn_output(state, obs)
     dlist = [
-        make_struct(res=sres, obs=obsdict[stype], shear_type=stype, state=state)
+        make_struct(res=sres, obs=obsdict[stype], shear_type=stype)
+        # note: don't pass state here, inference happens in main process (to avoid multiprocessing jax)
         for stype, sres in resdict.items()
     ]
-    if state is None:
-        return np.hstack(dlist)
-    else:
-        return np.hstack(dlist), np.array(sn_preds_raw)
+    struct = np.hstack(dlist)
+
+    if return_images:
+        mcal_images = {
+            stype: (obsdict[stype].image.copy(), obsdict[stype].psf.image.copy())
+            for stype in obsdict
+        }
+        return struct, mcal_images
+    return struct
 
 def shear_data_to_table(data_list, mcal_shear=0.01):
     rows = []
@@ -189,18 +189,18 @@ def shear_data_to_table(data_list, mcal_shear=0.01):
     return Table(rows)
 
 
-def jackknife_mc_v2(tab_p, tab_m, shear_true, njac=20):
+def jackknife_mc_v2(tab_p, tab_m, shear_true, njac=20, g_col="g_noshear", r11_col="r11"):
     N = len(tab_p)
     if njac < 2:
         raise ValueError("njac must be >= 2")
     if njac > N:
         raise ValueError(f"njac ({njac}) cannot exceed number of rows ({N})")
 
-    g_arr_p = np.asarray(tab_p["g_noshear"])
-    R_arr_p = np.asarray(tab_p["r11"])
+    g_arr_p = np.asarray(tab_p[g_col])
+    R_arr_p = np.asarray(tab_p[r11_col])
 
-    g_arr_m = np.asarray(tab_m["g_noshear"])
-    R_arr_m = np.asarray(tab_m["r11"])
+    g_arr_m = np.asarray(tab_m[g_col])
+    R_arr_m = np.asarray(tab_m[r11_col])
 
     gamma1_per = (g_arr_p[:, 0] - g_arr_m[:, 0]) / 2.0
     c_per = (g_arr_p[:, 1] + g_arr_m[:, 1]) / 2.0
