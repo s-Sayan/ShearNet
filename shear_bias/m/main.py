@@ -76,6 +76,10 @@ NJAC = _config["simulation"]["Njack"]
 PSF_MODEL = _config["models"]["psf_model"]
 GAL_MODEL = _config["models"]["gal_model"]
 
+# ShearNet
+INCLUDE_SN = _config["ShearNet"]["include_sn"]
+SN_MODEL_NAME = _config["ShearNet"]["sn_model_name"]
+
 # ----- Catalog -----
 COSMOS_CAT_FNAME = _config["catalog"]["cosmos_cat_fname"]
 cosmos_cat = Table.read(COSMOS_CAT_FNAME, format="csv")
@@ -92,19 +96,20 @@ MCAL_PARS = {"psf": "dilate", "mcal_shear": 0.01}
 TYPES = ["noshear", "1p", "1m"]
 
 # ========== Load up ShearNet state here =========
-#from shearnet.cli.evaluate import initialize_model as _initialize_model, load_config as _eval_load_config
 import jax.numpy as jnp
-
-#eval_args = argparse.Namespace(
-#    model_name="second_validation_test_3_params", config=None, seed=None,
-#    test_samples=None, mcal=False, plot=False, plot_animation=False,
-#    process_psf=None, galaxy_type=None, psf_type=None,
-#    apply_psf_shear=None, psf_shear_range=None
-#)
-#eval_config = _eval_load_config(eval_args)
-#dummy_images = jnp.ones((1, NPIX, NPIX))
-#STATE = _initialize_model(eval_config, dummy_images, dummy_images)
-STATE = None
+if INCLUDE_SN:
+    from shearnet.cli.evaluate import initialize_model as _initialize_model, load_config as _eval_load_config
+    eval_args = argparse.Namespace(
+        model_name=SN_MODEL_NAME, config=None, seed=None,
+        test_samples=None, mcal=False, plot=False, plot_animation=False,
+        process_psf=None, galaxy_type=None, psf_type=None,
+        apply_psf_shear=None, psf_shear_range=None
+    )
+    eval_config = _eval_load_config(eval_args)
+    dummy_images = jnp.ones((1, NPIX, NPIX))
+    STATE = _initialize_model(eval_config, dummy_images, dummy_images)
+else:
+    STATE = None
 
 # ============================================================
 # FUNCTIONS THAT NEED galsim + cosmos_cat stay here
@@ -114,7 +119,7 @@ def make_data(rng, noise, shear_true):
 
     scale = SCALE
     psf_fwhm = PSF_FWHM
-    gal_hlr = GAL_HLR
+
     gal_flux = GAL_FLUX
 
     index = rng.randint(len(cosmos_cat))
@@ -122,6 +127,14 @@ def make_data(rng, noise, shear_true):
     q = cosmos_cat[index]["c10_sersic_fit_q"]
     if q > 1.0:
         q = 1 / q
+    if GAL_HLR == "catalog":
+        half_light_radius=cosmos_cat[index]['c10_sersic_fit_hlr']*0.03*np.sqrt(q)
+        if half_light_radius > 1.0:
+            half_light_radius = 1.0
+        min_hlr = 1e-6
+        gal_hlr = half_light_radius if (np.isfinite(half_light_radius) and half_light_radius > 0) else min_hlr 
+    else:
+        gal_hlr = GAL_HLR
 
     npix_psf = PSF_NPIX
     npix = NPIX
