@@ -23,20 +23,25 @@ WCS_PARAMS = {
 
 MARGIN = 200 # Margins that I wanna use for PSF Rendering
 
-PSF_DATA_DIR = "/home/adfield/SHEARNET_DATA"
+PSF_DATA_DIR = "/home/adfield/SHEARNET_DATA/psfex-output"
 
 # PSF_DATA_DIR = os.path.join(SHEARNET_ROOT, "psf_data", "emp_psfs_best")
 
-def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05):
+def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='gauss', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False, apply_psf_shear=False, psf_shear_range=0.05, psf_file_or_dir=PSF_DATA_DIR):
     images = []
     labels = []
     obs = []
     g1_list, g2_list, sigma_list = g1_g2_sigma_sample(num_samples=samples, seed=seed)
     ud = galsim.UniformDeviate(seed)
     if exp=="superbit":
-        psf_files = search_psf_files(path=PSF_DATA_DIR)
-        if len(psf_files)==0:
-            raise FileNotFoundError(f"No PSF files found in {PSF_DATA_DIR}")
+        if os.path.isfile(psf_file_or_dir):
+            psf_files = [psf_file_or_dir]
+        elif os.path.isdir(psf_file_or_dir):
+            psf_files = search_psf_files(path=psf_file_or_dir)
+            if len(psf_files) == 0:
+                raise FileNotFoundError(f"No PSF files found in {psf_file_or_dir}")
+        else:
+            raise FileNotFoundError(f"{psf_file_or_dir} is neither a file nor a directory")
     else:
         psf_files = None
     for i in tqdm(range(samples)):
@@ -207,7 +212,7 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
 
 def search_psf_files(path):
     all_psf_files = []
-    search_path = os.path.join(path, 'psfex-output', '*.psf')
+    search_path = os.path.join(path, '*.psf')
     all_psf_files.extend(glob(search_path))
     return all_psf_files
 
@@ -233,9 +238,9 @@ def import_psf(psf_files, ud, xsize=WCS_PARAMS['image_xsize'], ysize=WCS_PARAMS[
     y = margin + (ysize - 2*margin) * ud()
 
     # random integer between 1 and maxexp
-    exp = int(1 + (maxexp) * ud())  
+    exp = int(maxexp * ud())  
     image_pos = galsim.PositionD(x=x, y=y)  
-    psf_file = psf_files[exp-1]
+    psf_file = psf_files[exp]
 
     wcs = create_wcs_from_params(WCS_PARAMS)
     psf = galsim.des.DES_PSFEx(psf_file, wcs=wcs)
