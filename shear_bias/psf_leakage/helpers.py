@@ -5,6 +5,10 @@ from astropy.table import Table
 import superbit_lensing.utils as utils
 from ngmix.gaussmom import GaussMom
 
+
+## the trained state should be imported here
+# state = checkpoints.restore_checkpoint(ckpt_dir=model_dir, target=state)
+
 def get_sn_output(state, obs):
     obs_im = obs.image
     psf_im = obs.psf.image
@@ -138,13 +142,10 @@ def make_struct(res, obs, state=None):
 
     return data
 
-def process_obs(obs, boot, return_images=False):
+def process_obs(obs, boot, state=None):
     resdict = boot.go(obs)
-    dlist = make_struct(res=resdict, obs=obs)
-    struct = np.hstack(dlist)
-    if return_images:
-        return struct, obs.image.copy(), obs.psf.image.copy()
-    return struct
+    dlist = make_struct(res=resdict, obs=obs, state=state)
+    return np.hstack(dlist)
 
 def shear_data_to_table(data_list):
     """
