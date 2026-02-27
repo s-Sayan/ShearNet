@@ -25,7 +25,7 @@ def create_wcs_from_params(params):
     xsize = params["image_xsize"]
     ysize = params["image_ysize"]
     pixel_scale = params["pixel_scale"]
-    center_ra = params["center_ra"] * galsim.degrees
+    center_ra = params["center_ra"] * galsim.hours
     center_dec = params["center_dec"] * galsim.degrees
     theta = params.get("theta", 0.0) * galsim.degrees
 
