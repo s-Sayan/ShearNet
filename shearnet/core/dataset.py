@@ -3,9 +3,7 @@ from glob import glob
 import numpy as np
 import galsim
 import ngmix
-from scipy.signal import convolve2d
 from tqdm import tqdm
-from ..methods.ngmix import g1_g2_sigma_sample
 import galsim.des
 from astropy.table import Table
 from ..utils.metrics import get_admoms_ngmix_fit
@@ -14,40 +12,74 @@ XIMAGE_SIZE, YIMAGE_SIZE = 9600, 6422 # Usual size of SuperBIT single exposures 
 
 MARGIN = 200 # Margins that I wanna use for PSF Rendering
 
-PSF_DATA_DIR = "/home/adfield/SHEARNET_DATA"
+PSF_DATA_DIR = "/home/adfield/SHEARNET_DATA/psfex-output"
 
 cosmos_cat_fname = "/home/adfield/ShearNet/cosmos15_superbit2023_phot_shapes_with_sigma.csv"
 cosmos_cat = Table.read(cosmos_cat_fname, format="csv")
 
-def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='exp', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05, base_shear_g1=0.0, base_shear_g2=0.0):
+def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05, base_shear_g1=0.0, base_shear_g2=0.0, psf_file_or_dir=PSF_DATA_DIR, n_outputs=2, hlr_type="constant", flux_type="constant"):
     images = []
     labels = []
     obs = []
-    g1_list, g2_list, __ = g1_g2_sigma_sample(num_samples=samples, seed=seed)
 
     q = cosmos_cat['c10_sersic_fit_q']
-    sigma_list = cosmos_cat['c10_sersic_fit_hlr']*0.03*np.sqrt(q)
-    sigma_list = sigma_list[(sigma_list > np.percentile(sigma_list, 1)) & (sigma_list < np.percentile(sigma_list, 99))]
+    phi = cosmos_cat['c10_sersic_fit_phi']
+
+    g1_list = []
+    g2_list = []
+    for qi, phi_i in zip(q, phi):
+        if qi > 1.0:
+            qi = 1.0 / qi
+        s = galsim.Shear(q=float(qi), beta=float(phi_i) * galsim.radians)
+        g1_list.append(s.g1)
+        g2_list.append(s.g2)
+
+    g1_list = np.array(g1_list)
+    g2_list = np.array(g2_list)
+
+    half_light_radius = cosmos_cat['c10_sersic_fit_hlr'] * 0.03 * np.sqrt(q)
+    half_light_radius = np.minimum(half_light_radius, 1.0)
+    min_hlr = 1e-6
+    hlr_list = np.where(
+        np.isfinite(half_light_radius) & (half_light_radius > 0),
+        half_light_radius,
+        min_hlr
+    )
+
+    flux_list = cosmos_cat['crates_b'] * 300 / 0.343
 
     ud = galsim.UniformDeviate(seed)
     if exp=="superbit":
-        psf_files = search_psf_files(path=PSF_DATA_DIR)
-        if len(psf_files)==0:
-            raise FileNotFoundError(f"No PSF files found in {PSF_DATA_DIR}")
+        if os.path.isfile(psf_file_or_dir):
+            psf_files = [psf_file_or_dir]
+        elif os.path.isdir(psf_file_or_dir):
+            psf_files = search_psf_files(path=psf_file_or_dir)
+            if len(psf_files) == 0:
+                raise FileNotFoundError(f"No PSF files found in {psf_file_or_dir}")
+        else:
+            raise FileNotFoundError(f"{psf_file_or_dir} is neither a file nor a directory")
     else:
         psf_files = None
     for i in tqdm(range(samples)):
         g1, g2 = g1_list[i], g2_list[i]
-        sigma = 0.5
-        #sigma = sigma_list[i]
-        #g1, g2 = np.random.uniform(-0.5, 0.5, size=2)  # Random shears
-        #sigma = np.random.uniform(0.5, 1.5)  # Random sigma  
-        flux = 12258.97
-        #flux=np.random.uniform(1, 5)  # Random flux
-        #psf_sigma = np.random.uniform(0.5, 1.5)
+        if hlr_type == 'catalog':
+            hlr = hlr_list[i]
+        elif hlr_type == 'constant':
+            hlr = 0.5
+        else:
+            raise ValueError("hlr can only be 'constant' or 'catalog'")
         
-        obj_obs = sim_func(g1, g2, sigma=sigma, flux=flux, psf_sigma=psf_sigma, 
-        nse_sd=nse_sd, type=type, npix=npix, scale=scale, seed=i, exp=exp, apply_psf_shear=apply_psf_shear, psf_shear_range=psf_shear_range, ud=ud, psf_files=psf_files, base_shear_g1=base_shear_g1, base_shear_g2=base_shear_g2)
+        if flux_type == 'catalog':
+            flux = flux_list[i]
+        elif flux_type == 'constant':
+            flux = 12258.97
+        else:
+            raise ValueError("flux can only be 'constant' or 'catalog'")
+        
+        obj_obs = sim_func(g1, g2, hlr=hlr, flux=flux, psf_fwhm=psf_fwhm, 
+                            nse_sd=nse_sd, type=type, npix=npix, scale=scale, seed=i, 
+                            exp=exp, apply_psf_shear=apply_psf_shear, psf_shear_range=psf_shear_range, 
+                            ud=ud, psf_files=psf_files, base_shear_g1=base_shear_g1, base_shear_g2=base_shear_g2)
         
         galaxy_images = obj_obs.image
         psf_images = obj_obs.psf.image
@@ -69,8 +101,15 @@ def generate_dataset(samples, psf_sigma, npix=53, scale=0.141, type='exp', exp='
             # Just galaxy images
             images.append(galaxy_images)
 
-        # temporarily removed `, sigma, flux` from the append
-        labels.append(np.array([g1, g2], dtype=np.float32))
+        if n_outputs == 4:
+            labels.append(np.array([g1, g2, hlr, flux], dtype=np.float32))
+        elif n_outputs == 3:
+            labels.append(np.array([g1, g2, hlr], dtype=np.float32))
+        elif n_outputs == 2:
+            labels.append(np.array([g1, g2], dtype=np.float32))
+        else:
+            raise ValueError("n_ouputs must be either 2, 3, or 4.")
+        
         obs.append(obj_obs)
     
     if return_obs:
@@ -119,7 +158,7 @@ def split_combined_images(combined_images, has_psf=False, has_clean=False):
     else:
         raise ValueError(f"Unexpected number of channels: {combined_images.shape[-1]}")
 
-def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", apply_psf_shear=False, psf_shear_range=0.05, ud=None, psf_files=None, base_shear_g1=0.0, base_shear_g2=0.0):
+def sim_func(g1, g2, hlr=1.0, flux=1.0, psf_fwhm=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", apply_psf_shear=False, psf_shear_range=0.05, ud=None, psf_files=None, base_shear_g1=0.0, base_shear_g2=0.0):
 
     rng = np.random.RandomState(seed=seed)
 
@@ -127,9 +166,9 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
 
     # Create a galaxy object
     if type == 'exp':
-        gal = galsim.Exponential(half_light_radius=sigma, flux=flux).shear(g1=g1, g2=g2)
+        gal = galsim.Exponential(half_light_radius=hlr, flux=flux).shear(g1=g1, g2=g2)
     elif type == 'gauss':
-        gal = galsim.Gaussian(sigma=sigma, flux=flux).shear(g1=g1, g2=g2)
+        gal = galsim.Gaussian(half_light_radius=hlr, flux=flux).shear(g1=g1, g2=g2)
     else:
         raise ValueError("type must be 'exp' or 'gauss'")
 
@@ -152,7 +191,7 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
 
     # Convolve with PSF
     if exp == 'ideal':
-        psf = galsim.Gaussian(fwhm=psf_sigma)
+        psf = galsim.Gaussian(fwhm=psf_fwhm)
 
         if apply_psf_shear:
             psf = psf.shear(g1=psf_g1, g2=psf_g2)
@@ -243,7 +282,7 @@ def sim_func(g1, g2, sigma=1.0, flux=1.0, psf_sigma=0.5, nse_sd = 1e-5,  type='g
 
 def search_psf_files(path):
     all_psf_files = []
-    search_path = os.path.join(path, 'psfex-output', '*.psf')
+    search_path = os.path.join(path, '*.psf')
     all_psf_files.extend(glob(search_path))
     return all_psf_files
 
@@ -269,9 +308,9 @@ def import_psf(psf_files, ud, xsize=XIMAGE_SIZE, ysize=YIMAGE_SIZE, margin=MARGI
     y = margin + (ysize - 2*margin) * ud()
 
     # random integer between 1 and maxexp
-    exp = int(1 + (maxexp) * ud())  
+    exp = int(maxexp * ud()) 
     image_pos = galsim.PositionD(x=x, y=y)  
-    psf_file = psf_files[exp-1]
+    psf_file = psf_files[exp]
 
     bk_image = get_background_file(psf_file)
     psf = galsim.des.DES_PSFEx(psf_file, bk_image)

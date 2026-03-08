@@ -15,6 +15,9 @@ from .metrics import (
     loss_fn_mcal,
 )
 
+from .simutils import (
+    create_wcs_from_params,
+)
 
 from .device import get_device
 __all__ = [

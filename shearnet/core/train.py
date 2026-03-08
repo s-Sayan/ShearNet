@@ -112,7 +112,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                   batch_size=32, nn="simple", galaxy_type='cnn', 
                   psf_type='cnn', save_path=None, model_name="my_model",
                   val_split=0.2, eval_interval=1, patience=5, lr=1e-3,
-                  weight_decay=1e-4):
+                  weight_decay=1e-4, n_outputs=2):
     """Enhanced training function with validation and early stopping."""
     # Split into train and validation sets
     split_idx = int(len(galaxy_images) * (1 - val_split))
@@ -135,7 +135,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
     else:
         raise ValueError(f"Invalid model type specified: {nn}")
     
-    params = model.init(rng_key, jnp.ones_like(galaxy_images[0]), jnp.ones_like(psf_images[0]))  # Initialize model parameters
+    params = model.init(rng_key, jnp.ones_like(galaxy_images[0]), jnp.ones_like(psf_images[0]), n_outputs=n_outputs)  # Initialize model parameters
     lr_schedule = optax.cosine_decay_schedule(
         init_value=lr, 
         decay_steps=epochs * (len(train_galaxy_images) // batch_size)

@@ -13,7 +13,7 @@ simulation:
   shear_true: 0.01
 
 output:
-  results_fits: "/home/adfield/ShearNet/unit_tests/second/benchmarking/m/second_validation_test.fits"
+  results_fits: "/home/adfield/ShearNet/unit_tests/second/benchmarking/m/metacal_results_g_sn_raw.fits"
   # pdf_name: "sample_galaxies_triplet.pdf"
 
 models:
