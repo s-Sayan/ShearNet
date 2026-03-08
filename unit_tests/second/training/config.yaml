@@ -7,16 +7,20 @@ dataset:
   seed: 42
   stamp_size: 53
   pixel_size: 0.141
+  psfex_model_file: "/home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf"
+  hlr_type: "catalog"
+  flux_type: "constant"
 
 # Model configuration  
 model:
   process_psf: true
   type: "fork-like"  # Options: mlp, cnn, resnet, forklens_psf, 
-               #          research_backed, and fork-like
+                     # research_backed, and fork-like
   galaxy:
     type: "research_backed"
   psf:
     type: "forklens_psf"
+  n_outputs: 3
   
 # Training configuration
 training:
@@ -28,11 +32,6 @@ training:
   val_split: 0.2
   eval_interval: 1
   
-# Evaluation configuration
-evaluation:
-  test_samples: 30000
-  seed: 58
-  
 # Output configuration
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
@@ -42,7 +41,7 @@ output:
 # Plotting configuration
 plotting:
   plot: true  # Whether to plot learning curves
-  
+
 # Comparison methods
 comparison:
   mcal: true

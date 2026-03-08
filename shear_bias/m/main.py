@@ -188,7 +188,7 @@ def make_data(rng, noise, shear_true):
     obsp = ngmix.Observation(im_p, weight=wt, jacobian=jacobian, psf=psf_obs)
     obsm = ngmix.Observation(im_m, weight=wt, jacobian=jacobian, psf=psf_obs)
 
-    return obs0, obsp, obsm, g_th_p, g_th_m
+    return obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr
 
 def process_single_object(args):
     i, base_seed, noise, shear_true = args
@@ -196,7 +196,7 @@ def process_single_object(args):
     # independent RNG per worker
     rng = np.random.RandomState(base_seed + i)
 
-    obs0, obsp, obsm, g_th_p, g_th_m = make_data(rng=rng, noise=noise, shear_true=shear_true)
+    obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr = make_data(rng=rng, noise=noise, shear_true=shear_true)
 
     # create priors & runners locally (safe)
     prior = _get_priors(base_seed + i)
@@ -247,7 +247,7 @@ def process_single_object(args):
     raw_p   = obsp.image.copy()
     raw_m   = obsm.image.copy()
     psf_im  = obsp.psf.image.copy()
-    return data_p, data_m, g_th_p, g_th_m, mcal_images_p, mcal_images_m, raw_p, raw_m, psf_im
+    return data_p, data_m, g_th_p, g_th_m, mcal_images_p, mcal_images_m, raw_p, raw_m, psf_im, gal_hlr
 
 args = [(i, SEED, NOISE, SHEAR_TRUE, STATE) for i in range(NOBS)]
 

@@ -71,6 +71,10 @@ NOBS = _config["simulation"]["n_obs"]
 PSF_MODEL = _config["models"]["psf_model"]
 GAL_MODEL = _config["models"]["gal_model"]
 
+# ShearNet
+INCLUDE_SN = _config["ShearNet"]["include_sn"]
+SN_MODEL_NAME = _config["ShearNet"]["sn_model_name"]
+
 # ----- Catalog -----
 COSMOS_CAT_FNAME = _config["catalog"]["cosmos_cat_fname"]
 cosmos_cat = Table.read(COSMOS_CAT_FNAME, format="csv")
@@ -84,9 +88,20 @@ PSF_LM_PARS = {"maxfev": 4000, "xtol": 5.0e-5, "ftol": 5.0e-5}
 EM_PARS={'tol': 1.0e-6, 'maxiter': 50000}
 
 # ========== Load up ShearNet state here =========
-# state = 
-
-STATE = None
+import jax.numpy as jnp
+if INCLUDE_SN:
+    from shearnet.cli.evaluate import initialize_model as _initialize_model, load_config as _eval_load_config
+    eval_args = argparse.Namespace(
+        model_name=SN_MODEL_NAME, config=None, seed=None,
+        test_samples=None, mcal=False, plot=False, plot_animation=False,
+        process_psf=None, galaxy_type=None, psf_type=None,
+        apply_psf_shear=None, psf_shear_range=None
+    )
+    eval_config = _eval_load_config(eval_args)
+    dummy_images = jnp.ones((1, NPIX, NPIX))
+    STATE = _initialize_model(eval_config, dummy_images, dummy_images)
+else:
+    STATE = None
 
 # ============================================================
 # FUNCTIONS THAT NEED galsim + cosmos_cat stay here
@@ -94,7 +109,6 @@ STATE = None
 def make_data(rng, noise):
 
     scale = SCALE
-    gal_hlr = GAL_HLR
     gal_flux = GAL_FLUX
 
     index = rng.randint(len(cosmos_cat))
@@ -102,6 +116,14 @@ def make_data(rng, noise):
     q = cosmos_cat[index]["c10_sersic_fit_q"]
     if q > 1.0:
         q = 1 / q
+    if GAL_HLR == "catalog":
+        half_light_radius = cosmos_cat[index]['c10_sersic_fit_hlr'] * 0.03 * np.sqrt(q)
+        if half_light_radius > 1.0:
+            half_light_radius = 1.0
+        min_hlr = 1e-6
+        gal_hlr = half_light_radius if (np.isfinite(half_light_radius) and half_light_radius > 0) else min_hlr
+    else:
+        gal_hlr = GAL_HLR
 
     npix_psf = PSF_NPIX
     npix = NPIX
@@ -157,7 +179,7 @@ def make_data(rng, noise):
     return obs0, g_th
 
 def process_single_object(args):
-    i, base_seed, noise, state = args
+    i, base_seed, noise = args
 
     # independent RNG per worker
     rng = np.random.RandomState(base_seed + i)
@@ -199,22 +221,50 @@ def process_single_object(args):
         psf_runner=psf_runner,
     )
 
-    data = process_obs(obs, boot)
-    return data, g_th
+    data, gal_im, psf_im = process_obs(obs, boot, return_images=True)
+    return data, g_th, gal_im, psf_im
 
 
-args = [(i, SEED, NOISE, STATE) for i in range(NOBS)]
+args_list = [(i, SEED, NOISE) for i in range(NOBS)]
+
+data_list = []
+gth_list = []
+g_sn_raw_list = []
+img_buffer = []
+
+BATCH_SIZE = 500
+
+def _run_shearnet_batch(buf):
+    if STATE is None:
+        return
+    n = len(buf)
+    base = len(data_list) - n
+    gal = jnp.stack([r[2] for r in buf])
+    psf = jnp.stack([r[3] for r in buf])
+    preds = np.array(STATE.apply_fn(STATE.params, gal, psf, deterministic=True))
+    for k in range(n):
+        data_list[base + k][0]["g_sn"] = preds[k][:2]
+    g_sn_raw_list.append(preds[:, :2])
 
 with Pool(processes=nproc) as pool:
-    results = list(pool.imap(process_single_object, args))
-
-data_list = [r[0] for r in results]
-gth_list  = [r[1] for r in results] 
-
+    for result in pool.imap(process_single_object, args_list):
+        data_list.append(result[0])
+        gth_list.append(result[1])
+        img_buffer.append(result)
+        if len(img_buffer) == BATCH_SIZE:
+            _run_shearnet_batch(img_buffer)
+            img_buffer.clear()
+    if img_buffer:
+        _run_shearnet_batch(img_buffer)
+        img_buffer.clear()
 
 tab = shear_data_to_table(data_list)
-
 tab["g_th"] = np.asarray(gth_list)
+
+if STATE is not None:
+    tab["g_sn"] = np.concatenate(g_sn_raw_list, axis=0)
+else:
+    tab["g_sn"] = np.full((len(tab), 2), np.nan)
 
 fname = OUTPUT_FITS
 
