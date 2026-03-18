@@ -24,7 +24,7 @@ def get_init_guess(obs):
         flux_guess = gm['flux']
         Tguess = gm['T']
     else:
-        gm = GaussMom(1.2).go(obs.psf)
+        gm = ngmix.gaussmom.GaussMom(1.2).go(obs.psf)
         if gm['flags'] == 0:
             Tguess = 2 * gm['T']
         else:
@@ -86,6 +86,7 @@ def make_struct(res, obs, shear_type, state=None):
         ("Tpsf", "f8"),
         ("gpsf", "f8", 2),
         ("g_sn", "f8", 2),
+        ("flux", "f8"),
     ]
 
     data = np.zeros(1, dtype=dt)
@@ -99,11 +100,13 @@ def make_struct(res, obs, shear_type, state=None):
         except KeyError:
             data["g"] = res["g"]
         data["T"] = res["T"]
+        data["flux"] = res["flux"]
     else:
         data["s2n"] = np.nan
         data["g"] = np.nan
         data["T"] = np.nan
         data["Tpsf"] = np.nan
+        data["flux"] = np.nan
 
     admom_dict = utils.get_admoms_ngmix_fit(obs.psf, reduced=True)
     if admom_dict["flags"] == 0:

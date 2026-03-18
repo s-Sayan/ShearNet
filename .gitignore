@@ -66,3 +66,4 @@ datasets/
 *.sh
 *.sh.savecosmos15_superbit2023_phot_shapes_with_sigma.csv
 *.csv
+*.png

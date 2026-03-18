@@ -6,6 +6,7 @@ import ngmix
 from tqdm import tqdm
 import galsim.des
 from astropy.table import Table
+from astropy.io import fits
 from ..utils.metrics import get_admoms_ngmix_fit
 
 XIMAGE_SIZE, YIMAGE_SIZE = 9600, 6422 # Usual size of SuperBIT single exposures in pixel unit
@@ -14,39 +15,18 @@ MARGIN = 200 # Margins that I wanna use for PSF Rendering
 
 PSF_DATA_DIR = "/home/adfield/SHEARNET_DATA/psfex-output"
 
-cosmos_cat_fname = "/home/adfield/ShearNet/cosmos15_superbit2023_phot_shapes_with_sigma.csv"
-cosmos_cat = Table.read(cosmos_cat_fname, format="csv")
+with fits.open("/home/adfield/ShearNet/cosmos_catalog_train.fits") as hdul:
+    cosmos_cat = hdul[1].data
 
 def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05, base_shear_g1=0.0, base_shear_g2=0.0, psf_file_or_dir=PSF_DATA_DIR, n_outputs=2, hlr_type="constant", flux_type="constant"):
     images = []
     labels = []
     obs = []
 
-    q = cosmos_cat['c10_sersic_fit_q']
-    phi = cosmos_cat['c10_sersic_fit_phi']
-
-    g1_list = []
-    g2_list = []
-    for qi, phi_i in zip(q, phi):
-        if qi > 1.0:
-            qi = 1.0 / qi
-        s = galsim.Shear(q=float(qi), beta=float(phi_i) * galsim.radians)
-        g1_list.append(s.g1)
-        g2_list.append(s.g2)
-
-    g1_list = np.array(g1_list)
-    g2_list = np.array(g2_list)
-
-    half_light_radius = cosmos_cat['c10_sersic_fit_hlr'] * 0.03 * np.sqrt(q)
-    half_light_radius = np.minimum(half_light_radius, 1.0)
-    min_hlr = 1e-6
-    hlr_list = np.where(
-        np.isfinite(half_light_radius) & (half_light_radius > 0),
-        half_light_radius,
-        min_hlr
-    )
-
-    flux_list = cosmos_cat['crates_b'] * 300 / 0.343
+    g1_list   = cosmos_cat['G1']
+    g2_list   = cosmos_cat['G2']
+    hlr_list  = cosmos_cat['HLR']
+    flux_list = cosmos_cat['FLUX']
 
     ud = galsim.UniformDeviate(seed)
     if exp=="superbit":
