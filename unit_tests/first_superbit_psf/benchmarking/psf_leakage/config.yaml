@@ -1,5 +1,5 @@
 simulation:
-  hlr: "catalog"
+  hlr: 0.5
   flux: 12258.97
   psf_npix: 53
   psf_noise: 1.0e-6
@@ -11,16 +11,16 @@ simulation:
   psfex_model_file: "/home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf"
 
 output:
-  results_fits: "/home/adfield/ShearNet/unit_tests/second/benchmarking/psf_leakage/psf_leakage_results.fits"
+  results_fits: "/home/adfield/ShearNet/unit_tests/first_superbit_psf/benchmarking/psf_leakage/psf_leakage_results_sbpsf.fits"
 
 models:
   psf_model: "em5"
   gal_model: "gauss"
-  
+
 ShearNet:
   include_sn: True
-  sn_model_name: "second_validation_test"
-  n_outputs: 3
+  sn_model_name: "first_validation_test_sbpsf"
+  n_outputs: 2
 
 catalog:
   cosmos_cat_fname: "/home/adfield/ShearNet/cosmos_catalog_eval.fits"

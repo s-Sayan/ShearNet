@@ -1,6 +1,6 @@
 simulation:
-  hlr: 0.5
-  flux: 12258.97
+  hlr: "catalog"
+  flux: "catalog"
   psf_fwhm: 0.5
   psf_npix: 53
   psf_noise: 1.0e-6
@@ -13,7 +13,8 @@ simulation:
   shear_true: 0.01
 
 output:
-  results_fits: "/home/adfield/ShearNet/unit_tests/first/benchmarking/m/metacal_results.fits"
+  results_fits: "/home/adfield/ShearNet/unit_tests/third/benchmarking/m/metacal_results.fits"
+  # pdf_name: "sample_galaxies_triplet.pdf"
 
 models:
   psf_model: "gauss"
@@ -21,8 +22,8 @@ models:
 
 ShearNet:
   include_sn: True
-  sn_model_name: "first_validation_test"
-  n_outputs: 2
+  sn_model_name: "third_validation_test"
+  n_outputs: 4
 
 catalog:
   cosmos_cat_fname: "/home/adfield/ShearNet/cosmos_catalog_eval.fits"

@@ -2,7 +2,7 @@
 dataset:
   samples: 300000
   psf_fwhm: 0.5
-  exp: "ideal"
+  exp: "superbit"
   nse_sd: 12.719674
   seed: 42
   stamp_size: 53
@@ -36,7 +36,7 @@ training:
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "first_validation_test"
+  model_name: "first_validation_test_sbpsf"
   
 # Plotting configuration
 plotting:

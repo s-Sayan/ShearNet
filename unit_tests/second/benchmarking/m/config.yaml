@@ -13,7 +13,7 @@ simulation:
   shear_true: 0.01
 
 output:
-  results_fits: "/home/adfield/ShearNet/unit_tests/second/benchmarking/m/metacal_results_g_sn_raw.fits"
+  results_fits: "/home/adfield/ShearNet/unit_tests/second/benchmarking/m/metacal_results.fits"
   # pdf_name: "sample_galaxies_triplet.pdf"
 
 models:
@@ -23,6 +23,7 @@ models:
 ShearNet:
   include_sn: True
   sn_model_name: "second_validation_test"
+  n_outputs: 3
 
 catalog:
-  cosmos_cat_fname: "/home/adfield/ShearNet/cosmos15_superbit2023_phot_shapes_with_sigma.csv"
+  cosmos_cat_fname: "/home/adfield/ShearNet/cosmos_catalog_eval.fits"
