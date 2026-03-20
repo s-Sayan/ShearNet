@@ -1,7 +1,7 @@
 simulation:
   hlr: "catalog"
   flux: "catalog"
-  psf_fwhm: 0.5
+  psf_fwhm: "superbit"
   psf_npix: 53
   psf_noise: 1.0e-6
   scale: 0.141
@@ -14,7 +14,7 @@ simulation:
   psfex_model_file: "/home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf"
 
 output:
-  results_fits: "/home/adfield/ShearNet/unit_tests/third/benchmarking/m/metacal_results.fits"
+  results_fits: "/home/adfield/ShearNet/unit_tests/fourth/benchmarking/m/metacal_results.fits"
   # pdf_name: "sample_galaxies_triplet.pdf"
 
 models:
@@ -23,7 +23,7 @@ models:
 
 ShearNet:
   include_sn: True
-  sn_model_name: "third_validation_test"
+  sn_model_name: "fourth_validation_test"
   n_outputs: 4
 
 catalog:
