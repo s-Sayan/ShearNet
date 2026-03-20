@@ -137,7 +137,7 @@ def make_data(rng, noise):
     image_position = galsim.PositionD(x_im, y_im)
     psf = GALSIM_PSF.getPSF(image_position)
     gsp=galsim.GSParams(maximum_fft_size=32768)
-    obj0 = galsim.Exponential(half_light_radius=gal_hlr).shear(q=q, beta=phi)
+    obj0 = galsim.Exponential(half_light_radius=gal_hlr, flux=gal_flux).shear(q=q, beta=phi)
 
     g1_th, g2_th, _, _, _ = utils.g_from_gal_jac(obj0)
     g_th = np.array([g1_th, g2_th])
