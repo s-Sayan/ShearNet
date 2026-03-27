@@ -440,7 +440,7 @@ class ForkLike(nn.Module):
             raise ValueError(f"Invalid model type specified: {model_type}")
 
     @nn.compact
-    def __call__(self, galaxy_image, psf_image, deterministic: bool = False):
+    def __call__(self, galaxy_image, psf_image, n_outputs: int = 2, deterministic: bool = False):
         # This model will learn from galaxy images
         galaxy_features = self.galaxy_model(galaxy_image, deterministic=deterministic, fork=True)
         
@@ -456,5 +456,6 @@ class ForkLike(nn.Module):
         x = nn.relu(x)
 
         # Final predictions of [g1, g2, sigma, flux]
-        x = nn.Dense(4)(x)
+        # If 2, [g1, g2]; If 3 [g1, g2, sigma]
+        x = nn.Dense(n_outputs)(x)
         return x

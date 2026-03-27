@@ -150,6 +150,12 @@ def main():
         model = EnhancedPSFDeconvNet()
     elif model_type == "research_backed":
         model = ResearchBackedPSFDeconvolutionUNet()
+    elif model_type == "unrolled_admm_2":
+        model = UnrolledADMM_2Layer()
+    elif model_type == "unrolled_admm_4":
+        model = UnrolledADMM_4Layer()
+    elif model_type == "unrolled_admm_8":
+        model = UnrolledADMM_8Layer()
     else:
         raise ValueError(f"Invalid model type specified: {model_type}")
 
@@ -209,6 +215,7 @@ def main():
     print(f"{'='*50}")
     
     if normalized:
+        print("****** normalized! *******")
         neural_results = eval_model(
             state, test_galaxy_images, test_psf_images, test_target_images, means, stds, normalized
         )
@@ -274,10 +281,16 @@ def main():
         # Plot spatial residuals
         print("Creating spatial residuals heat map...")
         spatial_residuals_path = os.path.join(df_plot_path, "spatial_residual.png")
+
+        # Create predictions dictionary for the new function signature
+        predictions_dict = {
+            'Neural Network': neural_predictions,
+            'GalSim Deconvolution': galsim_predictions
+        }
+
         plot_spatial_residuals(
-            test_target_images,
-            neural_predictions,
-            galsim_predictions,
+            target_images=test_target_images,
+            predictions_dict=predictions_dict,
             path=spatial_residuals_path,
             title="Spatial Deconvolution Bias Analysis"
         )

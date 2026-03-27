@@ -2,8 +2,8 @@
 dataset:
   samples: 100
   psf_sigma: 0.25
-  nse_sd: 1.0e-3
-  exp: "ideal"
+  nse_sd: 1.0e-2
+  exp: "superbit"
   seed: 42
   stamp_size: 53
   pixel_size: 0.141

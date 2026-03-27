@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import optax
 from flax.training import train_state, checkpoints
 from .models import SimpleGalaxyNN, EnhancedGalaxyNN, GalaxyResNet, ResearchBackedGalaxyResNet, ForkLensPSFNet, ForkLike
+import functools
 
 
 def save_checkpoint(state, step, checkpoint_dir, model_name, overwrite=True):
@@ -27,9 +28,9 @@ def loss_fn(state, params, images, labels):
     loss = optax.l2_loss(preds, labels).mean()
     return loss  # Mean Squared Error
 
-def fork_loss_fn(state, params, galaxy_images, psf_images, labels):
+def fork_loss_fn(state, params, galaxy_images, psf_images, labels, n_outputs):
     """Compute loss for batch."""
-    preds = state.apply_fn(params, galaxy_images, psf_images)
+    preds = state.apply_fn(params, galaxy_images, psf_images, n_outputs)
     loss = optax.l2_loss(preds, labels).mean()
     return loss
 
@@ -42,14 +43,12 @@ def train_step(state, images, labels):
     state = state.apply_gradients(grads=grads)
     return state, loss
 
-@jax.jit
-def fork_train_step(state, galaxy_images, psf_images, labels):
-    """Single training step."""
+@functools.partial(jax.jit, static_argnums=(4,))
+def fork_train_step(state, galaxy_images, psf_images, labels, n_outputs):
     grad_fn = jax.value_and_grad(fork_loss_fn, argnums=1, has_aux=False)
-    loss, grads = grad_fn(state, state.params, galaxy_images, psf_images, labels)
+    loss, grads = grad_fn(state, state.params, galaxy_images, psf_images, labels, n_outputs)
     state = state.apply_gradients(grads=grads)
     return state, loss
-
 
 @jax.jit
 def eval_step(state, images, labels):
@@ -57,35 +56,33 @@ def eval_step(state, images, labels):
     loss = loss_fn(state, state.params, images, labels)
     return loss
 
-@jax.jit
-def fork_eval_step(state, galaxy_images, psf_images, labels):
-    """Single evaluation step."""
-    loss = fork_loss_fn(state, state.params, galaxy_images, psf_images, labels)
+@functools.partial(jax.jit, static_argnums=(4,))
+def fork_eval_step(state, galaxy_images, psf_images, labels, n_outputs):
+    loss = fork_loss_fn(state, state.params, galaxy_images, psf_images, labels, n_outputs)
     return loss
 
 
 def train_modelv1(images, labels, rng_key, epochs=10, batch_size=32, nn="simple", save_path=None, model_name="my_model"):
     """Original training function without validation."""
     if nn == "simple":
-        model = SimpleGalaxyNN()  # Initialize the model
+        model = SimpleGalaxyNN()
     elif nn == "enhanced":
-        model = EnhancedGalaxyNN()  # Initialize the complex model
+        model = EnhancedGalaxyNN()
     elif nn == "resnet":
-        model = GalaxyResNet()  # Initialize the ResNet model
+        model = GalaxyResNet()
     else:
         raise ValueError("Invalid model type specified.")
     
-    params = model.init(rng_key, jnp.ones_like(images[0]))  # Initialize model parameters
+    params = model.init(rng_key, jnp.ones_like(images[0]))
     state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=optax.adam(1e-3))
     
     epoch_losses = []
     for epoch in range(epochs):
         print(f"Epoch {epoch + 1}/{epochs}")
-        # Shuffle the data at the beginning of each epoch
         rng_key, subkey = jax.random.split(rng_key)
-        perm = jax.random.permutation(subkey, len(images))  # Create a permutation of indices
-        shuffled_images = images[perm]  # Apply the permutation to images
-        shuffled_labels = labels[perm]  # Apply the same permutation to labels
+        perm = jax.random.permutation(subkey, len(images))
+        shuffled_images = images[perm]
+        shuffled_labels = labels[perm]
         epoch_loss = 0
         count = 0
 
@@ -101,7 +98,6 @@ def train_modelv1(images, labels, rng_key, epochs=10, batch_size=32, nn="simple"
         epoch_loss /= count
         epoch_losses.append(epoch_loss)
 
-        # Save the model after every epoch if a save path is provided
         if save_path:
             save_checkpoint(state, step=epoch + 1, checkpoint_dir=save_path, model_name=model_name, overwrite=True)
     
@@ -112,8 +108,12 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                   batch_size=32, nn="simple", galaxy_type='cnn', 
                   psf_type='cnn', save_path=None, model_name="my_model",
                   val_split=0.2, eval_interval=1, patience=5, lr=1e-3,
-                  weight_decay=1e-4):
-    """Enhanced training function with validation and early stopping."""
+                  weight_decay=1e-4, n_outputs=2):
+    """Enhanced training function with validation and early stopping.
+    
+    Saves only the best checkpoint (by val loss) using model_name as the prefix.
+    No final checkpoint is saved — the checkpoint on disk is always the best epoch.
+    """
     # Split into train and validation sets
     split_idx = int(len(galaxy_images) * (1 - val_split))
     train_galaxy_images, val_galaxy_images = galaxy_images[:split_idx], galaxy_images[split_idx:]
@@ -135,7 +135,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
     else:
         raise ValueError(f"Invalid model type specified: {nn}")
     
-    params = model.init(rng_key, jnp.ones_like(galaxy_images[0]), jnp.ones_like(psf_images[0]))  # Initialize model parameters
+    params = model.init(rng_key, jnp.ones_like(galaxy_images[0]), jnp.ones_like(psf_images[0]), n_outputs=n_outputs)
     lr_schedule = optax.cosine_decay_schedule(
         init_value=lr, 
         decay_steps=epochs * (len(train_galaxy_images) // batch_size)
@@ -144,10 +144,10 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
     state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
     train_losses, val_losses = [], []
-    best_val_loss = float('inf')  # Initialize best validation loss
-    patience_counter = 0  # Counter for early stopping
+    best_val_loss = float('inf')
+    patience_counter = 0
 
-    if nn == 'fork-like' :
+    if nn == 'fork-like':
         for epoch in range(epochs):
             print(f"Epoch {epoch + 1}/{epochs}")
             
@@ -165,7 +165,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                 batch_psf_images = shuffled_train_psf_images[i:i + batch_size]
                 batch_labels = shuffled_train_labels[i:i + batch_size]
                 batch_size_actual = len(batch_galaxy_images)
-                state, loss = fork_train_step(state, batch_galaxy_images, batch_psf_images, batch_labels)
+                state, loss = fork_train_step(state, batch_galaxy_images, batch_psf_images, batch_labels, n_outputs)
                 train_loss += loss * batch_size_actual
                 total_samples += batch_size_actual
             train_loss /= total_samples
@@ -179,18 +179,20 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                     batch_psf_images = val_psf_images[i:i + batch_size]
                     batch_labels = val_labels[i:i + batch_size]
                     batch_size_actual = len(batch_galaxy_images)
-                    loss = fork_eval_step(state, batch_galaxy_images, batch_psf_images, batch_labels)
+                    loss = fork_eval_step(state, batch_galaxy_images, batch_psf_images, batch_labels, n_outputs)
                     val_loss += loss * batch_size_actual
                     total_samples += batch_size_actual
                 val_loss /= total_samples
                 val_losses.append(val_loss)
                 print(f"Validation Loss: {val_loss:.4e}")
 
-                # Early stopping check
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     patience_counter = 0
                     print(f"New best validation loss: {val_loss:.4e}")
+                    if save_path:
+                        save_checkpoint(state, step=epoch + 1, checkpoint_dir=save_path,
+                                      model_name=model_name, overwrite=True)
                 else:
                     patience_counter += 1
                     print(f"No improvement in validation loss. Patience: {patience_counter}/{patience}")
@@ -219,7 +221,6 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
             train_loss /= total_samples
             train_losses.append(train_loss)
 
-            # Evaluate validation loss at specified intervals
             if (epoch + 1) % eval_interval == 0:
                 val_loss, total_samples = 0, 0
                 for i in range(0, len(val_galaxy_images), batch_size):
@@ -233,13 +234,12 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                 val_losses.append(val_loss)
                 print(f"Validation Loss: {val_loss:.4e}")
 
-                # Check for early stopping
                 if val_loss < best_val_loss:
-                    best_val_loss = val_loss  # Update the best validation loss
-                    patience_counter = 0  # Reset patience counter
-                    #if save_path:  # Save the best model
-                    #    save_checkpoint(state, step=epoch + 1, checkpoint_dir=save_path, 
-                    #                  model_name=f"{model_name}_best", overwrite=True)
+                    best_val_loss = val_loss
+                    patience_counter = 0
+                    if save_path:
+                        save_checkpoint(state, step=epoch + 1, checkpoint_dir=save_path, 
+                                      model_name=model_name, overwrite=True)
                     print(f"New best validation loss: {val_loss:.4e}")
                 else:
                     patience_counter += 1
@@ -248,10 +248,5 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                 if patience_counter >= patience:
                     print("Early stopping triggered.")
                     break
-
-    # Save checkpoint
-    if save_path:
-        save_checkpoint(state, step=epoch + 1, checkpoint_dir=save_path, 
-                        model_name=model_name, overwrite=True)
 
     return state, train_losses, val_losses

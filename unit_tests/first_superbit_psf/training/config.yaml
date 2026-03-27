@@ -1,0 +1,50 @@
+# Dataset configuration
+dataset:
+  samples: 300000
+  psf_fwhm: 0.5
+  exp: "superbit"
+  nse_sd: 12.719674
+  seed: 42
+  stamp_size: 53
+  pixel_size: 0.141
+  psfex_model_file: "/home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf"
+  hlr_type: "constant" # constant or catalog
+  flux_type: "constant" # constant or catalog
+
+# Model configuration  
+model:
+  process_psf: true
+  type: "fork-like"  # Options: mlp, cnn, resnet, forklens_psf, 
+                     # research_backed, and fork-like
+  galaxy:
+    type: "research_backed"
+  psf:
+    type: "forklens_psf"
+  n_outputs: 2
+  
+# Training configuration
+training:
+  epochs: 300
+  batch_size: 128
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  patience: 50
+  val_split: 0.2
+  eval_interval: 1
+  
+# Output configuration
+output:
+  save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
+  plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
+  model_name: "first_validation_test_sbpsf"
+  
+# Plotting configuration
+plotting:
+  plot: true  # Whether to plot learning curves
+
+# Comparison methods
+comparison:
+  mcal: true
+  ngmix: true
+  psf_model: "gauss"
+  gal_model: "gauss"

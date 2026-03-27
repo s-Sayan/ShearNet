@@ -16,6 +16,7 @@ from ..core.train import train_model
 from ..core.dataset import generate_dataset, split_combined_images
 from ..utils.device import get_device
 from ..utils.plot_helpers import plot_learning_curve
+from ..utils.normalization import fit_normalizer, transform_labels, save_normalizer
 
 def create_parser():
     """Create argument parser for training."""
@@ -32,7 +33,7 @@ def create_parser():
         epilog="""
 Examples:
   # Your original command (still works)
-  shearnet-train --epochs 10 --batch_size 64 --samples 10000 --psf_sigma 0.25 --save --model_name cnn6 --plot --nn cnn --patience 20
+  shearnet-train --epochs 10 --batch_size 64 --samples 10000 --psf_fwhm 0.25 --save --model_name cnn6 --plot --nn cnn --patience 20
   
   # Use config file
   shearnet-train --config configs/cnn6_experiment.yaml
@@ -56,7 +57,7 @@ Examples:
     parser.add_argument('--batch_size', type=int, default=None, help='Batch size.')
     parser.add_argument('--samples', type=int, default=None, help='Number of training samples.')
     parser.add_argument('--patience', type=int, default=None, help='Patience for early stopping.')
-    parser.add_argument('--psf_sigma', type=float, default=None, help='PSF sigma for simulation.')
+    parser.add_argument('--psf_fwhm', type=float, default=None, help='PSF sigma for simulation.')
     parser.add_argument('--nse_sd', type=float, default=None, help='noise sd for simulation.')
     parser.add_argument('--exp', type=str, default=None, help='Which experiment to run')
     parser.add_argument('--nn', type=str, default=None, help='Which model to use')
@@ -68,12 +69,17 @@ Examples:
     parser.add_argument('--val_split', type=float, default=None, 
                     help='Validation split fraction (default: 0.2)')
     parser.add_argument('--eval_interval', type=int, default=None,
-                    help='Evaluate every N epochs (default: 1)')    
+                    help='Evaluate every N epochs (default: 1)')
+    parser.add_argument('--psfex_model_file', type=str, default=None, help='psfex_model_file path')    
     # Keep defaults for paths since they're computed
     parser.add_argument('--save_path', type=str, default=default_save_path,
                        help='Path to save the model parameters.')
     parser.add_argument('--plot_path', type=str, default=default_plot_path,
                        help='Path to save the learning curve plot.')
+    parser.add_argument('--hlr_type', type=str, default="constant",
+                       help='hlr type can be constant or catalog. constant will be 0.5.')
+    parser.add_argument('--flux_type', type=str, default="constant",
+                       help='hlr type can be constant or catalog. constant will be 12258.97.')
     
     parser.add_argument('--plot', action='store_const', const=True, default=None,
                        help='Enable plotting (overrides config)')
@@ -85,6 +91,7 @@ Examples:
                    help='Pixel size of the training data.')
 
     parser.add_argument('--process_psf', action='store_const', const=True, default=None, help='Process psf images on separate CNN branch.')
+    parser.add_argument('--n_outputs', type=int, default=2, help='If 2, [g1, g2]; If 3 [g1, g2, sigma]; If 4 [g1, g2, sigma, flux]')
 
     parser.add_argument('--galaxy_type', type=str, default=None, 
                     help='Galaxy model type for fork-like models')
@@ -112,7 +119,7 @@ def main():
         'batch_size': 32,
         'samples': 10000,
         'patience': 10,
-        'psf_sigma': 0.25,
+        'psf_fwhm': 0.25,
         'nse_sd': 1e-5,
         'exp': 'ideal',
         'nn': 'cnn',
@@ -147,7 +154,7 @@ def main():
         
         # Get values from config (after overrides applied)
         samples = config.get('dataset.samples')
-        psf_sigma = config.get('dataset.psf_sigma')
+        psf_fwhm = config.get('dataset.psf_fwhm')
         nse_sd = config.get('dataset.nse_sd')
         exp = config.get('dataset.exp')
         seed = config.get('dataset.seed')
@@ -166,6 +173,10 @@ def main():
         eval_interval = config.get('training.eval_interval')
         galaxy_type = config.get('model.galaxy.type')
         psf_type = config.get('model.psf.type')
+        psfex_model_file = config.get('dataset.psfex_model_file')
+        n_outputs = config.get('model.n_outputs')
+        hlr_type = config.get('dataset.hlr_type')
+        flux_type = config.get('dataset.flux_type')
 
         apply_psf_shear = config.get('dataset.apply_psf_shear')
         psf_shear_range = config.get('dataset.psf_shear_range')
@@ -173,7 +184,7 @@ def main():
     else:
         # Use argparse values with defaults (original behavior)
         samples = args.samples if args.samples is not None else DEFAULTS['samples']
-        psf_sigma = args.psf_sigma if args.psf_sigma is not None else DEFAULTS['psf_sigma']
+        psf_fwhm = args.psf_fwhm if args.psf_fwhm is not None else DEFAULTS['psf_fwhm']
         nse_sd = args.nse_sd if args.nse_sd is not None else DEFAULTS['nse_sd']
         exp = args.exp if args.exp is not None else DEFAULTS['exp']
         seed = args.seed if args.seed is not None else DEFAULTS['seed']
@@ -189,6 +200,10 @@ def main():
         eval_interval = args.eval_interval if args.eval_interval is not None else DEFAULTS['eval_interval']
         stamp_size = args.stamp_size if args.stamp_size is not None else DEFAULTS['stamp_size']
         pixel_size = args.pixel_size if args.pixel_size is not None else DEFAULTS['pixel_size']
+        psfex_model_file = args.psfex_model_file if args.psfex_model_file is not None else DEFAULTS['psfex_model_file']
+        n_outputs = args.n_outputs if args.n_outputs is not None else DEFAULTS['n_outputs']
+        hlr_type = args.hlr_type if args.hlr_type is not None else DEFAULTS['hlr_type']
+        flux_type = args.flux_type if args.flux_type is not None else DEFAULTS['flux_type']
 
         process_psf = args.process_psf if args.process_psf is not None else DEFAULTS['process_psf']
 
@@ -202,7 +217,7 @@ def main():
         config = Config()  # Start with defaults
         # Update with actual values being used
         config._set_nested('dataset.samples', samples)
-        config._set_nested('dataset.psf_sigma', psf_sigma)
+        config._set_nested('dataset.psf_fwhm', psf_fwhm)
         config._set_nested('dataset.nse_sd', nse_sd)
         config._set_nested('dataset.exp', exp)
         config._set_nested('dataset.seed', seed)
@@ -225,6 +240,10 @@ def main():
         config._set_nested('model.psf.type', psf_type)
         config._set_nested('dataset.apply_psf_shear', apply_psf_shear)
         config._set_nested('dataset.psf_shear_range', psf_shear_range)
+        config._set_nested('dataset.psfex_model_file', psfex_model_file)
+        config._set_nested('model.n_outputs', n_outputs)
+        config._set_nested('dataset.hlr_type', hlr_type)
+        config._set_nested('dataset.flux_type', flux_type)
 
     # Validate process_psf and model compatibility
     if process_psf:
@@ -262,7 +281,7 @@ def main():
     
     get_device()
 
-    train_galaxy_images, train_labels = generate_dataset(samples, psf_sigma, exp=exp, seed=seed, npix=stamp_size, scale=pixel_size, return_psf=process_psf,nse_sd=nse_sd) 
+    train_galaxy_images, train_labels = generate_dataset(samples, psf_fwhm, exp=exp, seed=seed, npix=stamp_size, scale=pixel_size, return_psf=process_psf, nse_sd=nse_sd, psf_file_or_dir=psfex_model_file, n_outputs=n_outputs, hlr_type=hlr_type, flux_type=flux_type)
     # Split into separate galaxy and PSF arrays
     train_psf_images = train_galaxy_images # I know this is weird, but see ../core/train.py#L11 to see that i need it defined (as not null), but it is not used if process_psf is off
     if process_psf :
@@ -273,11 +292,20 @@ def main():
 
     rng_key = random.PRNGKey(seed)
     
+    # --- normalization ---
+    split_idx = int(len(train_labels) * (1 - val_split))
+    norm_params = fit_normalizer(train_labels[:split_idx])
+    train_labels = transform_labels(train_labels, norm_params)
+    # --- end normalization ---
+    
     model_dir = os.path.join(plot_path, model_name)
     os.makedirs(model_dir, exist_ok=True)
     config_path = os.path.join(model_dir, 'training_config.yaml')
     config.save(config_path)
     print(f"\nTraining configuration saved to: {config_path}")
+    
+    normalizer_path = os.path.join(model_dir, 'label_normalizer.npz')
+    save_normalizer(norm_params, normalizer_path)
 
     try:
         models_source = shearnet.core.models.__file__
@@ -302,7 +330,8 @@ def main():
                                     val_split=val_split, # validation split fraction
                                     eval_interval=eval_interval, 
                                     patience=patience, #for early stopping
-                                    lr=lr, weight_decay=weight_decay #optimizer details
+                                    lr=lr, weight_decay=weight_decay, #optimizer details
+                                    n_outputs=n_outputs
                                 )
 
     if plot_flag:

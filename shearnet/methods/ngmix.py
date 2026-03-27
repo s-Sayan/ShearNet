@@ -259,9 +259,9 @@ def get_coellip_ngauss(name):
 def process_obs(obs, boot):
     resdict, obsdict = boot.go(obs)
     dlist = [make_struct(res=sres, obs=obsdict[stype], shear_type=stype) for stype, sres in resdict.items()]
-    return np.hstack(dlist)
+    return np.hstack(dlist), obsdict
 
-def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_pars= {'psf': 'dilate', 'mcal_shear': 0.01}, chunk_size=10000):
+def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_pars= {'psf': 'dilate', 'mcal_shear': 0.01}, weight_fwhm=1.0):
     """
     Multiprocessing version of original _fit_one()
 
@@ -272,6 +272,7 @@ def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_p
     - obslist: Observation list for MEDS object of given ID
     - prior: ngmix mcal priors
     - mcal_pars: mcal running parameters
+    - weight_fwhm is just for gaussmom psf and gal models
 
     TO DO: add a label indicating whether the galaxy passed the selection
     cuts for each shear step (i.e. no_shear,1p,1m,2p,2m).
@@ -280,34 +281,50 @@ def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_p
     import multiprocessing as mp
     mp.set_start_method('spawn', force=True)
     
-    # get image pixel scale (assumes constant across list)
+     # Get image pixel scale
     jacobian = obslist[0]._jacobian
-    Tguess = 4*jacobian.get_scale()**2
-    ntry = 20
-    lm_pars = {'maxfev':2000, 'xtol':5.0e-5, 'ftol':5.0e-5}
-    psf_lm_pars={'maxfev': 4000, 'xtol':5.0e-5,'ftol':5.0e-5}
+    scale = jacobian.get_scale()
+    
+    # GaussMom setup (if using moments-based measurement)
+    if gal_model == 'gaussmom':
+        # FWHM of Gaussian weight function (in arcsec, typically)
+        # Rule of thumb: ~1-2x your typical PSF FWHM
+        weight_fwhm = 1.2  # You can adjust this
+        fitter = ngmix.gaussmom.GaussMom(fwhm=weight_fwhm)
+        runner = ngmix.runners.Runner(fitter=fitter)
+    else:
+        # Original ML fitting setup
+        Tguess = 4 * scale**2
+        ntry = 20
+        lm_pars = {'maxfev': 2000, 'xtol': 5.0e-5, 'ftol': 5.0e-5}
+        fitter = ngmix.fitting.Fitter(model=gal_model, prior=prior, fit_pars=lm_pars)
+        guesser = ngmix.guessers.TPSFFluxAndPriorGuesser(rng=rng, T=Tguess, prior=prior)
+        runner = ngmix.runners.Runner(fitter=fitter, guesser=guesser, ntry=ntry)
 
-    fitter = ngmix.fitting.Fitter(model=gal_model, prior=prior, fit_pars=lm_pars)
-    guesser = ngmix.guessers.TPSFFluxAndPriorGuesser(rng=rng, T=Tguess, prior=prior)
-
-    # psf fitting
-    if 'em' in psf_model:
-        em_pars={'tol': 1.0e-6, 'maxiter': 50000}
+    # PSF fitting setup
+    if psf_model == 'gaussmom':
+        weight_fwhm = 1.2  # Same or different from galaxy weight
+        psf_fitter = ngmix.gaussmom.GaussMom(fwhm=weight_fwhm)
+        psf_runner = ngmix.runners.PSFRunner(fitter=psf_fitter)
+    elif 'em' in psf_model:
+        em_pars = {'tol': 1.0e-6, 'maxiter': 50000}
         psf_ngauss = get_em_ngauss(psf_model)
         psf_fitter = ngmix.em.EMFitter(maxiter=em_pars['maxiter'], tol=em_pars['tol'])
         psf_guesser = ngmix.guessers.GMixPSFGuesser(rng=rng, ngauss=psf_ngauss)
+        psf_runner = ngmix.runners.PSFRunner(fitter=psf_fitter, guesser=psf_guesser, ntry=20)
     elif 'coellip' in psf_model:
+        psf_lm_pars = {'maxfev': 4000, 'xtol': 5.0e-5, 'ftol': 5.0e-5}
         psf_ngauss = get_coellip_ngauss(psf_model)
         psf_fitter = ngmix.fitting.CoellipFitter(ngauss=psf_ngauss, fit_pars=psf_lm_pars)
         psf_guesser = ngmix.guessers.CoellipPSFGuesser(rng=rng, ngauss=psf_ngauss)
+        psf_runner = ngmix.runners.PSFRunner(fitter=psf_fitter, guesser=psf_guesser, ntry=20)
     elif psf_model == 'gauss':
+        psf_lm_pars = {'maxfev': 4000, 'xtol': 5.0e-5, 'ftol': 5.0e-5}
         psf_fitter = ngmix.fitting.Fitter(model='gauss', fit_pars=psf_lm_pars)
         psf_guesser = ngmix.guessers.SimplePSFGuesser(rng=rng)
+        psf_runner = ngmix.runners.PSFRunner(fitter=psf_fitter, guesser=psf_guesser, ntry=20)
     else:
-        raise ValueError('psf_model must be one of emn, coellipn, or gauss')
-
-    psf_runner = ngmix.runners.PSFRunner(fitter=psf_fitter, guesser=psf_guesser, ntry=ntry)
-    runner = ngmix.runners.Runner(fitter=fitter, guesser=guesser, ntry=ntry)
+        raise ValueError('psf_model must be gaussmom, emN, coellipN, or gauss')
 
     #types = ['noshear', '1p', '1m', '2p', '2m']
     psf = mcal_pars['psf']
@@ -328,27 +345,32 @@ def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_p
     data_list = []
 
     with Pool(num_cores) as pool:
-        n_total = len(obslist)
-        for start in range(0, n_total, chunk_size):
-            end = min(start + chunk_size, n_total)
-            chunk = obslist[start:end]
+        results_list = list(pool.starmap(process_obs, [(obs, boot) for obs in obslist]))
+    
+    # Separate data_list and obsdict_list
+    data_list = [r[0] for r in results_list]
+    obsdict_list = [r[1] for r in results_list]
+    
+    return data_list, obsdict_list
 
-            chunk_results = pool.starmap(
-                process_obs,
-                [(obs, boot) for obs in chunk],
-            )
-            data_list.extend(chunk_results)
-
-    return data_list
-
-def ngmix_pred(data_list):
+def ngmix_pred(data_list, return_bad_indices=False):
     g1 = np.array([d[0][3][0] for d in data_list])
     g2 = np.array([d[0][3][1] for d in data_list])
     T = np.array([d[0][4] for d in data_list])
+    
+    # Detect bad T values
+    bad_mask = (T <= 0) | np.isnan(T)
+    bad_indices = np.where(bad_mask)[0]
+    
     # T = 2 * sigma**2
-    sigma = np.sqrt(T / 2)
+    with np.errstate(invalid='ignore'):  # Suppress warning during calculation
+        sigma = np.sqrt(T / 2)
+    
     flux = np.array([d[0][5] for d in data_list])
     preds = np.vstack((g1, g2, sigma, flux)).T
+    
+    if return_bad_indices:
+        return preds, bad_indices
     return preds
 
 def mp_fit_one_single(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_pars= {'psf': 'dilate', 'mcal_shear': 0.01}):

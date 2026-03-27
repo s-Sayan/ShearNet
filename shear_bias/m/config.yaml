@@ -8,7 +8,7 @@ simulation:
   npix: 53
   nse_sd: 12.719674
   seed: 150
-  n_obs: 100000
+  n_obs: 1000
   Njack: 20
   shear_true: 0.01
 
@@ -19,6 +19,10 @@ output:
 models:
   psf_model: "gauss"
   gal_model: "gauss"
+
+ShearNet:
+  include_sn: False
+  sn_model_name: "second_validation_test_3_params"
 
 catalog:
   cosmos_cat_fname: "/home/adfield/ShearNet/cosmos15_superbit2023_phot_shapes_with_sigma.csv"
