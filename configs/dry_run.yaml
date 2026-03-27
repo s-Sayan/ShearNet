@@ -10,6 +10,8 @@ dataset:
   # PSF shear configuration
   apply_psf_shear: false
   psf_shear_range: 0.05
+  hlr_type: "constant"
+  flux_type: "constant"
 
 model:
   process_psf: true
