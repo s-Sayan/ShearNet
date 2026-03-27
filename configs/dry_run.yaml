@@ -19,7 +19,8 @@ model:
     type: "research_backed"
   psf:
     type: "forklens_psf"
-  
+  n_outputs: 2
+
 training:
   epochs: 10
   batch_size: 16
