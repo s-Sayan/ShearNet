@@ -93,17 +93,26 @@ EM_PARS={'tol': 1.0e-6, 'maxiter': 50000}
 import jax.numpy as jnp
 if INCLUDE_SN:
     from shearnet.cli.evaluate import initialize_model as _initialize_model, load_config as _eval_load_config
-    eval_args = argparse.Namespace(
+    from shearnet.utils.normalization import load_normalizer, inverse_transform_labels
+    
+    eval_config = argparse.Namespace(
         model_name=SN_MODEL_NAME, config=None, seed=None,
         test_samples=None, mcal=False, plot=False, plot_animation=False,
         process_psf=None, galaxy_type=None, psf_type=None,
         apply_psf_shear=None, psf_shear_range=None
     )
-    eval_config = _eval_load_config(eval_args)
+    eval_config = _eval_load_config(eval_config)
+    
     dummy_images = jnp.ones((1, NPIX, NPIX))
     STATE = _initialize_model(eval_config, dummy_images, dummy_images)
+    
+    # load normalizer from same directory as training config
+    data_path = os.getenv('SHEARNET_DATA_PATH', os.path.abspath('.'))
+    _normalizer_path = os.path.join(data_path, 'plots', SN_MODEL_NAME, 'label_normalizer.npz')
+    NORM_PARAMS = load_normalizer(_normalizer_path) if os.path.exists(_normalizer_path) else None
 else:
     STATE = None
+    NORM_PARAMS = None
 
 # ============================================================
 # FUNCTIONS THAT NEED galsim + cosmos_cat stay here
@@ -241,6 +250,8 @@ def _run_shearnet_batch(buf):
     gal = jnp.stack([r[2] for r in buf])
     psf = jnp.stack([r[3] for r in buf])
     preds = np.array(STATE.apply_fn(STATE.params, gal, psf, n_outputs=N_OUTPUTS, deterministic=True))
+    if NORM_PARAMS is not None:
+        preds = inverse_transform_labels(preds, NORM_PARAMS)
     for k in range(n):
         data_list[base + k][0]["g_sn"] = preds[k][:2]
     g_sn_raw_list.append(preds[:, :2])

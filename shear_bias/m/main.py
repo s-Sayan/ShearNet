@@ -104,17 +104,26 @@ TYPES = ["noshear", "1p", "1m"]
 import jax.numpy as jnp
 if INCLUDE_SN:
     from shearnet.cli.evaluate import initialize_model as _initialize_model, load_config as _eval_load_config
-    eval_args = argparse.Namespace(
+    from shearnet.utils.normalization import load_normalizer, inverse_transform_labels
+    
+    eval_config = argparse.Namespace(
         model_name=SN_MODEL_NAME, config=None, seed=None,
         test_samples=None, mcal=False, plot=False, plot_animation=False,
         process_psf=None, galaxy_type=None, psf_type=None,
         apply_psf_shear=None, psf_shear_range=None
     )
-    eval_config = _eval_load_config(eval_args)
+    eval_config = _eval_load_config(eval_config)
+    
     dummy_images = jnp.ones((1, NPIX, NPIX))
     STATE = _initialize_model(eval_config, dummy_images, dummy_images)
+    
+    # load normalizer from same directory as training config
+    data_path = os.getenv('SHEARNET_DATA_PATH', os.path.abspath('.'))
+    _normalizer_path = os.path.join(data_path, 'plots', SN_MODEL_NAME, 'label_normalizer.npz')
+    NORM_PARAMS = load_normalizer(_normalizer_path) if os.path.exists(_normalizer_path) else None
 else:
     STATE = None
+    NORM_PARAMS = None
 
 # ============================================================
 # FUNCTIONS THAT NEED galsim + cosmos_cat stay here
@@ -301,6 +310,10 @@ def _run_shearnet_batch(buf):
         preds_p = np.array(STATE.apply_fn(STATE.params, gal_p, psf_p, n_outputs=N_OUTPUTS, deterministic=True))
         preds_m = np.array(STATE.apply_fn(STATE.params, gal_m, psf_m, n_outputs=N_OUTPUTS, deterministic=True))
 
+        if NORM_PARAMS is not None:
+            preds_p = inverse_transform_labels(preds_p, NORM_PARAMS)
+            preds_m = inverse_transform_labels(preds_m, NORM_PARAMS)
+
         for k in range(n):
             idx_p = np.where(data_list_p[base + k]["shear_type"] == stype)[0][0]
             idx_m = np.where(data_list_m[base + k]["shear_type"] == stype)[0][0]
@@ -312,6 +325,10 @@ def _run_shearnet_batch(buf):
     psf_raw = jnp.stack([r[8] for r in buf])
     raw_preds_p = np.array(STATE.apply_fn(STATE.params, raw_p, psf_raw, n_outputs=N_OUTPUTS, deterministic=True))
     raw_preds_m = np.array(STATE.apply_fn(STATE.params, raw_m, psf_raw, n_outputs=N_OUTPUTS, deterministic=True))
+    
+    if NORM_PARAMS is not None:
+        raw_preds_p = inverse_transform_labels(raw_preds_p, NORM_PARAMS)
+        raw_preds_m = inverse_transform_labels(raw_preds_m, NORM_PARAMS)
 
     g_sn_raw_list_p.append(raw_preds_p[:, :2])
     g_sn_raw_list_m.append(raw_preds_m[:, :2])

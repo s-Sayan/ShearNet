@@ -28,7 +28,7 @@ training:
   batch_size: 128
   learning_rate: 1.0e-4
   weight_decay: 1.0e-4
-  patience: 25
+  patience: 50
   val_split: 0.2
   eval_interval: 1
   
