@@ -5,9 +5,10 @@
 #SBATCH -p short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --gres=gpu:L40S:1
 #SBATCH --cpus-per-task=18
 #SBATCH --time=02:00:00
-#SBATCH --mem=48G
+#SBATCH --mem=96G
 
 # ================================
 # Print job info
@@ -28,11 +29,10 @@ export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
 # ================================
-# Activate environment (edit!)
+# Activate environment
 # ================================
-# Example:
-source ~/.bashrc
-conda activate bit_v3
+source /cm/shared/spack/opt/spack/linux-ubuntu20.04-x86_64/gcc-13.2.0/miniconda3-25.1.1-24g7bpuxyyxo5pfd4zn5sldbomvz736a/etc/profile.d/conda.sh
+conda activate shearnet_gpu
 
 # ================================
 # Run code and time execution

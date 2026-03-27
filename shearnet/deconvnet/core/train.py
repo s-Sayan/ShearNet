@@ -7,7 +7,7 @@ import jax.scipy.signal as jsp
 import optax
 import galsim
 from flax.training import train_state, checkpoints
-from .models import PSFDeconvolutionNet, EnhancedPSFDeconvNet, ResearchBackedPSFDeconvolutionUNet
+from .models import PSFDeconvolutionNet, EnhancedPSFDeconvNet, ResearchBackedPSFDeconvolutionUNet, UnrolledADMM_2Layer, UnrolledADMM_4Layer, UnrolledADMM_8Layer
 
 @jax.jit
 def convolve_pair(img_a, img_b):
@@ -166,6 +166,12 @@ def train_model(galaxy_images, psf_images, target_images, rng_key,
         model = EnhancedPSFDeconvNet()
     elif model_type == "research_backed":
         model = ResearchBackedPSFDeconvolutionUNet()
+    elif model_type == "unrolled_admm_2":
+        model = UnrolledADMM_2Layer()
+    elif model_type == "unrolled_admm_4":
+        model = UnrolledADMM_4Layer()
+    elif model_type == "unrolled_admm_8":
+        model = UnrolledADMM_8Layer()
     else:
         raise ValueError(f"Invalid model type specified: {model_type}")
 

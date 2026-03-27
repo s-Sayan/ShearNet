@@ -142,10 +142,13 @@ def make_struct(res, obs, state=None):
 
     return data
 
-def process_obs(obs, boot, state=None):
+def process_obs(obs, boot, return_images=False):
     resdict = boot.go(obs)
-    dlist = make_struct(res=resdict, obs=obs, state=state)
-    return np.hstack(dlist)
+    dlist = make_struct(res=resdict, obs=obs)
+    struct = np.hstack(dlist)
+    if return_images:
+        return struct, obs.image.copy(), obs.psf.image.copy()
+    return struct
 
 def shear_data_to_table(data_list):
     """

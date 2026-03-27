@@ -6,6 +6,7 @@
 import numpy as np
 import ngmix
 import galsim
+import galsim.des
 import matplotlib.pyplot as plt
 import ipdb
 from IPython.display import display, Math
@@ -72,13 +73,21 @@ PSF_NPIX = _config["simulation"]["psf_npix"]
 NOBS = _config["simulation"]["n_obs"]
 NJAC = _config["simulation"]["Njack"]
 
+GALSIM_PSF = galsim.des.DES_PSFEx(_config["simulation"]["psfex_model_file"], wcs=utils.get_galsim_tanwcs())
+
 # ----- Models -----
 PSF_MODEL = _config["models"]["psf_model"]
 GAL_MODEL = _config["models"]["gal_model"]
 
+# ShearNet
+INCLUDE_SN = _config["ShearNet"]["include_sn"]
+SN_MODEL_NAME = _config["ShearNet"]["sn_model_name"]
+N_OUTPUTS = _config["ShearNet"]["n_outputs"]
+
 # ----- Catalog -----
 COSMOS_CAT_FNAME = _config["catalog"]["cosmos_cat_fname"]
-cosmos_cat = Table.read(COSMOS_CAT_FNAME, format="csv")
+with fits.open(COSMOS_CAT_FNAME) as hdul:
+    cosmos_cat = hdul[1].data
 
 # ========= Output ============
 OUTPUT_FITS = _config["output"]["results_fits"]
@@ -92,19 +101,29 @@ MCAL_PARS = {"psf": "dilate", "mcal_shear": 0.01}
 TYPES = ["noshear", "1p", "1m"]
 
 # ========== Load up ShearNet state here =========
-#from shearnet.cli.evaluate import initialize_model as _initialize_model, load_config as _eval_load_config
 import jax.numpy as jnp
-
-#eval_args = argparse.Namespace(
-#    model_name="second_validation_test_3_params", config=None, seed=None,
-#    test_samples=None, mcal=False, plot=False, plot_animation=False,
-#    process_psf=None, galaxy_type=None, psf_type=None,
-#    apply_psf_shear=None, psf_shear_range=None
-#)
-#eval_config = _eval_load_config(eval_args)
-#dummy_images = jnp.ones((1, NPIX, NPIX))
-#STATE = _initialize_model(eval_config, dummy_images, dummy_images)
-STATE = None
+if INCLUDE_SN:
+    from shearnet.cli.evaluate import initialize_model as _initialize_model, load_config as _eval_load_config
+    from shearnet.utils.normalization import load_normalizer, inverse_transform_labels
+    
+    eval_config = argparse.Namespace(
+        model_name=SN_MODEL_NAME, config=None, seed=None,
+        test_samples=None, mcal=False, plot=False, plot_animation=False,
+        process_psf=None, galaxy_type=None, psf_type=None,
+        apply_psf_shear=None, psf_shear_range=None
+    )
+    eval_config = _eval_load_config(eval_config)
+    
+    dummy_images = jnp.ones((1, NPIX, NPIX))
+    STATE = _initialize_model(eval_config, dummy_images, dummy_images)
+    
+    # load normalizer from same directory as training config
+    data_path = os.getenv('SHEARNET_DATA_PATH', os.path.abspath('.'))
+    _normalizer_path = os.path.join(data_path, 'plots', SN_MODEL_NAME, 'label_normalizer.npz')
+    NORM_PARAMS = load_normalizer(_normalizer_path) if os.path.exists(_normalizer_path) else None
+else:
+    STATE = None
+    NORM_PARAMS = None
 
 # ============================================================
 # FUNCTIONS THAT NEED galsim + cosmos_cat stay here
@@ -114,21 +133,37 @@ def make_data(rng, noise, shear_true):
 
     scale = SCALE
     psf_fwhm = PSF_FWHM
-    gal_hlr = GAL_HLR
-    gal_flux = GAL_FLUX
 
     index = rng.randint(len(cosmos_cat))
-    phi = cosmos_cat[index]["c10_sersic_fit_phi"] * galsim.radians
-    q = cosmos_cat[index]["c10_sersic_fit_q"]
-    if q > 1.0:
-        q = 1 / q
+    q    = cosmos_cat['Q'][index]
+    phi  = cosmos_cat['PHI'][index] * galsim.radians
+    if GAL_HLR == "catalog":
+        gal_hlr = cosmos_cat['HLR'][index]
+    else:
+        gal_hlr = GAL_HLR
+    if GAL_FLUX == "catalog":
+        gal_flux = cosmos_cat['FLUX'][index]
+    else:
+        gal_flux = GAL_FLUX
 
     npix_psf = PSF_NPIX
     npix = NPIX
     dy, dx = rng.uniform(low=-scale / 2, high=scale / 2, size=2)
 
-    psf = galsim.Gaussian(fwhm=psf_fwhm)
+    if psf_fwhm == "superbit":
+        image_xsize=9600 
+        image_ysize=6400
+        margin = 500
+        # random integer pixel coordinates inside [margin, size - margin - 1]
+        x_im = rng.randint(margin, image_xsize - margin)
+        y_im = rng.randint(margin, image_ysize - margin)
+        image_position = galsim.PositionD(x_im, y_im)
+        psf = GALSIM_PSF.getPSF(image_position)
+    else:
+        psf = galsim.Gaussian(fwhm=psf_fwhm)
 
+    gsp=galsim.GSParams(maximum_fft_size=32768)
+    
     obj0 = galsim.Exponential(half_light_radius=gal_hlr, flux=gal_flux).shear(q=q, beta=phi)
     objp = obj0.shear(g1=shear_true, g2=0.0)
     objm = obj0.shear(g1=-shear_true, g2=0.0)
@@ -143,9 +178,9 @@ def make_data(rng, noise, shear_true):
     objp = objp.shift(dx=dx, dy=dy)
     objm = objm.shift(dx=dx, dy=dy)
 
-    obj0_psf = galsim.Convolve(psf, obj0)
-    objp_psf = galsim.Convolve(psf, objp)
-    objm_psf = galsim.Convolve(psf, objm)
+    obj0_psf = galsim.Convolve(psf, obj0, gsparams=gsp)
+    objp_psf = galsim.Convolve(psf, objp, gsparams=gsp)
+    objm_psf = galsim.Convolve(psf, objm, gsparams=gsp)
 
     psf_im = psf.drawImage(nx=npix_psf, ny=npix_psf, scale=scale).array
     im_0 = obj0_psf.drawImage(nx=npix, ny=npix, scale=scale).array
@@ -175,7 +210,10 @@ def make_data(rng, noise, shear_true):
     obsp = ngmix.Observation(im_p, weight=wt, jacobian=jacobian, psf=psf_obs)
     obsm = ngmix.Observation(im_m, weight=wt, jacobian=jacobian, psf=psf_obs)
 
-    return obs0, obsp, obsm, g_th_p, g_th_m
+    if psf_fwhm == "superbit":
+        return obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr, gal_flux, x_im, y_im
+    else:
+        return obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr, gal_flux
 
 def process_single_object(args):
     i, base_seed, noise, shear_true = args
@@ -183,7 +221,10 @@ def process_single_object(args):
     # independent RNG per worker
     rng = np.random.RandomState(base_seed + i)
 
-    obs0, obsp, obsm, g_th_p, g_th_m = make_data(rng=rng, noise=noise, shear_true=shear_true)
+    if PSF_FWHM == "superbit":
+        obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr, gal_flux, x_im, y_im = make_data(rng=rng, noise=noise, shear_true=shear_true)
+    else:
+        obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr, gal_flux = make_data(rng=rng, noise=noise, shear_true=shear_true)
 
     # create priors & runners locally (safe)
     prior = _get_priors(base_seed + i)
@@ -234,7 +275,11 @@ def process_single_object(args):
     raw_p   = obsp.image.copy()
     raw_m   = obsm.image.copy()
     psf_im  = obsp.psf.image.copy()
-    return data_p, data_m, g_th_p, g_th_m, mcal_images_p, mcal_images_m, raw_p, raw_m, psf_im
+
+    if PSF_FWHM == "superbit":
+        return data_p, data_m, g_th_p, g_th_m, mcal_images_p, mcal_images_m, raw_p, raw_m, psf_im, gal_hlr, gal_flux, x_im, y_im
+    else:
+        return data_p, data_m, g_th_p, g_th_m, mcal_images_p, mcal_images_m, raw_p, raw_m, psf_im, gal_hlr, gal_flux
 
 args = [(i, SEED, NOISE, SHEAR_TRUE, STATE) for i in range(NOBS)]
 
@@ -246,6 +291,8 @@ data_list_p, data_list_m = [], []
 gth_list_p, gth_list_m   = [], []
 g_sn_raw_list_p, g_sn_raw_list_m = [], []
 img_buffer = []
+sn_sigma_raw_list = []
+sn_flux_raw_list  = []
 
 def _run_shearnet_batch(buf):
     if STATE is None:
@@ -260,8 +307,12 @@ def _run_shearnet_batch(buf):
         gal_m = jnp.stack([r[5][stype][0] for r in buf])
         psf_m = jnp.stack([r[5][stype][1] for r in buf])
 
-        preds_p = np.array(STATE.apply_fn(STATE.params, gal_p, psf_p, deterministic=True))
-        preds_m = np.array(STATE.apply_fn(STATE.params, gal_m, psf_m, deterministic=True))
+        preds_p = np.array(STATE.apply_fn(STATE.params, gal_p, psf_p, n_outputs=N_OUTPUTS, deterministic=True))
+        preds_m = np.array(STATE.apply_fn(STATE.params, gal_m, psf_m, n_outputs=N_OUTPUTS, deterministic=True))
+
+        if NORM_PARAMS is not None:
+            preds_p = inverse_transform_labels(preds_p, NORM_PARAMS)
+            preds_m = inverse_transform_labels(preds_m, NORM_PARAMS)
 
         for k in range(n):
             idx_p = np.where(data_list_p[base + k]["shear_type"] == stype)[0][0]
@@ -272,8 +323,23 @@ def _run_shearnet_batch(buf):
     raw_p  = jnp.stack([r[6] for r in buf])
     raw_m  = jnp.stack([r[7] for r in buf])
     psf_raw = jnp.stack([r[8] for r in buf])
-    g_sn_raw_list_p.append(np.array(STATE.apply_fn(STATE.params, raw_p, psf_raw, deterministic=True))[:, :2])
-    g_sn_raw_list_m.append(np.array(STATE.apply_fn(STATE.params, raw_m, psf_raw, deterministic=True))[:, :2])
+    raw_preds_p = np.array(STATE.apply_fn(STATE.params, raw_p, psf_raw, n_outputs=N_OUTPUTS, deterministic=True))
+    raw_preds_m = np.array(STATE.apply_fn(STATE.params, raw_m, psf_raw, n_outputs=N_OUTPUTS, deterministic=True))
+    
+    if NORM_PARAMS is not None:
+        raw_preds_p = inverse_transform_labels(raw_preds_p, NORM_PARAMS)
+        raw_preds_m = inverse_transform_labels(raw_preds_m, NORM_PARAMS)
+
+    g_sn_raw_list_p.append(raw_preds_p[:, :2])
+    g_sn_raw_list_m.append(raw_preds_m[:, :2])
+
+    if N_OUTPUTS > 2:
+        sn_sigma_raw_list.append(raw_preds_p[:, 2])
+    if N_OUTPUTS > 3:
+        sn_flux_raw_list.append(raw_preds_p[:, 3])
+
+hlr_list_out, flux_list_out = [], []
+x_im_list, y_im_list = [], []
 
 with Pool(processes=nproc) as pool:
     for result in pool.imap(process_single_object, args_list):
@@ -281,6 +347,11 @@ with Pool(processes=nproc) as pool:
         data_list_m.append(result[1])
         gth_list_p.append(result[2])
         gth_list_m.append(result[3])
+        hlr_list_out.append(result[9])
+        flux_list_out.append(result[10])
+        if PSF_FWHM == "superbit":
+            x_im_list.append(result[11])
+            y_im_list.append(result[12])
         img_buffer.append(result)
         if len(img_buffer) == BATCH_SIZE:
             _run_shearnet_batch(img_buffer)
@@ -294,12 +365,34 @@ tab_m = shear_data_to_table(data_list_m)
 
 tab_p["g_th"] = np.asarray(gth_list_p)
 tab_m["g_th"] = np.asarray(gth_list_m)
+tab_p["gal_hlr_th"]  = np.array(hlr_list_out)
+tab_p["gal_flux_th"] = np.array(flux_list_out)
+tab_m["gal_hlr_th"]  = np.array(hlr_list_out)
+tab_m["gal_flux_th"] = np.array(flux_list_out)
+if PSF_FWHM == "superbit":
+    tab_p["psf_x_im"] = np.array(x_im_list)
+    tab_p["psf_y_im"] = np.array(y_im_list)
+    tab_m["psf_x_im"] = np.array(x_im_list)
+    tab_m["psf_y_im"] = np.array(y_im_list)
 
 N = len(tab_p)
 
 # default: NaNs
 g_sn_raw_p = np.full((N, 2), np.nan)
 g_sn_raw_m = np.full((N, 2), np.nan)
+
+sn_sigma_raw = np.full(N, np.nan)
+sn_flux_raw  = np.full(N, np.nan)
+
+if sn_sigma_raw_list:
+    sn_sigma_raw[:] = np.concatenate(sn_sigma_raw_list)
+if sn_flux_raw_list:
+    sn_flux_raw[:]  = np.concatenate(sn_flux_raw_list)
+
+tab_p["g_sn_sigma"] = sn_sigma_raw
+tab_p["g_sn_flux"]  = sn_flux_raw
+tab_m["g_sn_sigma"] = sn_sigma_raw
+tab_m["g_sn_flux"]  = sn_flux_raw
 
 # overwrite if available
 if STATE is not None:

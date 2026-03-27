@@ -11,7 +11,6 @@ from .plot_helpers import (
 from .metrics import (
     eval_model,
     eval_ngmix,
-    eval_mcal,
     loss_fn_eval,
     loss_fn_ngmix,
     loss_fn_mcal,

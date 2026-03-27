@@ -1,14 +1,14 @@
 simulation:
   hlr: 0.5
   flux: 1.0
-  psf_npix: 51
+  psf_npix: 53
   psf_noise: 1.0e-6
   scale: 0.141
-  npix: 64
+  npix: 53
   nse_sd: 1.0e-6
   seed: 150
-  n_obs: 200000
-  psfex_model_file: "/projects/mccleary_group/superbit/emp_psfs/emp_psfs_best/psfex-output/superbit_psf_emp01.psf"
+  n_obs: 1000
+  psfex_model_file: "/home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf"
 
 output:
   results_fits: "psf_leakage_results_200k.fits"
@@ -17,5 +17,9 @@ models:
   psf_model: "em5"
   gal_model: "gauss"
 
+ShearNet:
+  include_sn: True
+  sn_model_name: "second_validation_test_3_params"
+
 catalog:
-  cosmos_cat_fname: "/projects/mccleary_group/superbit/galsim_data/cosmos15_superbit2023_phot_shapes_with_sigma.csv"
+  cosmos_cat_fname: "/home/adfield/ShearNet/cosmos15_superbit2023_phot_shapes_with_sigma.csv"

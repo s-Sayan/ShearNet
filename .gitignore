@@ -63,5 +63,11 @@ datasets/
 *.fits
 *.npy
 *.npz
+*.out
+*.err
+*.sh
+*.sh.savecosmos15_superbit2023_phot_shapes_with_sigma.csv
 *.csv
 *.png
+*.sh.save
+*.save
