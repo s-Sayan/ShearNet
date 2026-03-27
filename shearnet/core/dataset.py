@@ -25,14 +25,48 @@ MARGIN = 200 # Margins that I wanna use for PSF Rendering
 
 PSF_DATA_DIR = "/home/adfield/SHEARNET_DATA/psfex-output"
 
-with fits.open("/home/adfield/ShearNet/cosmos_catalog_train.fits") as hdul:
-    cosmos_cat = hdul[1].data
+_cosmos_cat_cache = None
+
+def _load_cosmos_cat(seed=42):
+    """Lazy-load the COSMOS catalog, with a random fallback for CI."""
+    global _cosmos_cat_cache
+    if _cosmos_cat_cache is not None:
+        return _cosmos_cat_cache
+
+    cat_path = os.environ.get('SHEARNET_COSMOS_CAT')
+    if cat_path is None:
+        cat_path = os.path.join(SHEARNET_ROOT, 'cosmos_catalog_train.fits')
+
+    if os.path.exists(cat_path):
+        with fits.open(cat_path) as hdul:
+            _cosmos_cat_cache = hdul[1].data
+        return _cosmos_cat_cache
+
+    print("WARNING: cosmos_catalog_train.fits not found. "
+          "Using synthetic random catalog for g1/g2/hlr/flux.")
+    rng = np.random.RandomState(seed)
+    n = 5000
+    g_1 = rng.normal(0.0, 0.26, n)
+    g_2 = rng.normal(0.0, 0.26, n)
+
+    class _SyntheticCat:
+        def __init__(self):
+            self.G1   = g_1
+            self.G2   = g_2
+            self.HLR  = np.full(n, 0.5)
+            self.FLUX = np.full(n, 12258.97)
+        def __getitem__(self, key):
+            return getattr(self, key)
+
+    _cosmos_cat_cache = _SyntheticCat()
+    return _cosmos_cat_cache
 
 def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05, base_shear_g1=0.0, base_shear_g2=0.0, psf_file_or_dir=PSF_DATA_DIR, n_outputs=2, hlr_type="constant", flux_type="constant"):
     images = []
     labels = []
     obs = []
 
+    cosmos_cat = _load_cosmos_cat(seed=seed)
     g1_list   = cosmos_cat['G1']
     g2_list   = cosmos_cat['G2']
     hlr_list  = cosmos_cat['HLR']
