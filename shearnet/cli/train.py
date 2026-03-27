@@ -16,6 +16,7 @@ from ..core.train import train_model
 from ..core.dataset import generate_dataset, split_combined_images
 from ..utils.device import get_device
 from ..utils.plot_helpers import plot_learning_curve
+from ..utils.normalization import fit_normalizer, transform_labels, save_normalizer
 
 def create_parser():
     """Create argument parser for training."""
@@ -291,11 +292,20 @@ def main():
 
     rng_key = random.PRNGKey(seed)
     
+    # --- normalization ---
+    split_idx = int(len(train_labels) * (1 - val_split))
+    norm_params = fit_normalizer(train_labels[:split_idx])
+    train_labels = transform_labels(train_labels, norm_params)
+    # --- end normalization ---
+    
     model_dir = os.path.join(plot_path, model_name)
     os.makedirs(model_dir, exist_ok=True)
     config_path = os.path.join(model_dir, 'training_config.yaml')
     config.save(config_path)
     print(f"\nTraining configuration saved to: {config_path}")
+    
+    normalizer_path = os.path.join(model_dir, 'label_normalizer.npz')
+    save_normalizer(norm_params, normalizer_path)
 
     try:
         models_source = shearnet.core.models.__file__
