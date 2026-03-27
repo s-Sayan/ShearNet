@@ -31,6 +31,8 @@ htmlcov/
 .nox/
 coverage.xml
 *.cover
+*.out
+*.err
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -61,3 +63,5 @@ datasets/
 *.fits
 *.npy
 *.npz
+*.csv
+*.png
