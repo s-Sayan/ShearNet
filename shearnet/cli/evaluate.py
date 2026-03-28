@@ -80,7 +80,7 @@ def load_config(args):
         'galaxy_type':   config.get('model.galaxy.type',    'research_backed'),
         'psf_type':      config.get('model.psf.type',       'forklens_psf'),
         'n_outputs':     config.get('model.n_outputs',       2),
-        'mcal':          args.mcal or config.get('comparison.ngmix', False),
+        'mcal':          args.mcal,
         'plot':          args.plot  or config.get('plotting.plot',   False),
         'psf_model':     config.get('comparison.psf_model', 'gauss'),
         'gal_model':     config.get('comparison.gal_model', config.get('dataset.type', 'gauss')),
@@ -223,7 +223,7 @@ def run_ngmix(obs, labels, config):
 
     prior = _get_priors(config['seed'])
     rng   = np.random.RandomState(config['seed'])
-    datalist = mp_fit_one(
+    datalist, _ = mp_fit_one(
         obs, prior, rng,
         psf_model=config['psf_model'],
         gal_model=config['gal_model'],
