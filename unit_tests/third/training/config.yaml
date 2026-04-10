@@ -20,7 +20,8 @@ model:
     type: "research_backed"
   psf:
     type: "forklens_psf"
-  n_outputs: 4
+  output_keys: ('g1', 'g2', 'hlr', 'flux')
+  gap: False
   
 # Training configuration
 training:
