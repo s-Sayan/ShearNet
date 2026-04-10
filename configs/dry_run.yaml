@@ -28,6 +28,7 @@ training:
   epochs: 10
   batch_size: 16
   patience: 20
+  loss_weights: [1.0, 1.0] # one weight per output_key, in order
 
 evaluation:
   test_samples: 10

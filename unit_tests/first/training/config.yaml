@@ -32,6 +32,7 @@ training:
   patience: 50
   val_split: 0.2
   eval_interval: 1
+  loss_weights: [1.0, 1.0] # one weight per output_key, in order
   
 # Output configuration
 output:

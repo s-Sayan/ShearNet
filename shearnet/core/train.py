@@ -22,43 +22,40 @@ def save_checkpoint(state, step, checkpoint_dir, model_name, overwrite=True):
     print(f"Checkpoint saved at step {step}.")
 
 
-def loss_fn(state, params, images, labels, gap):
-    """Compute loss for batch."""
+def loss_fn(state, params, images, labels, gap, weights):
     preds = state.apply_fn(params, images, gap=gap)
-    loss = optax.l2_loss(preds, labels).mean()
-    return loss  # Mean Squared Error
+    sq_err = (preds - labels) ** 2
+    loss = (sq_err * weights[None, :]).mean()
+    return loss
 
-def fork_loss_fn(state, params, galaxy_images, psf_images, labels, output_keys, gap):
-    """Compute loss for batch."""
+def fork_loss_fn(state, params, galaxy_images, psf_images, labels, output_keys, gap, weights):
     preds = state.apply_fn(params, galaxy_images, psf_images, output_keys, gap=gap)
-    loss = optax.l2_loss(preds, labels).mean()
+    sq_err = (preds - labels) ** 2
+    loss = (sq_err * weights[None, :]).mean()
     return loss
 
-
 @functools.partial(jax.jit, static_argnums=(3,))
-def train_step(state, images, labels, gap):
-    """Single training step."""
+def train_step(state, images, labels, gap, weights):
     grad_fn = jax.value_and_grad(loss_fn, argnums=1, has_aux=False)
-    loss, grads = grad_fn(state, state.params, images, labels, gap)
+    loss, grads = grad_fn(state, state.params, images, labels, gap, weights)
     state = state.apply_gradients(grads=grads)
     return state, loss
 
 @functools.partial(jax.jit, static_argnums=(4,5))
-def fork_train_step(state, galaxy_images, psf_images, labels, output_keys, gap):
+def fork_train_step(state, galaxy_images, psf_images, labels, output_keys, gap, weights):
     grad_fn = jax.value_and_grad(fork_loss_fn, argnums=1, has_aux=False)
-    loss, grads = grad_fn(state, state.params, galaxy_images, psf_images, labels, output_keys, gap)
+    loss, grads = grad_fn(state, state.params, galaxy_images, psf_images, labels, output_keys, gap, weights)
     state = state.apply_gradients(grads=grads)
     return state, loss
 
 @functools.partial(jax.jit, static_argnums=(3,))
-def eval_step(state, images, labels, gap):
-    """Single evaluation step."""
-    loss = loss_fn(state, state.params, images, labels, gap)
+def eval_step(state, images, labels, gap, weights):
+    loss = loss_fn(state, state.params, images, labels, gap, weights)
     return loss
 
 @functools.partial(jax.jit, static_argnums=(4,5))
-def fork_eval_step(state, galaxy_images, psf_images, labels, output_keys, gap):
-    loss = fork_loss_fn(state, state.params, galaxy_images, psf_images, labels, output_keys, gap)
+def fork_eval_step(state, galaxy_images, psf_images, labels, output_keys, gap, weights):
+    loss = fork_loss_fn(state, state.params, galaxy_images, psf_images, labels, output_keys, gap, weights)
     return loss
 
 
@@ -108,7 +105,8 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                   batch_size=32, nn="simple", galaxy_type='cnn', 
                   psf_type='cnn', save_path=None, model_name="my_model",
                   val_split=0.2, eval_interval=1, patience=5, lr=1e-3,
-                  weight_decay=1e-4, output_keys=("g1", "g2"), gap=False):
+                  weight_decay=1e-4, output_keys=("g1", "g2"), gap=False,
+                  weights=None):
     """Enhanced training function with validation and early stopping.
     
     Saves only the best checkpoint (by val loss) using model_name as the prefix.
@@ -119,6 +117,13 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
     train_galaxy_images, val_galaxy_images = galaxy_images[:split_idx], galaxy_images[split_idx:]
     train_psf_images, val_psf_images = psf_images[:split_idx], psf_images[split_idx:]
     train_labels, val_labels = labels[:split_idx], labels[split_idx:]
+
+    n_out = len(output_keys)
+    if weights is None:
+        weights = jnp.ones(n_out)
+    else:
+        weights = jnp.array(weights, dtype=jnp.float32)
+        assert len(weights) == n_out, f"loss_weights length {len(weights)} != output_keys length {n_out}"
 
     if nn == "mlp":
         model = SimpleGalaxyNN()
@@ -165,7 +170,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                 batch_psf_images = shuffled_train_psf_images[i:i + batch_size]
                 batch_labels = shuffled_train_labels[i:i + batch_size]
                 batch_size_actual = len(batch_galaxy_images)
-                state, loss = fork_train_step(state, batch_galaxy_images, batch_psf_images, batch_labels, output_keys, gap=gap)
+                state, loss = fork_train_step(state, batch_galaxy_images, batch_psf_images, batch_labels, output_keys, gap=gap, weights=weights)
                 train_loss += loss * batch_size_actual
                 total_samples += batch_size_actual
             train_loss /= total_samples
@@ -179,7 +184,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                     batch_psf_images = val_psf_images[i:i + batch_size]
                     batch_labels = val_labels[i:i + batch_size]
                     batch_size_actual = len(batch_galaxy_images)
-                    loss = fork_eval_step(state, batch_galaxy_images, batch_psf_images, batch_labels, output_keys, gap=gap)
+                    loss = fork_eval_step(state, batch_galaxy_images, batch_psf_images, batch_labels, output_keys, gap=gap, weights=weights)
                     val_loss += loss * batch_size_actual
                     total_samples += batch_size_actual
                 val_loss /= total_samples
@@ -215,7 +220,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                 batch_images = shuffled_train_galaxy_images[i:i + batch_size]
                 batch_labels = shuffled_train_labels[i:i + batch_size]
                 batch_size_actual = len(batch_images)
-                state, loss = train_step(state, batch_images, batch_labels, gap)
+                state, loss = train_step(state, batch_images, batch_labels, gap, weights=weights)
                 train_loss += loss * batch_size_actual
                 total_samples += batch_size_actual
             train_loss /= total_samples
@@ -227,7 +232,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                     batch_images = val_galaxy_images[i:i + batch_size]
                     batch_labels = val_labels[i:i + batch_size]
                     batch_size_actual = len(batch_images)
-                    loss = eval_step(state, batch_images, batch_labels, gap)
+                    loss = eval_step(state, batch_images, batch_labels, gap, weights=weights)
                     val_loss += loss * batch_size_actual
                     total_samples += batch_size_actual
                 val_loss /= total_samples
