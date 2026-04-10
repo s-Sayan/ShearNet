@@ -74,7 +74,7 @@ GAL_MODEL = _config["models"]["gal_model"]
 # ShearNet
 INCLUDE_SN = _config["ShearNet"]["include_sn"]
 SN_MODEL_NAME = _config["ShearNet"]["sn_model_name"]
-OUTPUT_KEYS = _config["ShearNet"]["output_keys"]
+OUTPUT_KEYS = tuple(_config["ShearNet"]["output_keys"])
 
 # ----- Catalog -----
 COSMOS_CAT_FNAME = _config["catalog"]["cosmos_cat_fname"]

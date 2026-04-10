@@ -276,6 +276,8 @@ def main():
             # Update the config with the corrected model
             config._set_nested('model.type', nn)
             print(f"Model type changed to: '{nn}'\n")
+    
+    output_keys = tuple(output_keys)
 
     config.print_config()
 

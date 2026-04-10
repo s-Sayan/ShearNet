@@ -139,7 +139,7 @@ def load_model(config, gal_images, psf_images):
     else:
         raise ValueError(f"Unknown model type: {nn}")
 
-    output_keys = config['output_keys']
+    output_keys = tuple(config['output_keys'])
     if config['process_psf']:
         init_params = model.init(rng_key, jnp.ones_like(gal_images[0]), jnp.ones_like(psf_images[0]))
     else:
