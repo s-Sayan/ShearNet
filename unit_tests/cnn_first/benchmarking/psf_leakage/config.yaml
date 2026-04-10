@@ -11,7 +11,7 @@ simulation:
   psfex_model_file: "/home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf"
 
 output:
-  results_fits: "/home/adfield/ShearNet/unit_tests/first/benchmarking/psf_leakage/psf_leakage_results.fits"
+  results_fits: "/home/adfield/ShearNet/unit_tests/cnn_first/benchmarking/psf_leakage/psf_leakage_results_sbpsf.fits"
 
 models:
   psf_model: "em5"
@@ -19,7 +19,7 @@ models:
 
 ShearNet:
   include_sn: True
-  sn_model_name: "first_validation_test"
+  sn_model_name: "first_validation_test_cnn"
   n_outputs: 2
   gap: False
 
