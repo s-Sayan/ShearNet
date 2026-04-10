@@ -28,9 +28,9 @@ def loss_fn(state, params, images, labels, gap):
     loss = optax.l2_loss(preds, labels).mean()
     return loss  # Mean Squared Error
 
-def fork_loss_fn(state, params, galaxy_images, psf_images, labels, n_outputs, gap):
+def fork_loss_fn(state, params, galaxy_images, psf_images, labels, output_keys, gap):
     """Compute loss for batch."""
-    preds = state.apply_fn(params, galaxy_images, psf_images, n_outputs, gap=gap)
+    preds = state.apply_fn(params, galaxy_images, psf_images, output_keys, gap=gap)
     loss = optax.l2_loss(preds, labels).mean()
     return loss
 
@@ -44,9 +44,9 @@ def train_step(state, images, labels, gap):
     return state, loss
 
 @functools.partial(jax.jit, static_argnums=(4,5))
-def fork_train_step(state, galaxy_images, psf_images, labels, n_outputs, gap):
+def fork_train_step(state, galaxy_images, psf_images, labels, output_keys, gap):
     grad_fn = jax.value_and_grad(fork_loss_fn, argnums=1, has_aux=False)
-    loss, grads = grad_fn(state, state.params, galaxy_images, psf_images, labels, n_outputs, gap)
+    loss, grads = grad_fn(state, state.params, galaxy_images, psf_images, labels, output_keys, gap)
     state = state.apply_gradients(grads=grads)
     return state, loss
 
@@ -57,8 +57,8 @@ def eval_step(state, images, labels, gap):
     return loss
 
 @functools.partial(jax.jit, static_argnums=(4,5))
-def fork_eval_step(state, galaxy_images, psf_images, labels, n_outputs, gap):
-    loss = fork_loss_fn(state, state.params, galaxy_images, psf_images, labels, n_outputs, gap)
+def fork_eval_step(state, galaxy_images, psf_images, labels, output_keys, gap):
+    loss = fork_loss_fn(state, state.params, galaxy_images, psf_images, labels, output_keys, gap)
     return loss
 
 
@@ -108,7 +108,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                   batch_size=32, nn="simple", galaxy_type='cnn', 
                   psf_type='cnn', save_path=None, model_name="my_model",
                   val_split=0.2, eval_interval=1, patience=5, lr=1e-3,
-                  weight_decay=1e-4, n_outputs=2, gap=False):
+                  weight_decay=1e-4, output_keys=("g1", "g2"), gap=False):
     """Enhanced training function with validation and early stopping.
     
     Saves only the best checkpoint (by val loss) using model_name as the prefix.
@@ -135,7 +135,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
     else:
         raise ValueError(f"Invalid model type specified: {nn}")
     
-    params = model.init(rng_key, jnp.ones_like(galaxy_images[0]), jnp.ones_like(psf_images[0]), n_outputs=n_outputs, gap=gap)
+    params = model.init(rng_key, jnp.ones_like(galaxy_images[0]), jnp.ones_like(psf_images[0]), output_keys=output_keys, gap=gap)
     lr_schedule = optax.cosine_decay_schedule(
         init_value=lr, 
         decay_steps=epochs * (len(train_galaxy_images) // batch_size)
@@ -165,7 +165,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                 batch_psf_images = shuffled_train_psf_images[i:i + batch_size]
                 batch_labels = shuffled_train_labels[i:i + batch_size]
                 batch_size_actual = len(batch_galaxy_images)
-                state, loss = fork_train_step(state, batch_galaxy_images, batch_psf_images, batch_labels, n_outputs, gap=gap)
+                state, loss = fork_train_step(state, batch_galaxy_images, batch_psf_images, batch_labels, output_keys, gap=gap)
                 train_loss += loss * batch_size_actual
                 total_samples += batch_size_actual
             train_loss /= total_samples
@@ -179,7 +179,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                     batch_psf_images = val_psf_images[i:i + batch_size]
                     batch_labels = val_labels[i:i + batch_size]
                     batch_size_actual = len(batch_galaxy_images)
-                    loss = fork_eval_step(state, batch_galaxy_images, batch_psf_images, batch_labels, n_outputs, gap=gap)
+                    loss = fork_eval_step(state, batch_galaxy_images, batch_psf_images, batch_labels, output_keys, gap=gap)
                     val_loss += loss * batch_size_actual
                     total_samples += batch_size_actual
                 val_loss /= total_samples

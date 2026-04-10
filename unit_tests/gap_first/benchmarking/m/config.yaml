@@ -1,7 +1,7 @@
 simulation:
   hlr: 0.5
   flux: 12258.97
-  psf_fwhm: 0.5
+  psf_fwhm: "superbit"
   psf_npix: 53
   psf_noise: 1.0e-6
   scale: 0.141
@@ -22,8 +22,8 @@ models:
 
 ShearNet:
   include_sn: True
-  sn_model_name: "first_validation_test"
-  n_outputs: 2
+  sn_model_name: "gap_first_validation_test"
+  output_keys: ('g1', 'g2')
   gap: True
 
 catalog:

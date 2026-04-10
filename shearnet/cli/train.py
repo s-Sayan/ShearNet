@@ -91,7 +91,7 @@ Examples:
                    help='Pixel size of the training data.')
 
     parser.add_argument('--process_psf', action='store_const', const=True, default=None, help='Process psf images on separate CNN branch.')
-    parser.add_argument('--n_outputs', type=int, default=2, help='If 2, [g1, g2]; If 3 [g1, g2, sigma]; If 4 [g1, g2, sigma, flux]')
+    parser.add_argument('--output_keys', type=tuple, default=("g1", "g2"), help='Please input a tuple of strings of either g1, g2, hlr, flux, psf_e1, psf_e2, psf_T')
     parser.add_argument('--gap', action='store_const', const=True, default=None, help='Global average pooling? Boolean.')
 
     parser.add_argument('--galaxy_type', type=str, default=None, 
@@ -138,6 +138,7 @@ def main():
         'apply_psf_shear': False,
         'psf_shear_range': 0.05,
         'gap': False,
+        'output_keys': ('g1', 'g2')
     }
     config = None 
     
@@ -176,7 +177,7 @@ def main():
         galaxy_type = config.get('model.galaxy.type')
         psf_type = config.get('model.psf.type')
         psfex_model_file = config.get('dataset.psfex_model_file')
-        n_outputs = config.get('model.n_outputs')
+        output_keys = config.get('model.output_keys')
         hlr_type = config.get('dataset.hlr_type')
         flux_type = config.get('dataset.flux_type')
         gap = config.get('model.gap')
@@ -204,7 +205,7 @@ def main():
         stamp_size = args.stamp_size if args.stamp_size is not None else DEFAULTS['stamp_size']
         pixel_size = args.pixel_size if args.pixel_size is not None else DEFAULTS['pixel_size']
         psfex_model_file = args.psfex_model_file if args.psfex_model_file is not None else DEFAULTS['psfex_model_file']
-        n_outputs = args.n_outputs if args.n_outputs is not None else DEFAULTS['n_outputs']
+        output_keys = args.output_keys if args.output_keys is not None else DEFAULTS['output_keys']
         hlr_type = args.hlr_type if args.hlr_type is not None else DEFAULTS['hlr_type']
         flux_type = args.flux_type if args.flux_type is not None else DEFAULTS['flux_type']
         gap = args.gap if args.gap is not None else DEFAULTS['gap']
@@ -245,7 +246,7 @@ def main():
         config._set_nested('dataset.apply_psf_shear', apply_psf_shear)
         config._set_nested('dataset.psf_shear_range', psf_shear_range)
         config._set_nested('dataset.psfex_model_file', psfex_model_file)
-        config._set_nested('model.n_outputs', n_outputs)
+        config._set_nested('model.output_keys', output_keys)
         config._set_nested('dataset.hlr_type', hlr_type)
         config._set_nested('dataset.flux_type', flux_type)
         config._set_nested('model.gap', gap)
@@ -286,7 +287,7 @@ def main():
     
     get_device()
 
-    train_galaxy_images, train_labels = generate_dataset(samples, psf_fwhm, exp=exp, seed=seed, npix=stamp_size, scale=pixel_size, return_psf=process_psf, nse_sd=nse_sd, psf_file_or_dir=psfex_model_file, n_outputs=n_outputs, hlr_type=hlr_type, flux_type=flux_type)
+    train_galaxy_images, train_labels = generate_dataset(samples, psf_fwhm, exp=exp, seed=seed, npix=stamp_size, scale=pixel_size, return_psf=process_psf, nse_sd=nse_sd, psf_file_or_dir=psfex_model_file, output_keys=output_keys, hlr_type=hlr_type, flux_type=flux_type)
     # Split into separate galaxy and PSF arrays
     train_psf_images = train_galaxy_images # I know this is weird, but see ../core/train.py#L11 to see that i need it defined (as not null), but it is not used if process_psf is off
     if process_psf :
@@ -336,7 +337,7 @@ def main():
                                     eval_interval=eval_interval, 
                                     patience=patience, #for early stopping
                                     lr=lr, weight_decay=weight_decay, #optimizer details
-                                    n_outputs=n_outputs,
+                                    output_keys=output_keys,
                                     gap=gap
                                 )
 

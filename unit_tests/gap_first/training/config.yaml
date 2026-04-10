@@ -2,7 +2,7 @@
 dataset:
   samples: 300000
   psf_fwhm: 0.5
-  exp: "ideal"
+  exp: "superbit"
   nse_sd: 12.719674
   seed: 42
   stamp_size: 53
@@ -20,7 +20,7 @@ model:
     type: "research_backed"
   psf:
     type: "forklens_psf"
-  n_outputs: 2
+  output_keys: ('g1', 'g2')
   gap: True
   
 # Training configuration
