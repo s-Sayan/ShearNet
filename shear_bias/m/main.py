@@ -82,7 +82,7 @@ GAL_MODEL = _config["models"]["gal_model"]
 # ShearNet
 INCLUDE_SN = _config["ShearNet"]["include_sn"]
 SN_MODEL_NAME = _config["ShearNet"]["sn_model_name"]
-N_OUTPUTS = _config["ShearNet"]["n_outputs"]
+OUTPUT_KEYS = _config["ShearNet"]["output_keys"]
 
 # ----- Catalog -----
 COSMOS_CAT_FNAME = _config["catalog"]["cosmos_cat_fname"]
@@ -294,6 +294,9 @@ img_buffer = []
 sn_sigma_raw_list = []
 sn_flux_raw_list  = []
 
+_ok = list(OUTPUT_KEYS)
+g_idx = [_ok.index("g1"), _ok.index("g2")]
+
 def _run_shearnet_batch(buf):
     if STATE is None:
         return
@@ -307,8 +310,8 @@ def _run_shearnet_batch(buf):
         gal_m = jnp.stack([r[5][stype][0] for r in buf])
         psf_m = jnp.stack([r[5][stype][1] for r in buf])
 
-        preds_p = np.array(STATE.apply_fn(STATE.params, gal_p, psf_p, n_outputs=N_OUTPUTS, deterministic=True))
-        preds_m = np.array(STATE.apply_fn(STATE.params, gal_m, psf_m, n_outputs=N_OUTPUTS, deterministic=True))
+        preds_p = np.array(STATE.apply_fn(STATE.params, gal_p, psf_p, output_keys=OUTPUT_KEYS, deterministic=True))
+        preds_m = np.array(STATE.apply_fn(STATE.params, gal_m, psf_m, output_keys=OUTPUT_KEYS, deterministic=True))
 
         if NORM_PARAMS is not None:
             preds_p = inverse_transform_labels(preds_p, NORM_PARAMS)
@@ -317,26 +320,27 @@ def _run_shearnet_batch(buf):
         for k in range(n):
             idx_p = np.where(data_list_p[base + k]["shear_type"] == stype)[0][0]
             idx_m = np.where(data_list_m[base + k]["shear_type"] == stype)[0][0]
-            data_list_p[base + k][idx_p]["g_sn"] = preds_p[k][:2]
-            data_list_m[base + k][idx_m]["g_sn"] = preds_m[k][:2]
+            data_list_p[base + k][idx_p]["g_sn"] = preds_p[k][g_idx]
+            data_list_m[base + k][idx_m]["g_sn"] = preds_m[k][g_idx]
 
     raw_p  = jnp.stack([r[6] for r in buf])
     raw_m  = jnp.stack([r[7] for r in buf])
     psf_raw = jnp.stack([r[8] for r in buf])
-    raw_preds_p = np.array(STATE.apply_fn(STATE.params, raw_p, psf_raw, n_outputs=N_OUTPUTS, deterministic=True))
-    raw_preds_m = np.array(STATE.apply_fn(STATE.params, raw_m, psf_raw, n_outputs=N_OUTPUTS, deterministic=True))
+    raw_preds_p = np.array(STATE.apply_fn(STATE.params, raw_p, psf_raw, output_keys=OUTPUT_KEYS, deterministic=True))
+    raw_preds_m = np.array(STATE.apply_fn(STATE.params, raw_m, psf_raw, output_keys=OUTPUT_KEYS, deterministic=True))
     
     if NORM_PARAMS is not None:
         raw_preds_p = inverse_transform_labels(raw_preds_p, NORM_PARAMS)
         raw_preds_m = inverse_transform_labels(raw_preds_m, NORM_PARAMS)
 
-    g_sn_raw_list_p.append(raw_preds_p[:, :2])
-    g_sn_raw_list_m.append(raw_preds_m[:, :2])
-
-    if N_OUTPUTS > 2:
-        sn_sigma_raw_list.append(raw_preds_p[:, 2])
-    if N_OUTPUTS > 3:
-        sn_flux_raw_list.append(raw_preds_p[:, 3])
+    g_sn_raw_list_p.append(raw_preds_p[:, g_idx])
+    g_sn_raw_list_m.append(raw_preds_m[:, g_idx])
+   
+    _ok = list(OUTPUT_KEYS)
+    if "hlr" in _ok:
+        sn_sigma_raw_list.append(raw_preds_p[:, _ok.index("hlr")])
+    if "flux" in _ok:
+        sn_flux_raw_list.append(raw_preds_p[:, _ok.index("flux")])
 
 hlr_list_out, flux_list_out = [], []
 x_im_list, y_im_list = [], []

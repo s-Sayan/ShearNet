@@ -74,7 +74,7 @@ GAL_MODEL = _config["models"]["gal_model"]
 # ShearNet
 INCLUDE_SN = _config["ShearNet"]["include_sn"]
 SN_MODEL_NAME = _config["ShearNet"]["sn_model_name"]
-N_OUTPUTS = _config["ShearNet"]["n_outputs"]
+OUTPUT_KEYS = _config["ShearNet"]["output_keys"]
 
 # ----- Catalog -----
 COSMOS_CAT_FNAME = _config["catalog"]["cosmos_cat_fname"]
@@ -245,16 +245,18 @@ BATCH_SIZE = 500
 def _run_shearnet_batch(buf):
     if STATE is None:
         return
+    _ok = list(OUTPUT_KEYS)
     n = len(buf)
     base = len(data_list) - n
     gal = jnp.stack([r[2] for r in buf])
     psf = jnp.stack([r[3] for r in buf])
-    preds = np.array(STATE.apply_fn(STATE.params, gal, psf, n_outputs=N_OUTPUTS, deterministic=True))
+    preds = np.array(STATE.apply_fn(STATE.params, gal, psf, output_keys=OUTPUT_KEYS, deterministic=True))
     if NORM_PARAMS is not None:
         preds = inverse_transform_labels(preds, NORM_PARAMS)
+    g_idx = [_ok.index("g1"), _ok.index("g2")]
     for k in range(n):
-        data_list[base + k][0]["g_sn"] = preds[k][:2]
-    g_sn_raw_list.append(preds[:, :2])
+        data_list[base + k][0]["g_sn"] = preds[k][g_idx]
+    g_sn_raw_list.append(preds[:, g_idx])
 
 hlr_list_out, flux_list_out = [], []
 

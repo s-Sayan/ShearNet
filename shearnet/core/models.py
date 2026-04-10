@@ -27,7 +27,7 @@ class ResidualBlock(nn.Module):
 
 class SimpleGalaxyNN(nn.Module):
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2")):
         if x.ndim == 2:  # If batch dimension is missing
             x = jnp.expand_dims(x, axis=0)
         assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
@@ -39,12 +39,12 @@ class SimpleGalaxyNN(nn.Module):
             x = nn.relu(x)
             x = nn.Dense(64)(x)
             x = nn.relu(x)
-            x = nn.Dense(4)(x)  # Output e1, e2
+            x = nn.Dense(len(output_keys))(x)  # Output e1, e2
             return x
     
 class EnhancedGalaxyNN(nn.Module):
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2")):
         # Input handling 
         if x.ndim == 2:
             x = jnp.expand_dims(x, axis=0)
@@ -71,14 +71,14 @@ class EnhancedGalaxyNN(nn.Module):
             x = nn.Dense(128)(x)
             x = nn.relu(x)
             #x = nn.Dropout(0.5)(x, deterministic=deterministic)  # Dropout applied only if deterministic=False
-            x = nn.Dense(4)(x)
+            x = nn.Dense(len(output_keys))(x)
             #x = 0.5*nn.tanh(x)
             return x
     
     
 class GalaxyResNet(nn.Module):
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2")):
         if x.ndim == 2:  # If batch dimension is missing
             x = jnp.expand_dims(x, axis=0)
         assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
@@ -113,7 +113,7 @@ class GalaxyResNet(nn.Module):
             # x = nn.Dropout(0.5, deterministic=deterministic)(x)  # Dropout for regularization
             x = nn.Dense(64)(x)
             x = nn.leaky_relu(x, negative_slope=0.01)
-            x = nn.Dense(2)(x)  # Output e1, e2
+            x = nn.Dense(len(output_keys))(x)
             x = nn.tanh(x)
             return x
 
@@ -248,7 +248,7 @@ class ResearchBackedGalaxyResNet(nn.Module):
     """
 
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool=False):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool=False, output_keys: tuple = ("g1", "g2")):
         
         # ==================== INPUT HANDLING ====================
         # CITATION: Standard practice in computer vision, established in LeNet-5 (LeCun et al., 1998)
@@ -338,10 +338,10 @@ class ResearchBackedGalaxyResNet(nn.Module):
             # x = nn.Dropout(0.5)(x, deterministic=deterministic)
 
             # ==================== FINAL PREDICTION LAYER ====================
-            # DECISION: 4 outputs to match your pipeline expectations (g1, g2, sigma, flux)
+            # DECISION: output_keys to match your pipeline expectations (g1, g2, sigma, flux)
             # CITATION: Standard practice since "Gradient-Based Learning Applied to Document Recognition" (LeCun et al., 1998)
             # RATIONALE: Linear layer for regression output, no activation for unbounded predictions
-            x = nn.Dense(4)(x)
+            x = nn.Dense(len(output_keys))(x)
 
             return x
 
@@ -349,7 +349,7 @@ class ForkLensPSFNet(nn.Module):
     """Simple CNN for PSF processing (from ForkLens cnn_layers)"""
     
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2")):
         # Input handling
         if x.ndim == 2:
             x = jnp.expand_dims(x, axis=0)
@@ -410,7 +410,7 @@ class ForkLensPSFNet(nn.Module):
             x = nn.relu(x)
             x = nn.Dense(64)(x)
             x = nn.relu(x)
-            x = nn.Dense(4)(x)
+            x = nn.Dense(len(output_keys))(x)
             return x
 
 class ForkLike(nn.Module):
@@ -443,7 +443,7 @@ class ForkLike(nn.Module):
             raise ValueError(f"Invalid model type specified: {model_type}")
 
     @nn.compact
-    def __call__(self, galaxy_image, psf_image, n_outputs: int = 2, deterministic: bool = False, gap: bool = False):
+    def __call__(self, galaxy_image, psf_image, output_keys: tuple = ("g1", "g2"), deterministic: bool = False, gap: bool = False):
         # This model will learn from galaxy images
         galaxy_features = self.galaxy_model(galaxy_image, deterministic=deterministic, fork=True, gap=gap)
         
@@ -458,7 +458,6 @@ class ForkLike(nn.Module):
         x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
         x = nn.relu(x)
 
-        # Final predictions of [g1, g2, sigma, flux]
-        # If 2, [g1, g2]; If 3 [g1, g2, sigma]
-        x = nn.Dense(n_outputs)(x)
+        # Final predictions
+        x = nn.Dense(len(output_keys))(x)
         return x

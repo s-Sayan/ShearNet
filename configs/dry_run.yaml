@@ -22,6 +22,7 @@ model:
   psf:
     type: "forklens_psf"
   n_outputs: 2
+  gap: False
 
 training:
   epochs: 10

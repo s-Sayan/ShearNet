@@ -61,7 +61,7 @@ def _load_cosmos_cat(seed=42):
     _cosmos_cat_cache = _SyntheticCat()
     return _cosmos_cat_cache
 
-def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05, base_shear_g1=0.0, base_shear_g2=0.0, psf_file_or_dir=PSF_DATA_DIR, n_outputs=2, hlr_type="constant", flux_type="constant"):
+def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05, base_shear_g1=0.0, base_shear_g2=0.0, psf_file_or_dir=PSF_DATA_DIR, output_keys=("g1", "g2"), hlr_type="constant", flux_type="constant"):
     images = []
     labels = []
     obs = []
@@ -84,6 +84,12 @@ def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='i
             raise FileNotFoundError(f"{psf_file_or_dir} is neither a file nor a directory")
     else:
         psf_files = None
+
+    _valid = {"g1", "g2", "hlr", "flux", "psf_e1", "psf_e2", "psf_T"}
+    _requested = set(output_keys)
+    if not _requested.issubset(_valid):
+        raise ValueError(f"Invalid output_keys: {_requested - _valid}. Must be subset of {_valid}.")
+        
     for i in tqdm(range(samples)):
         g1, g2 = g1_list[i], g2_list[i]
         if hlr_type == 'catalog':
@@ -124,15 +130,14 @@ def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='i
         else:
             # Just galaxy images
             images.append(galaxy_images)
+        
+        psf_e1 = obj_obs.psf.meta['e1']
+        psf_e2 = obj_obs.psf.meta['e2']
+        psf_T = obj_obs.psf.meta['T']
 
-        if n_outputs == 4:
-            labels.append(np.array([g1, g2, hlr, flux], dtype=np.float32))
-        elif n_outputs == 3:
-            labels.append(np.array([g1, g2, hlr], dtype=np.float32))
-        elif n_outputs == 2:
-            labels.append(np.array([g1, g2], dtype=np.float32))
-        else:
-            raise ValueError("n_ouputs must be either 2, 3, or 4.")
+        _available = {"g1": g1, "g2": g2, "hlr": hlr, "flux": flux, "psf_e1": psf_e1, "psf_e2": psf_e2, "psf_T": psf_T}
+
+        labels.append(np.array([_available[k] for k in output_keys], dtype=np.float32))
         
         obs.append(obj_obs)
     
