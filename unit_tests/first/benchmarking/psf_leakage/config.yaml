@@ -20,7 +20,7 @@ models:
 ShearNet:
   include_sn: True
   sn_model_name: "first_validation_test"
-  output_keys: ('g1', 'g2')
+  output_keys: ['g1', 'g2']
   gap: False
 
 catalog:
