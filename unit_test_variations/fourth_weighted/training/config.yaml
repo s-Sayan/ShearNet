@@ -32,13 +32,13 @@ training:
   patience: 50
   val_split: 0.2
   eval_interval: 1
-  loss_weights: [1.0, 1.0, 1.0, 1.0] # one weight per output_key, in order
+  loss_weights: [3.0, 3.0, 1.0, 1.0] # one weight per output_key, in order
   
 # Output configuration
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "fourth_validation_test"
+  model_name: "fourth_validation_test_weighted"
   
 # Plotting configuration
 plotting:

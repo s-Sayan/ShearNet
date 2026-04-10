@@ -103,6 +103,8 @@ Examples:
                        help='Apply random shear to PSF images')
     parser.add_argument('--psf_shear_range', type=float, default=None,
                        help='Maximum absolute shear value for PSF (default: 0.05)')
+    parser.add_argument('--loss_weights', type=float, nargs='+', default=None,
+                   help='Per-output loss weights, one per output_key in order')
     
     return parser
 
@@ -181,6 +183,7 @@ def main():
         hlr_type = config.get('dataset.hlr_type')
         flux_type = config.get('dataset.flux_type')
         gap = config.get('model.gap')
+        loss_weights = config.get('training.loss_weights')
 
         apply_psf_shear = config.get('dataset.apply_psf_shear')
         psf_shear_range = config.get('dataset.psf_shear_range')
@@ -217,6 +220,8 @@ def main():
 
         apply_psf_shear = args.apply_psf_shear if args.apply_psf_shear is not None else DEFAULTS['apply_psf_shear']
         psf_shear_range = args.psf_shear_range if args.psf_shear_range is not None else DEFAULTS['psf_shear_range']
+
+        loss_weights = args.loss_weights if args.loss_weights is not None else None
         
         # Always create a config object with the actual values being used
         config = Config()  # Start with defaults
@@ -250,6 +255,7 @@ def main():
         config._set_nested('dataset.hlr_type', hlr_type)
         config._set_nested('dataset.flux_type', flux_type)
         config._set_nested('model.gap', gap)
+        config._set_nested('training.loss_weights', loss_weights)
 
     # Validate process_psf and model compatibility
     if process_psf:
@@ -340,7 +346,8 @@ def main():
                                     patience=patience, #for early stopping
                                     lr=lr, weight_decay=weight_decay, #optimizer details
                                     output_keys=output_keys,
-                                    gap=gap
+                                    gap=gap,
+                                    weights=loss_weights
                                 )
 
     if plot_flag:

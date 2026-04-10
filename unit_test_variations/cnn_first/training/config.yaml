@@ -8,8 +8,8 @@ dataset:
   stamp_size: 53
   pixel_size: 0.141
   psfex_model_file: "/home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf"
-  hlr_type: "catalog"
-  flux_type: "catalog"
+  hlr_type: "constant" # constant or catalog
+  flux_type: "constant" # constant or catalog
 
 # Model configuration  
 model:
@@ -17,12 +17,12 @@ model:
   type: "fork-like"  # Options: mlp, cnn, resnet, forklens_psf, 
                      # research_backed, and fork-like
   galaxy:
-    type: "research_backed"
+    type: "cnn"
   psf:
-    type: "forklens_psf"
-  output_keys: ['g1', 'g2', 'hlr', 'flux']
-  gap: False
-  
+    type: "cnn"
+  output_keys: ['g1', 'g2']
+  gap: True
+
 # Training configuration
 training:
   epochs: 300
@@ -32,13 +32,13 @@ training:
   patience: 50
   val_split: 0.2
   eval_interval: 1
-  loss_weights: [1.0, 1.0, 1.0, 1.0] # one weight per output_key, in order
+  loss_weights: [1.0, 1.0] # one weight per output_key, in order
   
 # Output configuration
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "fourth_validation_test"
+  model_name: "first_validation_test_cnn"
   
 # Plotting configuration
 plotting:
