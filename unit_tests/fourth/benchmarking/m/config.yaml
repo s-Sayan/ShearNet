@@ -24,7 +24,7 @@ models:
 ShearNet:
   include_sn: True
   sn_model_name: "fourth_validation_test"
-  output_keys: ('g1', 'g2', 'hlr', 'flux')
+  output_keys: ['g1', 'g2', 'hlr', 'flux']
 
 catalog:
   cosmos_cat_fname: "/home/adfield/ShearNet/cosmos_catalog_eval.fits"

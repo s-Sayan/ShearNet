@@ -20,7 +20,7 @@ model:
     type: "research_backed"
   psf:
     type: "forklens_psf"
-  output_keys: ('g1', 'g2', 'hlr')
+  output_keys: ['g1', 'g2', 'hlr']
   gap: False
   
 # Training configuration

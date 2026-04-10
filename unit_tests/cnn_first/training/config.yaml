@@ -20,7 +20,7 @@ model:
     type: "cnn"
   psf:
     type: "cnn"
-  output_keys: ('g1', 'g2')
+  output_keys: ['g1', 'g2']
   gap: True
 
 # Training configuration
