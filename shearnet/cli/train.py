@@ -92,6 +92,7 @@ Examples:
 
     parser.add_argument('--process_psf', action='store_const', const=True, default=None, help='Process psf images on separate CNN branch.')
     parser.add_argument('--n_outputs', type=int, default=2, help='If 2, [g1, g2]; If 3 [g1, g2, sigma]; If 4 [g1, g2, sigma, flux]')
+    parser.add_argument('--gap', action='store_const', const=True, default=None, help='Global average pooling? Boolean.')
 
     parser.add_argument('--galaxy_type', type=str, default=None, 
                     help='Galaxy model type for fork-like models')
@@ -136,6 +137,7 @@ def main():
         'psf_type': 'forklens_psf',
         'apply_psf_shear': False,
         'psf_shear_range': 0.05,
+        'gap': False,
     }
     config = None 
     
@@ -177,6 +179,7 @@ def main():
         n_outputs = config.get('model.n_outputs')
         hlr_type = config.get('dataset.hlr_type')
         flux_type = config.get('dataset.flux_type')
+        gap = config.get('model.gap')
 
         apply_psf_shear = config.get('dataset.apply_psf_shear')
         psf_shear_range = config.get('dataset.psf_shear_range')
@@ -204,6 +207,7 @@ def main():
         n_outputs = args.n_outputs if args.n_outputs is not None else DEFAULTS['n_outputs']
         hlr_type = args.hlr_type if args.hlr_type is not None else DEFAULTS['hlr_type']
         flux_type = args.flux_type if args.flux_type is not None else DEFAULTS['flux_type']
+        gap = args.gap if args.gap is not None else DEFAULTS['gap']
 
         process_psf = args.process_psf if args.process_psf is not None else DEFAULTS['process_psf']
 
@@ -244,6 +248,7 @@ def main():
         config._set_nested('model.n_outputs', n_outputs)
         config._set_nested('dataset.hlr_type', hlr_type)
         config._set_nested('dataset.flux_type', flux_type)
+        config._set_nested('model.gap', gap)
 
     # Validate process_psf and model compatibility
     if process_psf:
@@ -331,7 +336,8 @@ def main():
                                     eval_interval=eval_interval, 
                                     patience=patience, #for early stopping
                                     lr=lr, weight_decay=weight_decay, #optimizer details
-                                    n_outputs=n_outputs
+                                    n_outputs=n_outputs,
+                                    gap=gap
                                 )
 
     if plot_flag:

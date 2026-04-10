@@ -27,7 +27,7 @@ class ResidualBlock(nn.Module):
 
 class SimpleGalaxyNN(nn.Module):
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False):
         if x.ndim == 2:  # If batch dimension is missing
             x = jnp.expand_dims(x, axis=0)
         assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
@@ -44,7 +44,7 @@ class SimpleGalaxyNN(nn.Module):
     
 class EnhancedGalaxyNN(nn.Module):
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False):
         # Input handling 
         if x.ndim == 2:
             x = jnp.expand_dims(x, axis=0)
@@ -78,7 +78,7 @@ class EnhancedGalaxyNN(nn.Module):
     
 class GalaxyResNet(nn.Module):
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False):
         if x.ndim == 2:  # If batch dimension is missing
             x = jnp.expand_dims(x, axis=0)
         assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
@@ -248,7 +248,7 @@ class ResearchBackedGalaxyResNet(nn.Module):
     """
 
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool=False):
         
         # ==================== INPUT HANDLING ====================
         # CITATION: Standard practice in computer vision, established in LeNet-5 (LeCun et al., 1998)
@@ -305,13 +305,16 @@ class ResearchBackedGalaxyResNet(nn.Module):
             use_dilated=True
         )(x, deterministic=deterministic)
         
-        # ==================== GLOBAL AVERAGE POOLING ====================
-        # CITATION: "Network In Network" (Lin, Chen & Yan, ICLR 2014)
-        # QUOTE: "more robust to spatial translations of the input"
-        # QUOTE: "no parameter to optimize in the fully connected layers, overfitting is avoided"
-        # RATIONALE: Reduces parameters from ~16,224 to 96, preventing overfitting
-        # TRADE-OFF: May lose spatial information important for galaxy shape measurement
-        x = jnp.mean(x, axis=(1, 2))
+        if gap == True:
+            # ==================== GLOBAL AVERAGE POOLING ====================
+            # CITATION: "Network In Network" (Lin, Chen & Yan, ICLR 2014)
+            # QUOTE: "more robust to spatial translations of the input"
+            # QUOTE: "no parameter to optimize in the fully connected layers, overfitting is avoided"
+            # RATIONALE: Reduces parameters from ~16,224 to 96, preventing overfitting
+            # TRADE-OFF: May lose spatial information important for galaxy shape measurement
+            x = jnp.mean(x, axis=(1, 2))
+        else:
+            x = x.reshape((x.shape[0], -1))
 
         # print(f"Flattened shape: {x.shape}")
 
@@ -346,7 +349,7 @@ class ForkLensPSFNet(nn.Module):
     """Simple CNN for PSF processing (from ForkLens cnn_layers)"""
     
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False):
         # Input handling
         if x.ndim == 2:
             x = jnp.expand_dims(x, axis=0)
@@ -440,12 +443,12 @@ class ForkLike(nn.Module):
             raise ValueError(f"Invalid model type specified: {model_type}")
 
     @nn.compact
-    def __call__(self, galaxy_image, psf_image, n_outputs: int = 2, deterministic: bool = False):
+    def __call__(self, galaxy_image, psf_image, n_outputs: int = 2, deterministic: bool = False, gap: bool = False):
         # This model will learn from galaxy images
-        galaxy_features = self.galaxy_model(galaxy_image, deterministic=deterministic, fork=True)
+        galaxy_features = self.galaxy_model(galaxy_image, deterministic=deterministic, fork=True, gap=gap)
         
         # This model will learn from psf images
-        psf_features = self.psf_model(psf_image, deterministic=deterministic, fork=True)
+        psf_features = self.psf_model(psf_image, deterministic=deterministic, fork=True, gap=gap)
         
         # Combines features from the two separate models above trained on different types of images to represent them in one feature layer
         combined_features = jnp.concatenate([galaxy_features, psf_features], axis=-1)

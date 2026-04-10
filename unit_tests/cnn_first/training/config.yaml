@@ -2,7 +2,7 @@
 dataset:
   samples: 300000
   psf_fwhm: 0.5
-  exp: "ideal"
+  exp: "superbit"
   nse_sd: 12.719674
   seed: 42
   stamp_size: 53
@@ -17,12 +17,12 @@ model:
   type: "fork-like"  # Options: mlp, cnn, resnet, forklens_psf, 
                      # research_backed, and fork-like
   galaxy:
-    type: "research_backed"
+    type: "cnn"
   psf:
-    type: "forklens_psf"
+    type: "cnn"
   n_outputs: 2
-  gap: False
-  
+  gap: True
+
 # Training configuration
 training:
   epochs: 300
@@ -37,7 +37,7 @@ training:
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "first_validation_test"
+  model_name: "first_validation_test_cnn"
   
 # Plotting configuration
 plotting:
