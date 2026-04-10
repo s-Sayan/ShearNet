@@ -79,7 +79,7 @@ def load_config(args):
         'nn':            config.get('model.type',            'cnn'),
         'galaxy_type':   config.get('model.galaxy.type',    'research_backed'),
         'psf_type':      config.get('model.psf.type',       'forklens_psf'),
-        'n_outputs':     config.get('model.n_outputs',       2),
+        'output_keys':   config.get('model.output_keys', ('g1', 'g2')),
         'mcal':          args.mcal,
         'plot':          args.plot  or config.get('plotting.plot',   False),
         'psf_model':     config.get('comparison.psf_model', 'gauss'),
@@ -139,7 +139,7 @@ def load_model(config, gal_images, psf_images):
     else:
         raise ValueError(f"Unknown model type: {nn}")
 
-    n_outputs = config['n_outputs']
+    output_keys = config['output_keys']
     if config['process_psf']:
         init_params = model.init(rng_key, jnp.ones_like(gal_images[0]), jnp.ones_like(psf_images[0]))
     else:
