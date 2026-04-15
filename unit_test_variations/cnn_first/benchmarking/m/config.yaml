@@ -14,7 +14,7 @@ simulation:
   psfex_model_file: "/home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf"
 
 output:
-  results_fits: "/home/adfield/ShearNet/unit_tests/cnn_first/benchmarking/m/metacal_results_sbpsf.fits"
+  results_fits: "/home/adfield/ShearNet/unit_test_variations/cnn_first/benchmarking/m/metacal_results.fits"
 
 models:
   psf_model: "gauss"

@@ -103,7 +103,7 @@ TYPES = ["noshear", "1p", "1m"]
 # ========== Load up ShearNet state here =========
 import jax.numpy as jnp
 if INCLUDE_SN:
-    from shearnet.cli.evaluate import initialize_model as _initialize_model, load_config as _eval_load_config
+    from shearnet.cli.evaluate import load_model as _initialize_model, load_config as _eval_load_config
     from shearnet.utils.normalization import load_normalizer, inverse_transform_labels
     
     eval_config = argparse.Namespace(

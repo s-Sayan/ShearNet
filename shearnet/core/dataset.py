@@ -8,6 +8,7 @@ import galsim.des
 from astropy.table import Table
 from astropy.io import fits
 from ..utils.metrics import get_admoms_ngmix_fit
+from ..utils.simutils import create_wcs_from_params
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 SHEARNET_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
