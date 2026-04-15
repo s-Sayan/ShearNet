@@ -86,6 +86,7 @@ def load_config(args):
         'gal_model':     config.get('comparison.gal_model', config.get('dataset.type', 'gauss')),
         'save_path':     default_save_path,
         'plot_path':     default_plot_path,
+        'gap':           config.get('model.gap', False)
     }
 
 
@@ -141,9 +142,11 @@ def load_model(config, gal_images, psf_images):
 
     output_keys = tuple(config['output_keys'])
     if config['process_psf']:
-        init_params = model.init(rng_key, jnp.ones_like(gal_images[0]), jnp.ones_like(psf_images[0]))
+        init_params = model.init(rng_key, jnp.ones_like(gal_images[0]), jnp.ones_like(psf_images[0]), 
+                                 output_keys=output_keys, gap=config.get('gap', False))
     else:
-        init_params = model.init(rng_key, jnp.ones_like(gal_images[0]))
+        init_params = model.init(rng_key, jnp.ones_like(gal_images[0]), 
+                                 output_keys=output_keys, gap=config.get('gap', False))
 
     state = train_state.TrainState.create(
         apply_fn=model.apply, params=init_params, tx=optax.adam(1e-3)
