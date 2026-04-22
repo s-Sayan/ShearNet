@@ -4,4 +4,4 @@ The first unit test has:
 - Constant sigma and flux
 - Constant noise
 
-this particular one uses the cnn Sayan made a while ago for both branches
+this particular one uses a transformer instead of the forklike

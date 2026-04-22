@@ -4,4 +4,4 @@ The first unit test has:
 - Constant sigma and flux
 - Constant noise
 
-this particular one uses the cnn Sayan made a while ago for both branches
+This one in particular has weighted loss on g1 and g2.

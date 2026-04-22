@@ -4,4 +4,4 @@ The first unit test has:
 - Constant sigma and flux
 - Constant noise
 
-this particular one uses the cnn Sayan made a while ago for both branches
+this one particularly is trained on g1, g2, psf_e1, and psf_e2

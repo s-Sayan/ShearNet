@@ -21,7 +21,7 @@ model:
   psf:
     type: "forklens_psf"
   output_keys: ['g1', 'g2']
-  gap: False
+  gap: True
   
 # Training configuration
 training:
@@ -38,7 +38,7 @@ training:
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "first_validation_test_sbpsf"
+  model_name: "first_validation_test_gap"
   
 # Plotting configuration
 plotting:

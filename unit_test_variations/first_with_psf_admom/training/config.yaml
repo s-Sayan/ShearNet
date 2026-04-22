@@ -13,14 +13,14 @@ dataset:
 
 # Model configuration  
 model:
-  process_psf: True
+  process_psf: true
   type: "fork-like"  # Options: mlp, cnn, resnet, forklens_psf, 
                      # research_backed, and fork-like
   galaxy:
     type: "research_backed"
   psf:
     type: "forklens_psf"
-  output_keys: ['g1', 'g2']
+  output_keys: ['g1', 'g2', 'psf_e1', 'psf_e2']
   gap: False
   
 # Training configuration
@@ -32,13 +32,13 @@ training:
   patience: 50
   val_split: 0.2
   eval_interval: 1
-  loss_weights: [1.0, 1.0] # one weight per output_key, in order
+  loss_weights: [1.0, 1.0, 1.0, 1.0] # one weight per output_key, in order
   
 # Output configuration
 output:
   save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
   plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "first_validation_test_sbpsf"
+  model_name: "first_validation_test_psf_admom"
   
 # Plotting configuration
 plotting:
