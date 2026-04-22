@@ -1,6 +1,7 @@
 simulation:
-  hlr: 0.5
-  flux: 12258.97
+  hlr: 0.5 # can be "catalog"
+  flux: 12258.97 # can be "catalog"
+  psf_fwhm: "superbit" # can be "superbit"; if superbit, it uses psfex_model_file
   psf_npix: 53
   psf_noise: 1.0e-6
   scale: 0.141
@@ -8,18 +9,20 @@ simulation:
   nse_sd: 12.719674
   seed: 150
   n_obs: 200000
+  Njack: 20
+  shear_true: 0.01
   psfex_model_file: "/home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf"
 
 output:
-  results_fits: "/home/adfield/ShearNet/unit_test_variations/first_superbit_psf/benchmarking/psf_leakage/psf_leakage_results.fits"
+  results_fits: "/home/adfield/ShearNet/unit_test_variations/first_with_weights/benchmarking/m/metacal_results.fits"
 
 models:
-  psf_model: "em5"
+  psf_model: "gauss"
   gal_model: "gauss"
 
 ShearNet:
   include_sn: True
-  sn_model_name: "first_validation_test_sbpsf"
+  sn_model_name: "first_validation_test_weights"
   output_keys: ['g1', 'g2']
   gap: False
 

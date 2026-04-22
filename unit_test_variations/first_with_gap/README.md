@@ -4,4 +4,4 @@ The first unit test has:
 - Constant sigma and flux
 - Constant noise
 
-this particular one uses the cnn Sayan made a while ago for both branches
+this one global average pools the parameters of the galaxy branch (possibly loosing spatial context)
