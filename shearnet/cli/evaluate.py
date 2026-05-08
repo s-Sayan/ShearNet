@@ -79,6 +79,7 @@ def load_config(args):
         'nn':            config.get('model.type',            'cnn'),
         'galaxy_type':   config.get('model.galaxy.type',    'research_backed'),
         'psf_type':      config.get('model.psf.type',       'forklens_psf'),
+        'fusion':        config.get('model.fusion',          'concat'),
         'output_keys':   config.get('model.output_keys', ('g1', 'g2')),
         'mcal':          args.mcal,
         'plot':          args.plot  or config.get('plotting.plot',   False),
@@ -135,7 +136,8 @@ def load_model(config, gal_images, psf_images):
     elif nn == 'fork-like':
         model = ForkLike(
             galaxy_model_type=config['galaxy_type'],
-            psf_model_type=config['psf_type']
+            psf_model_type=config['psf_type'],
+            fusion=config.get('fusion', 'concat'),
         )
     else:
         raise ValueError(f"Unknown model type: {nn}")

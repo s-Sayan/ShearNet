@@ -1,6 +1,6 @@
 # Dataset configuration
 dataset:
-  samples: 300000
+  samples: 3000
   psf_fwhm: 0.5
   exp: "ideal"
   nse_sd: 12.719674

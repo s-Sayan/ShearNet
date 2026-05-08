@@ -98,6 +98,8 @@ Examples:
                     help='Galaxy model type for fork-like models')
     parser.add_argument('--psf_type', type=str, default=None,
                     help='PSF model type for fork-like models')
+    parser.add_argument('--fusion', type=str, default=None,
+                    help='Fusion strategy for fork-like model: "concat" (default) or "transformer"')
 
     parser.add_argument('--apply_psf_shear', action='store_const', const=True, default=None,
                        help='Apply random shear to PSF images')
@@ -137,6 +139,7 @@ def main():
         'process_psf': False,       
         'galaxy_type': 'research_backed',
         'psf_type': 'forklens_psf',
+        'fusion': 'concat',
         'apply_psf_shear': False,
         'psf_shear_range': 0.05,
         'gap': False,
@@ -178,6 +181,7 @@ def main():
         eval_interval = config.get('training.eval_interval')
         galaxy_type = config.get('model.galaxy.type')
         psf_type = config.get('model.psf.type')
+        fusion = config.get('model.fusion', 'concat')
         psfex_model_file = config.get('dataset.psfex_model_file')
         output_keys = config.get('model.output_keys')
         hlr_type = config.get('dataset.hlr_type')
@@ -207,7 +211,7 @@ def main():
         eval_interval = args.eval_interval if args.eval_interval is not None else DEFAULTS['eval_interval']
         stamp_size = args.stamp_size if args.stamp_size is not None else DEFAULTS['stamp_size']
         pixel_size = args.pixel_size if args.pixel_size is not None else DEFAULTS['pixel_size']
-        psfex_model_file = args.psfex_model_file if args.psfex_model_file is not None else DEFAULTS['psfex_model_file']
+        psfex_model_file = args.psfex_model_file if args.psfex_model_file is not None else DEFAULTS.get('psfex_model_file')
         output_keys = args.output_keys if args.output_keys is not None else DEFAULTS['output_keys']
         hlr_type = args.hlr_type if args.hlr_type is not None else DEFAULTS['hlr_type']
         flux_type = args.flux_type if args.flux_type is not None else DEFAULTS['flux_type']
@@ -217,6 +221,7 @@ def main():
 
         galaxy_type = args.galaxy_type if args.galaxy_type is not None else DEFAULTS['galaxy_type']
         psf_type = args.psf_type if args.psf_type is not None else DEFAULTS['psf_type']
+        fusion = args.fusion if args.fusion is not None else DEFAULTS['fusion']
 
         apply_psf_shear = args.apply_psf_shear if args.apply_psf_shear is not None else DEFAULTS['apply_psf_shear']
         psf_shear_range = args.psf_shear_range if args.psf_shear_range is not None else DEFAULTS['psf_shear_range']
@@ -248,6 +253,7 @@ def main():
         config._set_nested('model.process_psf', process_psf)
         config._set_nested('model.galaxy.type', galaxy_type)
         config._set_nested('model.psf.type', psf_type)
+        config._set_nested('model.fusion', fusion)
         config._set_nested('dataset.apply_psf_shear', apply_psf_shear)
         config._set_nested('dataset.psf_shear_range', psf_shear_range)
         config._set_nested('dataset.psfex_model_file', psfex_model_file)
@@ -339,6 +345,7 @@ def main():
                                     nn=nn,
                                     galaxy_type = galaxy_type,
                                     psf_type=psf_type,
+                                    fusion=fusion,
                                     save_path=save_path,
                                     model_name=model_name,
                                     val_split=val_split, # validation split fraction

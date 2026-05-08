@@ -1,6 +1,6 @@
 The third unit test has:
 
-- Varying g1 and g2 based off catalog phi and q.
-- Varying sigma based off catalog hlr
-- Varying flux based of catalog crate_b
+- superbit psf
+- Varying g1, g2, and hlr based off the catalog.
+- Constant flux
 - Constant noise
