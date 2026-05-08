@@ -84,6 +84,7 @@ class Config:
             'nn': 'model.type',
             'galaxy_type': 'model.galaxy.type',
             'psf_type': 'model.psf.type',
+            'fusion': 'model.fusion',
             
             # Training args
             'epochs': 'training.epochs',

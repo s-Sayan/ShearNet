@@ -44,7 +44,7 @@ class SimpleGalaxyNN(nn.Module):
     
 class EnhancedGalaxyNN(nn.Module):
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2")):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2"), return_spatial: bool = False):
         # Input handling 
         if x.ndim == 2:
             x = jnp.expand_dims(x, axis=0)
@@ -61,6 +61,9 @@ class EnhancedGalaxyNN(nn.Module):
         x = nn.relu(x)
         x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))  # 14x14x32
         
+        if return_spatial:
+            return x
+
         # Flatten: 14*14*32 = 6,272 features
         x = x.reshape((x.shape[0], -1))
         
@@ -248,7 +251,7 @@ class ResearchBackedGalaxyResNet(nn.Module):
     """
 
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool=False, output_keys: tuple = ("g1", "g2")):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool=False, output_keys: tuple = ("g1", "g2"), return_spatial: bool = False):
         
         # ==================== INPUT HANDLING ====================
         # CITATION: Standard practice in computer vision, established in LeNet-5 (LeCun et al., 1998)
@@ -305,6 +308,9 @@ class ResearchBackedGalaxyResNet(nn.Module):
             use_dilated=True
         )(x, deterministic=deterministic)
         
+        if return_spatial:
+            return x
+
         if gap == True:
             # ==================== GLOBAL AVERAGE POOLING ====================
             # CITATION: "Network In Network" (Lin, Chen & Yan, ICLR 2014)
@@ -349,7 +355,7 @@ class ForkLensPSFNet(nn.Module):
     """Simple CNN for PSF processing (from ForkLens cnn_layers)"""
     
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2")):
+    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2"), return_spatial: bool = False):
         # Input handling
         if x.ndim == 2:
             x = jnp.expand_dims(x, axis=0)
@@ -400,6 +406,9 @@ class ForkLensPSFNet(nn.Module):
         x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
         x = nn.relu(x)
         
+        if return_spatial:
+            return x
+
         # Flatten for concatenation
         x = x.reshape((x.shape[0], -1))
 
@@ -413,6 +422,69 @@ class ForkLensPSFNet(nn.Module):
             x = nn.Dense(len(output_keys))(x)
             return x
 
+
+class TransformerFusion(nn.Module):
+    """
+    Hybrid spatial cross-attention + self-attention fusion for ForkLike.
+
+    Galaxy spatial tokens act as queries; PSF spatial tokens act as keys/values.
+    This is physically motivated: the galaxy branch queries the PSF branch to
+    learn spatially-specific PSF correction.
+
+    Args:
+        d_model: shared token dimension after projection (default 128)
+        num_heads: attention heads (d_model must be divisible by this)
+        num_self_attn_layers: self-attention layers applied after cross-attention
+    """
+    d_model: int = 128
+    num_heads: int = 4
+    num_self_attn_layers: int = 2
+
+    @nn.compact
+    def __call__(self, galaxy_map, psf_map, output_keys: tuple = ("g1", "g2"), deterministic: bool = True):
+        batch = galaxy_map.shape[0]
+        H_g, W_g = galaxy_map.shape[1], galaxy_map.shape[2]
+        H_p, W_p = psf_map.shape[1], psf_map.shape[2]
+
+        # Project both branches to shared d_model via 1x1 conv
+        gal_proj = nn.Conv(self.d_model, (1, 1), use_bias=False)(galaxy_map)
+        psf_proj = nn.Conv(self.d_model, (1, 1), use_bias=False)(psf_map)
+
+        # Flatten spatial dims to token sequences
+        gal_tokens = gal_proj.reshape(batch, H_g * W_g, self.d_model)
+        psf_tokens = psf_proj.reshape(batch, H_p * W_p, self.d_model)
+
+        # Learned positional embeddings
+        gal_pos = self.param('gal_pos_embed', nn.initializers.normal(0.02),
+                             (1, H_g * W_g, self.d_model))
+        psf_pos = self.param('psf_pos_embed', nn.initializers.normal(0.02),
+                             (1, H_p * W_p, self.d_model))
+        gal_tokens = gal_tokens + gal_pos
+        psf_tokens = psf_tokens + psf_pos
+
+        # Cross-attention: galaxy queries PSF (pre-norm + residual)
+        gal_norm = nn.LayerNorm()(gal_tokens)
+        psf_norm = nn.LayerNorm()(psf_tokens)
+        cross_out = nn.MultiHeadDotProductAttention(num_heads=self.num_heads)(gal_norm, psf_norm)
+        gal_tokens = gal_tokens + cross_out
+
+        # Self-attention layers to refine galaxy tokens
+        for _ in range(self.num_self_attn_layers):
+            gal_norm = nn.LayerNorm()(gal_tokens)
+            self_out = nn.MultiHeadDotProductAttention(num_heads=self.num_heads)(gal_norm, gal_norm)
+            gal_tokens = gal_tokens + self_out
+
+        # Global average pool over token sequence
+        fused = jnp.mean(gal_tokens, axis=1)
+
+        # Output head
+        fused = nn.LayerNorm()(fused)
+        x = nn.Dense(128)(fused)
+        x = nn.relu(x)
+        x = nn.Dense(len(output_keys))(x)
+        return x
+
+
 class ForkLike(nn.Module):
     """
     This class is meant to take two of the above models, train one on galaxy images and another on psf images, then concatenate the results and do the dense/fully connected layers.
@@ -421,11 +493,14 @@ class ForkLike(nn.Module):
     """
     galaxy_model_type: str = "cnn"  # Default to EnhancedGalaxyNN
     psf_model_type: str = "cnn"     # Default to EnhancedGalaxyNN
+    fusion: str = "concat"          # Options: "concat", "transformer"
 
     def setup(self):
         """Initialize the sub-models during setup."""
         self.galaxy_model = self._get_model(self.galaxy_model_type)
         self.psf_model = self._get_model(self.psf_model_type)
+        if self.fusion == "transformer":
+            self.transformer_fusion = TransformerFusion()
 
     def _get_model(self, model_type):
         """Helper function to get model instance from type string."""
@@ -444,6 +519,11 @@ class ForkLike(nn.Module):
 
     @nn.compact
     def __call__(self, galaxy_image, psf_image, output_keys: tuple = ("g1", "g2"), deterministic: bool = False, gap: bool = False):
+        if self.fusion == "transformer":
+            galaxy_map = self.galaxy_model(galaxy_image, deterministic=deterministic, return_spatial=True)
+            psf_map    = self.psf_model(psf_image,       deterministic=deterministic, return_spatial=True)
+            return self.transformer_fusion(galaxy_map, psf_map, output_keys=output_keys, deterministic=deterministic)
+        
         # This model will learn from galaxy images
         galaxy_features = self.galaxy_model(galaxy_image, deterministic=deterministic, fork=True, gap=gap)
         

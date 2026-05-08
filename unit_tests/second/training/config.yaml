@@ -1,26 +1,26 @@
 # Dataset configuration
 dataset:
-  samples: 300000
+  samples: 3000
   psf_fwhm: 0.5
-  exp: "ideal"
+  exp: "superbit"
   nse_sd: 12.719674
   seed: 42
   stamp_size: 53
   pixel_size: 0.141
   psfex_model_file: "/home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf"
-  hlr_type: "catalog"
-  flux_type: "constant"
+  hlr_type: "constant" # constant or catalog
+  flux_type: "constant" # constant or catalog
 
 # Model configuration  
 model:
-  process_psf: true
+  process_psf: True
   type: "fork-like"  # Options: mlp, cnn, resnet, forklens_psf, 
                      # research_backed, and fork-like
   galaxy:
     type: "research_backed"
   psf:
     type: "forklens_psf"
-  output_keys: ['g1', 'g2', 'hlr']
+  output_keys: ['g1', 'g2']
   gap: False
   
 # Training configuration
@@ -32,7 +32,7 @@ training:
   patience: 50
   val_split: 0.2
   eval_interval: 1
-  loss_weights: [1.0, 1.0, 1.0] # one weight per output_key, in order
+  loss_weights: [1.0, 1.0] # one weight per output_key, in order
   
 # Output configuration
 output:

@@ -24,6 +24,7 @@ model:
     type: "forklens_psf"
   output_keys: ('g1', 'g2')
   gap: False
+  fusion: "concat"  # Options: concat, transformer (fork-like only)
   
 # Training configuration
 training:

@@ -8,7 +8,7 @@ simulation:
   npix: 53
   nse_sd: 12.719674
   seed: 150
-  n_obs: 200000
+  n_obs: 2000
   Njack: 20
   shear_true: 0.01
   psfex_model_file: "/home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf"
@@ -22,8 +22,8 @@ models:
 
 ShearNet:
   include_sn: True
-  sn_model_name: "second_validation_test_weights"
-  output_keys: ['g1', 'g2', 'hlr']
+  sn_model_name: "second_validation_weights"
+  output_keys: ['g1', 'g2']
   gap: False
 
 catalog:

@@ -1,7 +1,7 @@
-The second unit test has:
+The first unit test has:
 
-- Varying g1, g2, and sigma based off the catalog.
-- Constant flux
+- Varying g1 and g2 based off the catalog.
+- Constant sigma and flux
 - Constant noise
 
 This one in particular has weighted loss on g1 and g2.

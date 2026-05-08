@@ -106,7 +106,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                   psf_type='cnn', save_path=None, model_name="my_model",
                   val_split=0.2, eval_interval=1, patience=5, lr=1e-3,
                   weight_decay=1e-4, output_keys=("g1", "g2"), gap=False,
-                  weights=None):
+                  weights=None, fusion="concat"):
     """Enhanced training function with validation and early stopping.
     
     Saves only the best checkpoint (by val loss) using model_name as the prefix.
@@ -136,7 +136,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
     elif nn == "forklens_psfnet":
         model = ForkLensPSFNet()
     elif nn == "fork-like":
-        model = ForkLike(galaxy_model_type=galaxy_type, psf_model_type=psf_type)
+        model = ForkLike(galaxy_model_type=galaxy_type, psf_model_type=psf_type, fusion=fusion)
     else:
         raise ValueError(f"Invalid model type specified: {nn}")
     

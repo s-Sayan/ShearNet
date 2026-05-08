@@ -83,6 +83,7 @@ GAL_MODEL = _config["models"]["gal_model"]
 INCLUDE_SN = _config["ShearNet"]["include_sn"]
 SN_MODEL_NAME = _config["ShearNet"]["sn_model_name"]
 OUTPUT_KEYS = tuple(_config["ShearNet"]["output_keys"])
+GAP = _config["ShearNet"].get("gap", False)
 
 # ----- Catalog -----
 COSMOS_CAT_FNAME = _config["catalog"]["cosmos_cat_fname"]
@@ -310,8 +311,8 @@ def _run_shearnet_batch(buf):
         gal_m = jnp.stack([r[5][stype][0] for r in buf])
         psf_m = jnp.stack([r[5][stype][1] for r in buf])
 
-        preds_p = np.array(STATE.apply_fn(STATE.params, gal_p, psf_p, output_keys=OUTPUT_KEYS, deterministic=True))
-        preds_m = np.array(STATE.apply_fn(STATE.params, gal_m, psf_m, output_keys=OUTPUT_KEYS, deterministic=True))
+        preds_p = np.array(STATE.apply_fn(STATE.params, gal_p, psf_p, output_keys=OUTPUT_KEYS, gap=GAP, deterministic=True))
+        preds_m = np.array(STATE.apply_fn(STATE.params, gal_m, psf_m, output_keys=OUTPUT_KEYS, gap=GAP, deterministic=True))
 
         if NORM_PARAMS is not None:
             preds_p = inverse_transform_labels(preds_p, NORM_PARAMS)
@@ -326,8 +327,8 @@ def _run_shearnet_batch(buf):
     raw_p  = jnp.stack([r[6] for r in buf])
     raw_m  = jnp.stack([r[7] for r in buf])
     psf_raw = jnp.stack([r[8] for r in buf])
-    raw_preds_p = np.array(STATE.apply_fn(STATE.params, raw_p, psf_raw, output_keys=OUTPUT_KEYS, deterministic=True))
-    raw_preds_m = np.array(STATE.apply_fn(STATE.params, raw_m, psf_raw, output_keys=OUTPUT_KEYS, deterministic=True))
+    raw_preds_p = np.array(STATE.apply_fn(STATE.params, raw_p, psf_raw, output_keys=OUTPUT_KEYS, gap=GAP, deterministic=True))
+    raw_preds_m = np.array(STATE.apply_fn(STATE.params, raw_m, psf_raw, output_keys=OUTPUT_KEYS, gap=GAP, deterministic=True))
     
     if NORM_PARAMS is not None:
         raw_preds_p = inverse_transform_labels(raw_preds_p, NORM_PARAMS)
