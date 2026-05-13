@@ -8,13 +8,13 @@ simulation:
   npix: 53
   nse_sd: 12.719674
   seed: 150
-  n_obs: 2000
+  n_obs: 200000
   Njack: 20
   shear_true: 0.01
   psfex_model_file: "/home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf"
 
 output:
-  results_fits: "/home/adfield/ShearNet/units/second/benchmarking/m/metacal_results.fits"
+  results_fits: "/home/adfield/ShearNet/unit_tests/second/benchmarking/m/metacal_results.fits"
 
 models:
   psf_model: "gauss"
