@@ -39,8 +39,6 @@ import galsim
 import galsim.des
 import matplotlib.pyplot as plt
 from astropy.io import fits
-import jax
-import jax.numpy as jnp
 
 import superbit_lensing.utils as utils
 
@@ -173,15 +171,32 @@ with fits.open(COSMOS_CAT_FNAME) as hdul:
 
 
 # ============================================================
-# SHEARNET
+# SHEARNET  — deferred initialisation
+#
+# JAX starts background threads on import.  If those threads are alive
+# when multiprocessing.Pool forks, each worker inherits the full JAX
+# memory footprint, triggering the os.fork() deadlock warning and
+# exhausting RAM with 32 workers.
+#
+# Fix: don't import JAX or initialise STATE until after the Pool has
+# been created and closed.  _init_shearnet() is called at the top of
+# run_fair() (no Pool involved) and after pool.map() in run_realistic().
 # ============================================================
 
-if INCLUDE_SN:
+STATE = NORM_PARAMS = None
+
+
+def _init_shearnet():
+    """Import JAX and load ShearNet weights into global STATE/NORM_PARAMS."""
+    global STATE, NORM_PARAMS
+    import jax.numpy as jnp  # first JAX import — starts threads here
+    if not INCLUDE_SN:
+        return
     from shearnet.cli.evaluate import (
         load_model as _initialize_model,
         load_config as _eval_load_config,
     )
-    from shearnet.utils.normalization import load_normalizer, inverse_transform_labels
+    from shearnet.utils.normalization import load_normalizer
 
     eval_cfg = argparse.Namespace(
         model_name=SN_MODEL_NAME, config=None, seed=None,
@@ -189,15 +204,12 @@ if INCLUDE_SN:
         process_psf=None, galaxy_type=None, psf_type=None,
         apply_psf_shear=None, psf_shear_range=None,
     )
-    eval_cfg  = _eval_load_config(eval_cfg)
-    dummy     = jnp.ones((1, NPIX, NPIX))
-    STATE     = _initialize_model(eval_cfg, dummy, dummy)
-
+    eval_cfg    = _eval_load_config(eval_cfg)
+    dummy       = jnp.ones((1, NPIX, NPIX))
+    STATE       = _initialize_model(eval_cfg, dummy, dummy)
     data_path   = os.getenv("SHEARNET_DATA_PATH", os.path.abspath("."))
     norm_path   = os.path.join(data_path, "plots", SN_MODEL_NAME, "label_normalizer.npz")
     NORM_PARAMS = load_normalizer(norm_path) if os.path.exists(norm_path) else None
-else:
-    STATE = NORM_PARAMS = None
 
 
 # ============================================================
@@ -267,6 +279,9 @@ def run_ngmix(obs, seed):
 
 def run_shearnet_single(obs):
     """Batch=1 with GPU sync.  Used in fair mode."""
+    import jax
+    import jax.numpy as jnp
+    from shearnet.utils.normalization import inverse_transform_labels
     gal   = jnp.array(obs.image[np.newaxis])
     psf   = jnp.array(obs.psf.image[np.newaxis])
     preds = STATE.apply_fn(STATE.params, gal, psf, output_keys=OUTPUT_KEYS, gap=GAP, deterministic=True)
@@ -303,6 +318,9 @@ def report(label, arr_s):
 # ============================================================
 
 def run_fair():
+    _init_shearnet()  # safe: no Pool, JAX threads are fine here
+    import jax.numpy as jnp
+
     print("=" * 60)
     print(f"WARM-UP  ({N_WARMUP} galaxies -- results discarded)")
     print("=" * 60)
@@ -379,34 +397,39 @@ def run_realistic():
     print("=" * 60)
 
     # Generate all observations up front (not part of the timed region;
-    # both methods would face identical simulation overhead in a real pipeline)
+    # both methods would face identical simulation overhead in a real pipeline).
+    # JAX has NOT been imported yet, so forked workers inherit a lean process.
     print("\nGenerating observations...")
     rng_main = np.random.RandomState(SEED)
     all_obs  = [make_data(rng_main) for _ in range(NOBS)]
     seeds    = [SEED + i for i in range(NOBS)]
     print("Done.\n")
 
-    # ---- ShearNet warm-up (JIT compilation) ----
+    # ---- ngmix: Pool  (JAX not yet imported — clean fork) ----
+    print(f"Running ngmix Pool ({NPROC} workers)...")
+    t0_ngmix = time.perf_counter()
+    with Pool(processes=NPROC) as pool:
+        _ = pool.map(_ngmix_pool_worker, zip(all_obs, seeds))
+    ngmix_wall = time.perf_counter() - t0_ngmix
+    ngmix_eff  = np.full(NOBS, ngmix_wall / NOBS)
+    print(f"  ngmix wall time  : {ngmix_wall:.2f} s  ({ngmix_wall/NOBS*1e3:.2f} ms/galaxy effective)\n")
+
+    # ---- ShearNet: initialise JAX now that the Pool is closed ----
+    _init_shearnet()
+    import jax
+    import jax.numpy as jnp
+    from shearnet.utils.normalization import inverse_transform_labels
+
+    shearnet_eff = None
     if INCLUDE_SN:
+        # Warm-up (JIT compilation) — discarded
         print(f"ShearNet warm-up ({N_WARMUP} galaxies)...")
         rng_wu = np.random.RandomState(SEED + 99999)
         for i in range(N_WARMUP):
             run_shearnet_single(make_data(rng_wu))
         print("ShearNet warm-up complete.\n")
 
-    # ---- ngmix: Pool ----
-    print(f"Running ngmix Pool ({NPROC} workers)...")
-    t0_ngmix = time.perf_counter()
-    with Pool(processes=NPROC) as pool:
-        _ = pool.map(_ngmix_pool_worker, zip(all_obs, seeds))
-    ngmix_wall = time.perf_counter() - t0_ngmix
-    # Effective per-galaxy time = wall / N  (this is the meaningful throughput metric)
-    ngmix_eff  = np.full(NOBS, ngmix_wall / NOBS)
-    print(f"  ngmix wall time  : {ngmix_wall:.2f} s  ({ngmix_wall/NOBS*1e3:.2f} ms/galaxy effective)\n")
-
-    # ---- ShearNet: large batches ----
-    shearnet_eff = None
-    if INCLUDE_SN:
+        # Batched inference
         print(f"Running ShearNet batched (batch_size={SN_BATCH_SIZE})...")
         gal_stack = np.stack([obs.image     for obs in all_obs])
         psf_stack = np.stack([obs.psf.image for obs in all_obs])
@@ -447,7 +470,7 @@ def run_realistic():
         ngmix_wall_s       = ngmix_wall,
         ngmix_eff_per_gal_s= ngmix_wall / NOBS,
         ngmix_throughput   = NOBS / ngmix_wall,
-        ngmix_times_s      = ngmix_eff,   # uniform array; wall/N per entry
+        ngmix_times_s      = ngmix_eff,
     )
     if INCLUDE_SN:
         save_dict.update(dict(

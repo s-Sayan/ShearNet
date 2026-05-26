@@ -28,15 +28,14 @@ PSF_DATA_DIR = "/home/adfield/SHEARNET_DATA/psfex-output"
 
 _cosmos_cat_cache = None
 
-def _load_cosmos_cat(seed=42):
+def _load_cosmos_cat(seed=42, cat_path=None):
     """Lazy-load the COSMOS catalog, with a random fallback for CI."""
     global _cosmos_cat_cache
     if _cosmos_cat_cache is not None:
         return _cosmos_cat_cache
 
-    cat_path = os.environ.get('SHEARNET_COSMOS_CAT')
     if cat_path is None:
-        cat_path = os.path.join(SHEARNET_ROOT, 'cosmos_catalog_train.fits')
+        cat_path = os.path.get('SHEARNET_COSMOS_CAT')
 
     if os.path.exists(cat_path):
         with fits.open(cat_path) as hdul:
@@ -62,12 +61,12 @@ def _load_cosmos_cat(seed=42):
     _cosmos_cat_cache = _SyntheticCat()
     return _cosmos_cat_cache
 
-def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05, base_shear_g1=0.0, base_shear_g2=0.0, psf_file_or_dir=PSF_DATA_DIR, output_keys=("g1", "g2"), hlr_type="constant", flux_type="constant"):
+def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05, base_shear_g1=0.0, base_shear_g2=0.0, psf_file_or_dir=PSF_DATA_DIR, output_keys=("g1", "g2"), hlr_type="constant", flux_type="constant", cosmos_cat_fname=None):
     images = []
     labels = []
     obs = []
 
-    cosmos_cat = _load_cosmos_cat(seed=seed)
+    cosmos_cat = _load_cosmos_cat(seed=seed, cat_path=cosmos_cat_fname)
     g1_list   = cosmos_cat['G1']
     g2_list   = cosmos_cat['G2']
     hlr_list  = cosmos_cat['HLR']

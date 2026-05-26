@@ -191,7 +191,9 @@ def main():
 
         apply_psf_shear = config.get('dataset.apply_psf_shear')
         psf_shear_range = config.get('dataset.psf_shear_range')
-        
+
+        cosmos_cat_fname = config.get('catalog.cosmos_cat_fname')
+
     else:
         # Use argparse values with defaults (original behavior)
         samples = args.samples if args.samples is not None else DEFAULTS['samples']
@@ -227,7 +229,9 @@ def main():
         psf_shear_range = args.psf_shear_range if args.psf_shear_range is not None else DEFAULTS['psf_shear_range']
 
         loss_weights = args.loss_weights if args.loss_weights is not None else None
-        
+
+        cosmos_cat_fname = None
+
         # Always create a config object with the actual values being used
         config = Config()  # Start with defaults
         # Update with actual values being used
@@ -262,6 +266,8 @@ def main():
         config._set_nested('dataset.flux_type', flux_type)
         config._set_nested('model.gap', gap)
         config._set_nested('training.loss_weights', loss_weights)
+
+        config._set_nested('catalog.cosmos_cat_fname', cosmos_cat_fname)
 
     # Validate process_psf and model compatibility
     if process_psf:
@@ -301,7 +307,9 @@ def main():
     
     get_device()
 
-    train_galaxy_images, train_labels = generate_dataset(samples, psf_fwhm, exp=exp, seed=seed, npix=stamp_size, scale=pixel_size, return_psf=process_psf, nse_sd=nse_sd, psf_file_or_dir=psfex_model_file, output_keys=output_keys, hlr_type=hlr_type, flux_type=flux_type)
+    train_galaxy_images, train_labels = generate_dataset(samples, psf_fwhm, exp=exp, seed=seed, npix=stamp_size, scale=pixel_size, 
+    return_psf=process_psf, nse_sd=nse_sd, psf_file_or_dir=psfex_model_file, output_keys=output_keys, hlr_type=hlr_type, flux_type=flux_type, 
+    cosmos_cat_fname=cosmos_cat_fname)
     # Split into separate galaxy and PSF arrays
     train_psf_images = train_galaxy_images # I know this is weird, but see ../core/train.py#L11 to see that i need it defined (as not null), but it is not used if process_psf is off
     if process_psf :
