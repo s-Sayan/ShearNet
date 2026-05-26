@@ -57,3 +57,6 @@ comparison:
   ngmix: true
   psf_model: "gauss"
   gal_model: "gauss"
+
+catalog:
+  cosmos_cat_fname: "/home/adfield/ShearNet/cosmos_catalog_train.fits"

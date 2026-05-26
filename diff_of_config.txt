@@ -1,0 +1,7 @@
+44c44
+<   model_name: first_validation_test_sbpsf
+---
+>   model_name: second_validation_test_COSMOS
+51a52,53
+> catalog:
+>   cosmos_cat_fname: /home/adfield/ShearNet/cosmos_catalog_train_COSMOS.fits
