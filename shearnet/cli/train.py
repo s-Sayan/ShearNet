@@ -111,6 +111,44 @@ Examples:
     return parser
 
 
+def _unit_tests_config(config):
+    """Map a unit-tests-style config (meta/paths/image/psf/galaxy/train blocks) onto the
+    legacy keys read below. No-op for legacy/default-schema configs."""
+    if config.get('meta') is None and config.get('train') is None:
+        return config
+    mapping = {
+        'train.samples': 'dataset.samples',
+        'train.seed': 'dataset.seed',
+        'image.noise_sd': 'dataset.nse_sd',
+        'image.stamp_size': 'dataset.stamp_size',
+        'image.pixel_scale': 'dataset.pixel_size',
+        'psf.gaussian_fwhm': 'dataset.psf_fwhm',
+        'psf.mode': 'dataset.exp',
+        'galaxy.hlr_type': 'dataset.hlr_type',
+        'galaxy.flux_type': 'dataset.flux_type',
+        'paths.psfex_model_file': 'dataset.psfex_model_file',
+        'model.architecture': 'model.type',
+        'model.galaxy_branch': 'model.galaxy.type',
+        'model.psf_branch': 'model.psf.type',
+        'train.epochs': 'training.epochs',
+        'train.batch_size': 'training.batch_size',
+        'train.learning_rate': 'training.learning_rate',
+        'train.weight_decay': 'training.weight_decay',
+        'train.patience': 'training.patience',
+        'train.val_split': 'training.val_split',
+        'train.eval_interval': 'training.eval_interval',
+        'train.loss_weights': 'training.loss_weights',
+        'meta.model_name': 'output.model_name',
+        'train.plot': 'plotting.plot',
+        'paths.train_catalog': 'catalog.cosmos_cat_fname',
+    }
+    for src, dst in mapping.items():
+        val = config.get(src)
+        if val is not None:
+            config._set_nested(dst, val)
+    return config
+
+
 def main():
     """Main function for model training."""
     # Parse arguments
@@ -150,6 +188,7 @@ def main():
     if args.config:
         # Load configuration
         config = Config(args.config)
+        config = _unit_tests_config(config)
         
         # Update config with command-line overrides (only non-None values)
         config.update_from_args(args)

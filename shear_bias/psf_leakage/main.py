@@ -91,6 +91,7 @@ PSF_LM_PARS = {"maxfev": 4000, "xtol": 5.0e-5, "ftol": 5.0e-5}
 EM_PARS={'tol': 1.0e-6, 'maxiter': 50000}
 
 # ========== Load up ShearNet state here =========
+import jax
 import jax.numpy as jnp
 if INCLUDE_SN:
     from shearnet.cli.evaluate import load_model as _initialize_model, load_config as _eval_load_config
@@ -111,9 +112,14 @@ if INCLUDE_SN:
     data_path = os.getenv('SHEARNET_DATA_PATH', os.path.abspath('.'))
     _normalizer_path = os.path.join(data_path, 'plots', SN_MODEL_NAME, 'label_normalizer.npz')
     NORM_PARAMS = load_normalizer(_normalizer_path) if os.path.exists(_normalizer_path) else None
+
+    def _sn_predict(params, gal, psf, output_keys, gap):
+         return STATE.apply_fn(params, gal, psf, output_keys=output_keys, gap=gap, deterministic=True)
+    SN_PREDICT = jax.jit(_sn_predict, static_argnames=("output_keys", "gap"))
 else:
     STATE = None
     NORM_PARAMS = None
+    SN_PREDICT = None
 
 # ============================================================
 # FUNCTIONS THAT NEED galsim + cosmos_cat stay here
@@ -251,7 +257,7 @@ def _run_shearnet_batch(buf):
     base = len(data_list) - n
     gal = jnp.stack([r[2] for r in buf])
     psf = jnp.stack([r[3] for r in buf])
-    preds = np.array(STATE.apply_fn(STATE.params, gal, psf, output_keys=OUTPUT_KEYS, gap=GAP, deterministic=True))
+    preds = np.array(SN_PREDICT(STATE.params, gal, psf, OUTPUT_KEYS, GAP))
     if NORM_PARAMS is not None:
         preds = inverse_transform_labels(preds, NORM_PARAMS)
     g_idx = [_ok.index("g1"), _ok.index("g2")]
