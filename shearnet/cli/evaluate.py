@@ -1,5 +1,3 @@
-"""Command-line interface for evaluating trained ShearNet models."""
-
 import os
 import argparse
 import jax.random as random
@@ -23,7 +21,6 @@ GREEN = '\033[92m'
 YELLOW = '\033[93m'
 END   = '\033[0m'
 
-
 def create_parser():
     parser = argparse.ArgumentParser(
         description="Evaluate a trained ShearNet model."
@@ -42,7 +39,6 @@ def create_parser():
                         help='Save learning curve and residual plots.')
     return parser
 
-
 def load_config(args):
     data_path = os.getenv('SHEARNET_DATA_PATH', os.path.abspath('.'))
     default_save_path = os.path.join(data_path, 'model_checkpoint')
@@ -50,7 +46,6 @@ def load_config(args):
     os.makedirs(default_save_path, exist_ok=True)
     os.makedirs(default_plot_path, exist_ok=True)
 
-    # Try to load the saved training config for this model
     model_config_path = os.path.join(default_plot_path, args.model_name, 'training_config.yaml')
     if args.config:
         config = Config(args.config)
@@ -80,16 +75,19 @@ def load_config(args):
         'galaxy_type':   config.get('model.galaxy.type',    'research_backed'),
         'psf_type':      config.get('model.psf.type',       'forklens_psf'),
         'fusion':        config.get('model.fusion',          'concat'),
-        'output_keys':   config.get('model.output_keys', ('g1', 'g2')),
+        'output_keys':   tuple(config.get('model.output_keys', ('g1', 'g2'))),
         'mcal':          args.mcal,
         'plot':          args.plot  or config.get('plotting.plot',   False),
         'psf_model':     config.get('comparison.psf_model', 'gauss'),
         'gal_model':     config.get('comparison.gal_model', config.get('dataset.type', 'gauss')),
         'save_path':     default_save_path,
         'plot_path':     default_plot_path,
-        'gap':           config.get('model.gap', False)
+        'gap':           config.get('model.gap', False),
+        'cosmos_cat_fname': config.get('catalog.cosmos_cat_fname'),
+        'psfex_model_file': config.get('dataset.psfex_model_file'),
+        'hlr_type':         config.get('dataset.hlr_type', 'constant'),
+        'flux_type':        config.get('dataset.flux_type', 'constant')
     }
-
 
 def generate_test_data(config):
     print(f"\n{BOLD}Generating {config['test_samples']} test galaxies...{END}")
@@ -105,6 +103,11 @@ def generate_test_data(config):
         return_obs=True,
         apply_psf_shear=config['apply_psf_shear'],
         psf_shear_range=config['psf_shear_range'],
+        psf_file_or_dir=config['psfex_model_file'],
+        output_keys=config['output_keys'],
+        hlr_type=config['hlr_type'],
+        flux_type=config['flux_type'],
+        cosmos_cat_fname=config['cosmos_cat_fname'],
     )
 
     if config['process_psf']:
@@ -116,7 +119,6 @@ def generate_test_data(config):
     print(f"  Galaxy images: {gal_images.shape}")
     print(f"  Labels:        {labels.shape}")
     return gal_images, psf_images, labels, obs
-
 
 def load_model(config, gal_images, psf_images):
     print(f"\n{BOLD}Loading model '{config['model_name']}'...{END}")
@@ -154,7 +156,6 @@ def load_model(config, gal_images, psf_images):
         apply_fn=model.apply, params=init_params, tx=optax.adam(1e-3)
     )
 
-    # Find checkpoint
     load_path = config['save_path']
     matching = [
         d for d in os.listdir(load_path)
@@ -170,13 +171,10 @@ def load_model(config, gal_images, psf_images):
     print(f"  {GREEN}✓ Loaded{END}")
     return state
 
-
 def run_shearnet(state, gal_images, psf_images, labels, config, batch_size=128):
-    """Run ShearNet predictions and compute basic metrics."""
     print(f"\n{BOLD}Running ShearNet predictions...{END}")
     start = time.time()
 
-    # Load normalizer if present
     normalizer_path = os.path.join(
         config['plot_path'], config['model_name'], 'label_normalizer.npz'
     )
@@ -208,7 +206,6 @@ def run_shearnet(state, gal_images, psf_images, labels, config, batch_size=128):
 
     elapsed = time.time() - start
 
-    # Metrics on g1, g2 only
     n_out = min(preds.shape[1], labels.shape[1], 2)
     mse  = float(np.mean((preds[:, :n_out] - labels[:, :n_out])**2))
     bias = float(np.mean(preds[:, :n_out] - labels[:, :n_out]))
@@ -219,9 +216,7 @@ def run_shearnet(state, gal_images, psf_images, labels, config, batch_size=128):
 
     return preds, mse, bias, elapsed
 
-
 def run_ngmix(obs, labels, config):
-    """Run NGmix metacalibration and compute metrics."""
     from ..methods.ngmix import _get_priors, mp_fit_one, ngmix_pred
     print(f"\n{BOLD}Running NGmix metacalibration...{END}")
     start = time.time()
@@ -237,7 +232,6 @@ def run_ngmix(obs, labels, config):
 
     elapsed = time.time() - start
 
-    # Filter NaNs
     valid = ~np.any(np.isnan(preds[:, :2]), axis=1)
     n_nan = np.sum(~valid)
     if n_nan:
@@ -252,7 +246,6 @@ def run_ngmix(obs, labels, config):
     print(f"  Speedup vs ShearNet: measured separately above")
 
     return preds, mse, bias, elapsed
-
 
 def print_summary(config, sn_mse, sn_bias, sn_time,
                   ngmix_mse=None, ngmix_bias=None, ngmix_time=None):
@@ -275,7 +268,6 @@ def print_summary(config, sn_mse, sn_bias, sn_time,
         print(f"    Speedup: {ngmix_time / sn_time:.1f}x")
     print(f"\n{GREEN}✓ Done{END}\n")
 
-
 def main():
     parser = create_parser()
     args   = parser.parse_args()
@@ -293,7 +285,6 @@ def main():
 
     print_summary(config, sn_mse, sn_bias, sn_time,
                   ngmix_mse, ngmix_bias, ngmix_time)
-
 
 if __name__ == '__main__':
     main()
