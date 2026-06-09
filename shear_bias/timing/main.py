@@ -170,7 +170,6 @@ GALSIM_PSF = galsim.des.DES_PSFEx(PSFEX_FILE, wcs=utils.get_galsim_tanwcs())
 with fits.open(COSMOS_CAT_FNAME) as hdul:
     cosmos_cat = hdul[1].data
 
-
 # ============================================================
 # SHEARNET  — deferred initialisation
 #
@@ -184,13 +183,14 @@ with fits.open(COSMOS_CAT_FNAME) as hdul:
 # run_fair() (no Pool involved) and after pool.map() in run_realistic().
 # ============================================================
 
-STATE = NORM_PARAMS = None
+STATE = NORM_PARAMS = SN_PREDICT = None
 
 
 def _init_shearnet():
     """Import JAX and load ShearNet weights into global STATE/NORM_PARAMS."""
-    global STATE, NORM_PARAMS
-    import jax.numpy as jnp  # first JAX import — starts threads here
+    global STATE, NORM_PARAMS, SN_PREDICT
+    import jax
+    import jax.numpy as jnp
     if not INCLUDE_SN:
         return
     from shearnet.cli.evaluate import (
@@ -212,6 +212,9 @@ def _init_shearnet():
     norm_path   = os.path.join(data_path, "plots", SN_MODEL_NAME, "label_normalizer.npz")
     NORM_PARAMS = load_normalizer(norm_path) if os.path.exists(norm_path) else None
 
+    def _sn_predict(params, gal, psf, output_keys, gap):
+        return STATE.apply_fn(params, gal, psf, output_keys=output_keys, gap=gap, deterministic=True)
+    SN_PREDICT = jax.jit(_sn_predict, static_argnames=("output_keys", "gap"))
 
 # ============================================================
 # SIMULATION
@@ -285,7 +288,7 @@ def run_shearnet_single(obs):
     from shearnet.utils.normalization import inverse_transform_labels
     gal   = jnp.array(obs.image[np.newaxis])
     psf   = jnp.array(obs.psf.image[np.newaxis])
-    preds = STATE.apply_fn(STATE.params, gal, psf, output_keys=OUTPUT_KEYS, gap=GAP, deterministic=True)
+    preds = SN_PREDICT(STATE.params, gal, psf, OUTPUT_KEYS, GAP)
     jax.block_until_ready(preds)
     preds = np.array(preds)
     if NORM_PARAMS is not None:
@@ -423,27 +426,31 @@ def run_realistic():
 
     shearnet_eff = None
     if INCLUDE_SN:
-        # Warm-up (JIT compilation) — discarded
-        print(f"ShearNet warm-up ({N_WARMUP} galaxies)...")
-        rng_wu = np.random.RandomState(SEED + 99999)
-        for i in range(N_WARMUP):
-            run_shearnet_single(make_data(rng_wu))
+        gal_stack = np.stack([obs.image     for obs in all_obs])
+        psf_stack = np.stack([obs.psf.image for obs in all_obs])
+
+        # Warm up at the exact batch shapes the timed loop will hit (full batch
+        # + final partial batch) so compilation stays out of the timed region.
+        print(f"ShearNet warm-up (batch_size={SN_BATCH_SIZE})...")
+        _warm = {0}
+        if NOBS % SN_BATCH_SIZE:
+            _warm.add((NOBS // SN_BATCH_SIZE) * SN_BATCH_SIZE)
+        for start in sorted(_warm):
+            sl = slice(start, min(start + SN_BATCH_SIZE, NOBS))
+            jax.block_until_ready(
+                SN_PREDICT(STATE.params, jnp.array(gal_stack[sl]),
+                           jnp.array(psf_stack[sl]), OUTPUT_KEYS, GAP)
+            )
         print("ShearNet warm-up complete.\n")
 
         # Batched inference
         print(f"Running ShearNet batched (batch_size={SN_BATCH_SIZE})...")
-        gal_stack = np.stack([obs.image     for obs in all_obs])
-        psf_stack = np.stack([obs.psf.image for obs in all_obs])
-
         t0_sn = time.perf_counter()
         for start in range(0, NOBS, SN_BATCH_SIZE):
             sl    = slice(start, min(start + SN_BATCH_SIZE, NOBS))
             gal_b = jnp.array(gal_stack[sl])
             psf_b = jnp.array(psf_stack[sl])
-            preds = STATE.apply_fn(
-                STATE.params, gal_b, psf_b,
-                output_keys=OUTPUT_KEYS, gap=GAP, deterministic=True,
-            )
+            preds = SN_PREDICT(STATE.params, gal_b, psf_b, OUTPUT_KEYS, GAP)
             jax.block_until_ready(preds)
         shearnet_wall = time.perf_counter() - t0_sn
         shearnet_eff  = np.full(NOBS, shearnet_wall / NOBS)

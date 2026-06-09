@@ -105,6 +105,7 @@ MCAL_PARS = {"psf": "dilate", "mcal_shear": 0.01}
 TYPES = ["noshear", "1p", "1m"]
 
 # ========== Load up ShearNet state here =========
+import jax
 import jax.numpy as jnp
 if INCLUDE_SN:
     from shearnet.cli.evaluate import load_model as _initialize_model, load_config as _eval_load_config
@@ -125,9 +126,14 @@ if INCLUDE_SN:
     data_path = os.getenv('SHEARNET_DATA_PATH', os.path.abspath('.'))
     _normalizer_path = os.path.join(data_path, 'plots', SN_MODEL_NAME, 'label_normalizer.npz')
     NORM_PARAMS = load_normalizer(_normalizer_path) if os.path.exists(_normalizer_path) else None
+
+    def _sn_predict(params, gal, psf, output_keys, gap):
+        return STATE.apply_fn(params, gal, psf, output_keys=output_keys, gap=gap, deterministic=True)
+    SN_PREDICT = jax.jit(_sn_predict, static_argnames=("output_keys", "gap"))
 else:
     STATE = None
     NORM_PARAMS = None
+    SN_PREDICT = None
 
 # ============================================================
 # FUNCTIONS THAT NEED galsim + cosmos_cat stay here
@@ -314,8 +320,8 @@ def _run_shearnet_batch(buf):
         gal_m = jnp.stack([r[5][stype][0] for r in buf])
         psf_m = jnp.stack([r[5][stype][1] for r in buf])
 
-        preds_p = np.array(STATE.apply_fn(STATE.params, gal_p, psf_p, output_keys=OUTPUT_KEYS, gap=GAP, deterministic=True))
-        preds_m = np.array(STATE.apply_fn(STATE.params, gal_m, psf_m, output_keys=OUTPUT_KEYS, gap=GAP, deterministic=True))
+        preds_p = np.array(SN_PREDICT(STATE.params, gal_p, psf_p, OUTPUT_KEYS, GAP))
+        preds_m = np.array(SN_PREDICT(STATE.params, gal_m, psf_m, OUTPUT_KEYS, GAP))
 
         if NORM_PARAMS is not None:
             preds_p = inverse_transform_labels(preds_p, NORM_PARAMS)
@@ -330,8 +336,8 @@ def _run_shearnet_batch(buf):
     raw_p  = jnp.stack([r[6] for r in buf])
     raw_m  = jnp.stack([r[7] for r in buf])
     psf_raw = jnp.stack([r[8] for r in buf])
-    raw_preds_p = np.array(STATE.apply_fn(STATE.params, raw_p, psf_raw, output_keys=OUTPUT_KEYS, gap=GAP, deterministic=True))
-    raw_preds_m = np.array(STATE.apply_fn(STATE.params, raw_m, psf_raw, output_keys=OUTPUT_KEYS, gap=GAP, deterministic=True))
+    raw_preds_p = np.array(SN_PREDICT(STATE.params, raw_p, psf_raw, OUTPUT_KEYS, GAP))
+    raw_preds_m = np.array(SN_PREDICT(STATE.params, raw_m, psf_raw, OUTPUT_KEYS, GAP))
     
     if NORM_PARAMS is not None:
         raw_preds_p = inverse_transform_labels(raw_preds_p, NORM_PARAMS)

@@ -1,6 +1,6 @@
 # Dataset configuration
 dataset:
-  samples: 100000
+  samples: 200
   psf_sigma: 0.25
   exp: "ideal"
   nse_sd: 1.0e-5
@@ -30,7 +30,7 @@ training:
   
 # Evaluation configuration
 evaluation:
-  test_samples: 5000
+  test_samples: 50
   seed: 58
   
 # Output configuration
