@@ -1,0 +1,73 @@
+meta:
+  model_name: second_validation_test
+  description: "superbit PSF; g1/g2 from catalog; constant hlr, flux, noise"
+
+paths:
+  root: /home/adfield/ShearNet/unit_tests/second
+  psfex_model_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
+  train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
+  eval_catalog:  /home/adfield/ShearNet/cosmos_catalog_eval.fits
+  checkpoint_dir: null      # null -> $SHEARNET_DATA_PATH/model_checkpoint
+  plot_dir:       null      # null -> $SHEARNET_DATA_PATH/plots
+
+image:
+  stamp_size: 53
+  pixel_scale: 0.141
+  noise_sd: 12.719674
+
+psf:
+  mode: superbit            # superbit = PSFEx file above | ideal = analytic Gaussian
+  gaussian_fwhm: 0.5        # only used when mode: ideal
+  stamp_size: 53            # psf_npix
+  noise: 1.0e-6             # consumed by the bias test;
+
+galaxy:
+  hlr_type:  constant       # constant | catalog
+  flux_type: constant       # constant | catalog
+  hlr:  0.5                 # value used when *_type is constant
+  flux: 12258.97
+
+model:
+  architecture: fork-like
+  process_psf: true
+  galaxy_branch: research_backed
+  psf_branch:    forklens_psf
+  fusion: concat                   # concat | transformer
+  output_keys: [g1, g2]
+  gap: true
+
+train:
+  seed: 42
+  samples: 300000
+  epochs: 80
+  batch_size: 128
+  learning_rate: 1.0e-4
+  weight_decay:  1.0e-3
+  patience: 20
+  val_split: 0.2
+  eval_interval: 1
+  loss_weights: [1.0, 1.0]   # one per output_key, in order
+  plot: true
+
+eval:
+  seed: 150
+  n_obs: 200000
+  include_shearnet: true     # load ShearNet next to ngmix (bias test may set false for a pure-ngmix baseline)
+  gal_model: gauss           # ngmix galaxy fit model
+
+  bias:                      # shear-bias / metacal
+    psf_model: gauss         # ngmix PSF fit model
+    n_jackknife: 20
+    shear_true: 0.01
+    output: benchmarking/m/metacal_results.fits
+
+  leakage:                   # PSF leakage
+    psf_model: em5
+    output: benchmarking/psf_leakage/psf_leakage_results.fits
+
+  timing:                    # ngmix vs ShearNet speed
+    psf_model: em5
+    n_warmup: 20
+    shearnet_batch_size: 512
+    nproc: null              # null -> SLURM_CPUS_PER_TASK
+    output: timing/timing_results.npz

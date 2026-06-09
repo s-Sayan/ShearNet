@@ -141,11 +141,20 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
         raise ValueError(f"Invalid model type specified: {nn}")
     
     params = model.init(rng_key, jnp.ones_like(galaxy_images[0]), jnp.ones_like(psf_images[0]), output_keys=output_keys, gap=gap)
-    lr_schedule = optax.cosine_decay_schedule(
-        init_value=lr, 
-        decay_steps=epochs * (len(train_galaxy_images) // batch_size)
+    
+    total_steps = epochs * (len(train_galaxy_images) // batch_size)
+    warmup_steps = int(0.05 * total_steps)
+    
+    lr_schedule = optax.warmup_cosine_decay_schedule(
+        init_value=0.0,
+        peak_value=lr,
+        warmup_steps=warmup_steps,
+        decay_steps=total_steps
     )
-    tx = optax.adamw(learning_rate=lr_schedule, weight_decay=weight_decay)
+    tx = optax.chain(
+        optax.clip_by_global_norm(1.0),
+        optax.adamw(learning_rate=lr_schedule, weight_decay=weight_decay)
+    )
     state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
     train_losses, val_losses = [], []

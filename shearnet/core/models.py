@@ -208,7 +208,7 @@ class EnhancedMultiScaleBlock(nn.Module):
             # CITATION: "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift"
             #           (Ioffe & Szegedy, ICML 2015)
             # PLACEMENT: After convolution, before activation (standard practice)
-            scale_out = nn.BatchNorm(use_running_average=True, axis_name=None)(scale_out)
+            scale_out = nn.GroupNorm(num_groups=8)(scale_out)
             scale_out = nn.relu(scale_out)
             scale_outputs.append(scale_out)
         
@@ -233,7 +233,7 @@ class EnhancedMultiScaleBlock(nn.Module):
             # CITATION: "Identity Mappings in Deep Residual Networks" (He et al., ECCV 2016)
             # RATIONALE: 1x1 convolution for dimension matching in residual connections
             residual = nn.Conv(total_filters, (1, 1))(residual)
-            residual = nn.BatchNorm(use_running_average=True, axis_name=None)(residual)
+            residual = nn.GroupNorm(num_groups=8)(residual)
 
         # CITATION: "Identity Mappings in Deep Residual Networks" (He et al., ECCV 2016)
         # RATIONALE: Pre-activation design for better gradient flow
@@ -274,7 +274,7 @@ class ResearchBackedGalaxyResNet(nn.Module):
         #           (Ioffe & Szegedy, ICML 2015)
         # RATIONALE: "allows us to use much higher learning rates and be less careful about initialization"
         # DECISION: use_running_average=True prevents batch_stats complexity in existing pipeline
-        x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+        x = nn.GroupNorm(num_groups=8)(x)
         
         # CITATION: "Rectified Linear Units Improve Restricted Boltzmann Machines" (Nair & Hinton, ICML 2010)
         # RATIONALE: ReLU prevents vanishing gradients and is computationally efficient
@@ -296,7 +296,7 @@ class ResearchBackedGalaxyResNet(nn.Module):
         # RATIONALE: "replacing pooling operations with convolutional layers with stride > 1"
         # ADVANTAGE: Learnable parameters vs fixed pooling operation
         x = nn.Conv(x.shape[-1], (3, 3), strides=(2, 2), padding='SAME')(x)
-        x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+        x = nn.GroupNorm(num_groups=8)(x)
         x = nn.relu(x)
 
         # ==================== SECOND MULTI-SCALE BLOCK ====================
@@ -336,7 +336,7 @@ class ResearchBackedGalaxyResNet(nn.Module):
             
             # CITATION: Batch norm in dense layers: "Batch Normalization: Accelerating Deep Network Training"
             # RATIONALE: Normalizes inputs to activation function
-            x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+            x = nn.GroupNorm(num_groups=8)(x)
             x = nn.relu(x)
             
             # OPTIONAL REGULARIZATION (commented out for initial testing):
@@ -370,7 +370,7 @@ class ForkLensPSFNet(nn.Module):
             padding=((3, 3), (3, 3)),
             use_bias=False
         )(x)
-        x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+        x = nn.GroupNorm(num_groups=8)(x)
         x = nn.relu(x)
         
         # Second conv block
@@ -381,7 +381,7 @@ class ForkLensPSFNet(nn.Module):
             padding=((3, 3), (3, 3)),
             use_bias=False
         )(x)
-        x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+        x = nn.GroupNorm(num_groups=8)(x)
         x = nn.relu(x)
         
         # Third conv block
@@ -392,7 +392,7 @@ class ForkLensPSFNet(nn.Module):
             padding=((3, 3), (3, 3)),
             use_bias=False
         )(x)
-        x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+        x = nn.GroupNorm(num_groups=8)(x)
         x = nn.relu(x)
         
         # Fourth conv block
@@ -403,7 +403,7 @@ class ForkLensPSFNet(nn.Module):
             padding=((3, 3), (3, 3)),
             use_bias=False
         )(x)
-        x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+        x = nn.GroupNorm(num_groups=8)(x)
         x = nn.relu(x)
         
         if return_spatial:
@@ -535,7 +535,7 @@ class ForkLike(nn.Module):
 
         # The fully connected layers
         x = nn.Dense(128)(combined_features)
-        x = nn.BatchNorm(use_running_average=True, axis_name=None)(x)
+        x = nn.GroupNorm(num_groups=8)(x)
         x = nn.relu(x)
 
         # Final predictions
