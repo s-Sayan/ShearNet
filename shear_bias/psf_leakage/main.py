@@ -53,37 +53,37 @@ def parse_args():
 args = parse_args()
 _config = load_config(args.config)
 
-# ----- Simulation controls -----
-SEED = _config["simulation"]["seed"]
+# ----- General -----
+SEED  = _config["eval"]["seed"]
+NOISE = _config["image"]["noise_sd"]
+SCALE = _config["image"]["pixel_scale"]
+NPIX  = _config["image"]["stamp_size"]
+PSF_NPIX = _config["psf"]["stamp_size"]
+GALSIM_PSF = galsim.des.DES_PSFEx(_config["paths"]["psfex_model_file"], wcs=utils.get_galsim_tanwcs())
 
-NOISE = _config["simulation"]["nse_sd"]
-SCALE = _config["simulation"]["scale"]
-NPIX = _config["simulation"]["npix"]
-PSF_NPIX = _config["simulation"]["psf_npix"]
-GALSIM_PSF = galsim.des.DES_PSFEx(_config["simulation"]["psfex_model_file"], wcs=utils.get_galsim_tanwcs())
+# ----- GAL settings -----
+GAL_HLR  = _config["galaxy"]["hlr"]  if _config["galaxy"]["hlr_type"]  == "constant" else "catalog"
+GAL_FLUX = _config["galaxy"]["flux"] if _config["galaxy"]["flux_type"] == "constant" else "catalog"
 
-GAL_HLR = _config["simulation"]["hlr"]
-GAL_FLUX = _config["simulation"]["flux"]
+NOBS = _config["eval"]["n_obs"]
 
-NOBS = _config["simulation"]["n_obs"]
+# ----- ngmix fit models -----
+PSF_MODEL = _config["eval"]["leakage"]["psf_model"]
+GAL_MODEL = _config["eval"]["gal_model"]
 
-# ----- Models -----
-PSF_MODEL = _config["models"]["psf_model"]
-GAL_MODEL = _config["models"]["gal_model"]
-
-# ShearNet
-INCLUDE_SN = _config["ShearNet"]["include_sn"]
-SN_MODEL_NAME = _config["ShearNet"]["sn_model_name"]
-OUTPUT_KEYS = tuple(_config["ShearNet"]["output_keys"])
-GAP = _config["ShearNet"].get("gap", False)
+# ----- ShearNet -----
+INCLUDE_SN    = _config["eval"]["include_shearnet"]
+SN_MODEL_NAME = _config["meta"]["model_name"]
+OUTPUT_KEYS   = tuple(_config["model"]["output_keys"])
+GAP           = _config["model"].get("gap", False)
 
 # ----- Catalog -----
-COSMOS_CAT_FNAME = _config["catalog"]["cosmos_cat_fname"]
+COSMOS_CAT_FNAME = _config["paths"]["eval_catalog"]
 with fits.open(COSMOS_CAT_FNAME) as hdul:
     cosmos_cat = hdul[1].data
 
-# ========= Output ============
-OUTPUT_FITS = _config["output"]["results_fits"]
+# ----- Output -----
+OUTPUT_FITS = os.path.join(_config["paths"]["root"], _config["eval"]["leakage"]["output"])
 
 NTRY = 20
 LM_PARS = {"maxfev": 2000, "xtol": 5.0e-5, "ftol": 5.0e-5}

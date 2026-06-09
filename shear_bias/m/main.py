@@ -55,43 +55,46 @@ def parse_args():
 args = parse_args()
 _config = load_config(args.config)
 
-# ----- Simulation controls -----
-SEED = _config["simulation"]["seed"]
-SHEAR_TRUE = _config["simulation"]["shear_true"]
+# General
+SEED       = _config["eval"]["seed"]
+SHEAR_TRUE = _config["eval"]["bias"]["shear_true"]
 
-NOISE = _config["simulation"]["nse_sd"]
-PSF_NOISE = _config["simulation"]["psf_noise"]
-SCALE = _config["simulation"]["scale"]
-NPIX = _config["simulation"]["npix"]
+NOISE      = _config["image"]["noise_sd"]
+PSF_NOISE  = _config["psf"]["noise"]
+SCALE      = _config["image"]["pixel_scale"]
+NPIX       = _config["image"]["stamp_size"]
 
-GAL_HLR = _config["simulation"]["hlr"]
-GAL_FLUX = _config["simulation"]["flux"]
+# GAL settings
+GAL_HLR  = _config["galaxy"]["hlr"]  if _config["galaxy"]["hlr_type"]  == "constant" else "catalog"
+GAL_FLUX = _config["galaxy"]["flux"] if _config["galaxy"]["flux_type"] == "constant" else "catalog"
 
-PSF_FWHM = _config["simulation"]["psf_fwhm"]
-PSF_NPIX = _config["simulation"]["psf_npix"]
+# PSF settings
+PSF_FWHM          = _config["psf"]["mode"]
+PSF_GAUSSIAN_FWHM = _config["psf"]["gaussian_fwhm"]
+PSF_NPIX          = _config["psf"]["stamp_size"]
 
-NOBS = _config["simulation"]["n_obs"]
-NJAC = _config["simulation"]["Njack"]
+NOBS = _config["eval"]["n_obs"]
+NJAC = _config["eval"]["bias"]["n_jackknife"]
 
-GALSIM_PSF = galsim.des.DES_PSFEx(_config["simulation"]["psfex_model_file"], wcs=utils.get_galsim_tanwcs())
+GALSIM_PSF = galsim.des.DES_PSFEx(_config["paths"]["psfex_model_file"], wcs=utils.get_galsim_tanwcs())
 
-# ----- Models -----
-PSF_MODEL = _config["models"]["psf_model"]
-GAL_MODEL = _config["models"]["gal_model"]
+# ----- ngmix fit models -----
+PSF_MODEL = _config["eval"]["bias"]["psf_model"]
+GAL_MODEL = _config["eval"]["gal_model"]
 
-# ShearNet
-INCLUDE_SN = _config["ShearNet"]["include_sn"]
-SN_MODEL_NAME = _config["ShearNet"]["sn_model_name"]
-OUTPUT_KEYS = tuple(_config["ShearNet"]["output_keys"])
-GAP = _config["ShearNet"].get("gap", False)
+# ----- ShearNet -----
+INCLUDE_SN    = _config["eval"]["include_shearnet"]
+SN_MODEL_NAME = _config["meta"]["model_name"]
+OUTPUT_KEYS   = tuple(_config["model"]["output_keys"])
+GAP           = _config["model"].get("gap", False)
 
 # ----- Catalog -----
-COSMOS_CAT_FNAME = _config["catalog"]["cosmos_cat_fname"]
+COSMOS_CAT_FNAME = _config["paths"]["eval_catalog"]
 with fits.open(COSMOS_CAT_FNAME) as hdul:
     cosmos_cat = hdul[1].data
 
-# ========= Output ============
-OUTPUT_FITS = _config["output"]["results_fits"]
+# ----- Output -----
+OUTPUT_FITS = os.path.join(_config["paths"]["root"], _config["eval"]["bias"]["output"])
 
 TGUESS = 4 * SCALE**2
 NTRY = 20
@@ -161,7 +164,7 @@ def make_data(rng, noise, shear_true):
         image_position = galsim.PositionD(x_im, y_im)
         psf = GALSIM_PSF.getPSF(image_position)
     else:
-        psf = galsim.Gaussian(fwhm=psf_fwhm)
+        psf = galsim.Gaussian(fwhm=PSF_GAUSSIAN_FWHM)
 
     gsp=galsim.GSParams(maximum_fft_size=32768)
     

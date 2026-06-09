@@ -26,11 +26,11 @@ model:
 
 # Training configuration
 training:
-  epochs: 300
+  epochs: 80
   batch_size: 128
   learning_rate: 1.0e-4
-  weight_decay: 1.0e-4
-  patience: 50
+  weight_decay: 5.0e-3
+  patience: 20
   val_split: 0.2
   eval_interval: 1
   loss_weights: [1.0, 1.0] # one weight per output_key, in order

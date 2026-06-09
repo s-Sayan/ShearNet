@@ -126,32 +126,33 @@ args    = parse_args()
 _config = load_config(args.config)
 REALISTIC = args.realistic
 
-SEED       = _config["simulation"]["seed"]
-NOISE      = _config["simulation"]["nse_sd"]
-SCALE      = _config["simulation"]["scale"]
-NPIX       = _config["simulation"]["npix"]
-PSF_NPIX   = _config["simulation"]["psf_npix"]
-GAL_HLR    = _config["simulation"]["hlr"]
-GAL_FLUX   = _config["simulation"]["flux"]
-NOBS       = _config["simulation"]["n_obs"]
-N_WARMUP   = _config["simulation"]["n_warmup"]
-PSFEX_FILE = _config["simulation"]["psfex_model_file"]
+SEED       = _config["eval"]["seed"]
+NOISE      = _config["image"]["noise_sd"]
+SCALE      = _config["image"]["pixel_scale"]
+NPIX       = _config["image"]["stamp_size"]
+PSF_NPIX   = _config["psf"]["stamp_size"]
+# constant value when *_type == "constant", else the "catalog" sentinel make_data expects
+GAL_HLR    = _config["galaxy"]["hlr"]  if _config["galaxy"]["hlr_type"]  == "constant" else "catalog"
+GAL_FLUX   = _config["galaxy"]["flux"] if _config["galaxy"]["flux_type"] == "constant" else "catalog"
+NOBS       = _config["eval"]["n_obs"]
+N_WARMUP   = _config["eval"]["timing"]["n_warmup"]
+PSFEX_FILE = _config["paths"]["psfex_model_file"]
 
-PSF_MODEL  = _config["models"]["psf_model"]
-GAL_MODEL  = _config["models"]["gal_model"]
+PSF_MODEL  = _config["eval"]["timing"]["psf_model"]
+GAL_MODEL  = _config["eval"]["gal_model"]
 
-INCLUDE_SN    = _config["ShearNet"]["include_sn"]
-SN_MODEL_NAME = _config["ShearNet"]["sn_model_name"]
-OUTPUT_KEYS   = tuple(_config["ShearNet"]["output_keys"])
-GAP           = _config["ShearNet"].get("gap", False)
+INCLUDE_SN    = _config["eval"]["include_shearnet"]
+SN_MODEL_NAME = _config["meta"]["model_name"]
+OUTPUT_KEYS   = tuple(_config["model"]["output_keys"])
+GAP           = _config["model"].get("gap", False)
 
-COSMOS_CAT_FNAME = _config["catalog"]["cosmos_cat_fname"]
-OUTPUT_NPZ       = _config["output"]["results_npz"]
+COSMOS_CAT_FNAME = _config["paths"]["eval_catalog"]
+OUTPUT_NPZ       = os.path.join(_config["paths"]["root"], _config["eval"]["timing"]["output"])
 
-# Realistic-mode settings (with safe defaults if section absent)
-_real_cfg = _config.get("realistic", {})
-SN_BATCH_SIZE = _real_cfg.get("shearnet_batch_size", 512)
-_cfg_nproc    = _real_cfg.get("nproc", None)
+# Timing-stage settings
+_timing_cfg   = _config["eval"]["timing"]
+SN_BATCH_SIZE = _timing_cfg.get("shearnet_batch_size", 512)
+_cfg_nproc    = _timing_cfg.get("nproc", None)
 # honour explicit config value; otherwise use SLURM allocation; fallback to 8
 NPROC = (
     int(_cfg_nproc)

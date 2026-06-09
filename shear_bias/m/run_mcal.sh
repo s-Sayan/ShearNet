@@ -39,7 +39,7 @@ conda activate shearnet_gpu
 # ================================
 start_time=$(date +%s)
 
-python main.py -c config.yaml
+python main.py -c ../config.yaml
 
 end_time=$(date +%s)
 runtime=$((end_time - start_time))
