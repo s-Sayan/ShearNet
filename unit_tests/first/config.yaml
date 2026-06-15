@@ -1,9 +1,9 @@
 meta:
-  model_name: second_validation_test
-  description: "superbit PSF; g1/g2 from catalog; constant hlr, flux, noise"
+  model_name: first_validation_test
+  description: "gaussian PSF; g1/g2 from catalog; constant hlr, flux, noise"
 
 paths:
-  root: /home/adfield/ShearNet/unit_tests/second
+  root: /home/adfield/ShearNet/unit_tests/first
   psfex_model_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
   train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
   eval_catalog:  /home/adfield/ShearNet/cosmos_catalog_eval.fits
@@ -16,7 +16,7 @@ image:
   noise_sd: 12.719674
 
 psf:
-  mode: superbit            # superbit = PSFEx file above | ideal = analytic Gaussian
+  mode: ideal               # superbit = PSFEx file above | ideal = analytic Gaussian
   gaussian_fwhm: 0.5        # only used when mode: ideal
   stamp_size: 53            # psf_npix
   noise: 1.0e-6             # consumed by the bias test;

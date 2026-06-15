@@ -1,7 +1,4 @@
 #!/bin/bash
-#SBATCH -J mcal_ngmix_sn
-#SBATCH --output=/home/adfield/ShearNet/unit_tests/first/benchmarking/m/logs/mcal_%j.out
-#SBATCH --error=/home/adfield/ShearNet/unit_tests/first/benchmarking/m/logs/mcal_%j.err
 #SBATCH -p short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -21,25 +18,18 @@ echo "Start time: $(date)"
 echo "===================================="
 
 # ================================
-# Avoid thread oversubscription
-# ================================
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export NUMEXPR_NUM_THREADS=1
-
-# ================================
 # Activate environment
 # ================================
-source /cm/shared/spack/opt/spack/linux-ubuntu20.04-x86_64/gcc-13.2.0/miniconda3-25.1.1-24g7bpuxyyxo5pfd4zn5sldbomvz736a/etc/profile.d/conda.sh
-conda activate shearnet_gpu
+: "${CONFIG:?CONFIG not set — launch through sub.sh}"
+: "${REPO:?REPO not set — launch through sub.sh}"
+source "$REPO/setup_env.sh"
 
 # ================================
 # Run code and time execution
 # ================================
 start_time=$(date +%s)
 
-python /home/adfield/ShearNet/shear_bias/m/main.py -c /home/adfield/ShearNet/unit_tests/first/benchmarking/m/config.yaml
+python "$REPO/shear_bias/m/main.py" -c "$CONFIG"
 
 end_time=$(date +%s)
 runtime=$((end_time - start_time))
