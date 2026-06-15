@@ -1,7 +1,5 @@
 The fourth unit test has:
 
-- superbit psf
-- Varying g1 and g2 based off catalog phi and q.
-- Varying hlr based off catalog
-- Varying flux based off catalog `crate_b`
+- SuperBIT psf
+- Varying g1, g2, hlr, and flux based off the catalog.
 - Constant noise
