@@ -42,7 +42,7 @@ train:
   epochs: 80
   batch_size: 128
   learning_rate: 1.0e-4
-  weight_decay:  5.0e-3
+  weight_decay:  1.5e-2
   patience: 20
   val_split: 0.2
   eval_interval: 1

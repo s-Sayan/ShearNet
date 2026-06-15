@@ -1,9 +1,9 @@
 meta:
-  model_name: third_validation_test
-  description: "superbit PSF; g1, g2, and hlr from catalog; constant flux, noise"
+  model_name: fourth_validation_test
+  description: "superbit PSF; g1, g2, hlr, flux from catalog; constant noise"
 
 paths:
-  root: /home/adfield/ShearNet/unit_tests/third
+  root: /home/adfield/ShearNet/unit_tests/fourth
   psfex_model_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
   train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
   eval_catalog:  /home/adfield/ShearNet/cosmos_catalog_eval.fits
@@ -23,7 +23,7 @@ psf:
 
 galaxy:
   hlr_type:  catalog        # constant | catalog
-  flux_type: constant       # constant | catalog
+  flux_type: catalog        # constant | catalog
   hlr:  0.5                 # value used when *_type is constant
   flux: 12258.97
 
@@ -33,7 +33,7 @@ model:
   galaxy_branch: research_backed
   psf_branch:    forklens_psf
   fusion: transformer                   # concat | transformer
-  output_keys: [g1, g2, hlr]
+  output_keys: [g1, g2, hlr, flux]
   gap: true
 
 train:
@@ -42,11 +42,11 @@ train:
   epochs: 80
   batch_size: 128
   learning_rate: 1.0e-4
-  weight_decay:  1.0e-2
+  weight_decay:  1.5e-2
   patience: 20
   val_split: 0.2
   eval_interval: 1
-  loss_weights: [1.0, 1.0, 1.0]   # one per output_key, in order
+  loss_weights: [3.0, 3.0, 1.0, 1.0]   # one per output_key, in order
   plot: true
 
 eval:
