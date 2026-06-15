@@ -33,6 +33,20 @@ def fork_loss_fn(state, params, galaxy_images, psf_images, labels, output_keys, 
     sq_err = (preds - labels) ** 2
     loss = (sq_err * weights[None, :]).mean()
     return loss
+    
+def loss_fn_per_key(state, params, images, labels, gap, weights):
+    preds = state.apply_fn(params, images, gap=gap)
+    sq_err = (preds - labels) ** 2
+    loss = (sq_err * weights[None, :]).mean()
+    per_key = sq_err.mean(axis=0)
+    return loss, per_key
+
+def fork_loss_fn_per_key(state, params, galaxy_images, psf_images, labels, output_keys, gap, weights):
+    preds = state.apply_fn(params, galaxy_images, psf_images, output_keys, gap=gap)
+    sq_err = (preds - labels) ** 2
+    loss = (sq_err * weights[None, :]).mean()
+    per_key = sq_err.mean(axis=0)
+    return loss, per_key
 
 @functools.partial(jax.jit, static_argnums=(3,))
 def train_step(state, images, labels, gap, weights):
@@ -58,6 +72,13 @@ def fork_eval_step(state, galaxy_images, psf_images, labels, output_keys, gap, w
     loss = fork_loss_fn(state, state.params, galaxy_images, psf_images, labels, output_keys, gap, weights)
     return loss
 
+@functools.partial(jax.jit, static_argnums=(3,))
+def eval_step_per_key(state, images, labels, gap, weights):
+    return loss_fn_per_key(state, state.params, images, labels, gap, weights)
+
+@functools.partial(jax.jit, static_argnums=(4,5))
+def fork_eval_step_per_key(state, galaxy_images, psf_images, labels, output_keys, gap, weights):
+    return fork_loss_fn_per_key(state, state.params, galaxy_images, psf_images, labels, output_keys, gap, weights)
 
 def train_modelv1(images, labels, rng_key, epochs=10, batch_size=32, nn="simple", save_path=None, model_name="my_model"):
     """Original training function without validation."""
@@ -157,7 +178,7 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
     )
     state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
-    train_losses, val_losses = [], []
+    train_losses, val_losses, val_losses_per_key = [], [], []
     best_val_loss = float('inf')
     patience_counter = 0
 
@@ -188,17 +209,23 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
             # Validation phase
             if (epoch + 1) % eval_interval == 0:
                 val_loss, total_samples = 0, 0
+                val_per_key_sum = jnp.zeros(n_out)
                 for i in range(0, len(val_galaxy_images), batch_size):
                     batch_galaxy_images = val_galaxy_images[i:i + batch_size]
                     batch_psf_images = val_psf_images[i:i + batch_size]
                     batch_labels = val_labels[i:i + batch_size]
                     batch_size_actual = len(batch_galaxy_images)
-                    loss = fork_eval_step(state, batch_galaxy_images, batch_psf_images, batch_labels, output_keys, gap=gap, weights=weights)
+                    loss, per_key = fork_eval_step_per_key(state, batch_galaxy_images, batch_psf_images, batch_labels, output_keys, gap=gap, weights=weights)
                     val_loss += loss * batch_size_actual
+                    val_per_key_sum += per_key * batch_size_actual
                     total_samples += batch_size_actual
                 val_loss /= total_samples
+                val_per_key = val_per_key_sum / total_samples
                 val_losses.append(val_loss)
+                val_losses_per_key.append(val_per_key)
                 print(f"Validation Loss: {val_loss:.4e}")
+                per_key_str = ", ".join(f"{k}={float(v):.4e}" for k, v in zip(output_keys, val_per_key))
+                print(f"  Per-key validation MSE: {per_key_str}")
 
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
@@ -263,4 +290,4 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
                     print("Early stopping triggered.")
                     break
 
-    return state, train_losses, val_losses
+    return state, train_losses, val_losses, val_losses_per_key

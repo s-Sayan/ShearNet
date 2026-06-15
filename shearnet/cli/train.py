@@ -382,7 +382,7 @@ def main():
     except Exception as e:
         print(f"WARNING: Could not copy model architecture file: {e}")
 
-    state, train_loss, val_loss = train_model(
+    state, train_loss, val_loss, val_loss_per_key = train_model(
                                     train_galaxy_images,
                                     train_psf_images,
                                     train_labels,
@@ -411,7 +411,9 @@ def main():
         
     print("Saving training and validation loss...")
     loss_path = os.path.join(plot_path, model_name, f"{model_name}_loss.npz") if plot_path else None
-    jnp.savez(loss_path, train_loss=train_loss, val_loss=val_loss) if loss_path else None
+    val_loss_per_key_arr = jnp.stack(val_loss_per_key) if val_loss_per_key else jnp.zeros((0, len(output_keys)))
+    jnp.savez(loss_path, train_loss=train_loss, val_loss=val_loss,
+              val_loss_per_key=val_loss_per_key_arr, output_keys=output_keys) if loss_path else None
 
 if __name__ == "__main__":
     main()
