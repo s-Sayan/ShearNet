@@ -1,9 +1,9 @@
 meta:
-  model_name: fourth_validation_test
+  model_name: fourth_weighted_g1g2
   description: "superbit PSF; g1, g2, hlr, flux from catalog; constant noise"
 
 paths:
-  root: /home/adfield/ShearNet/unit_tests/fourth
+  root: /home/adfield/ShearNet/unit_test_variations/fourth_weighted_g1g2
   psfex_model_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
   train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
   eval_catalog:  /home/adfield/ShearNet/cosmos_catalog_eval.fits
