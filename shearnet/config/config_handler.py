@@ -7,10 +7,19 @@ import argparse
 import copy
 
 class Config:
-    """Handle configuration loading and command-line overrides."""
-    
+    """Layered configuration for the ShearNet CLIs.
+
+    Loads ``config/default_config.yaml`` first, then deep-merges an optional
+    user YAML on top, and finally lets command-line arguments override
+    individual values. Output paths default to ``$SHEARNET_DATA_PATH`` (or the
+    current directory) and are created on init.
+
+    Values are read and written with dot-notation paths, e.g.
+    ``config.get('training.epochs')`` or ``config._set_nested('dataset.seed', 0)``.
+    """
+
     def __init__(self, config_path: Optional[str] = None):
-        """Initialize config handler."""
+        """Initialize the config, optionally merging the YAML at ``config_path``."""
         self.default_config_path = Path(__file__).parent / "default_config.yaml"
         self.config = self._load_config(config_path)
         self._setup_paths()
@@ -69,7 +78,7 @@ class Config:
         return {
             # Dataset args
             'samples': 'dataset.samples',
-            'psf_sigma': 'dataset.psf_sigma',
+            'psf_fwhm': 'dataset.psf_fwhm',
             'exp': 'dataset.exp',
             'seed': 'dataset.seed',
             'nse_sd': 'dataset.nse_sd',

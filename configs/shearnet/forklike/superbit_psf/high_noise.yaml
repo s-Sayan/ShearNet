@@ -35,8 +35,8 @@ evaluation:
   
 # Output configuration
 output:
-  save_path: "/home/adfield/ShearNet/model_checkpoint/unit_test/"  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
-  plot_path: "/home/adfield/ShearNet/plots/unit_test/"  # Will use SHEARNET_DATA_PATH/plots if null
+  save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
+  plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
   model_name: "FIRST_const_sigma+flux_nse_sd_12_type_exp"
   
 # Plotting configuration

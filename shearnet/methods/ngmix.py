@@ -9,6 +9,7 @@ from ..utils.metrics import get_admoms_ngmix_fit
 
 # Function to remove NaN values and count them
 def clean_and_report_nans(data_list, name):
+    """Return ``data_list`` as an array with NaNs removed, printing how many were dropped."""
     clean_list = np.array(data_list)
     nan_count = np.isnan(clean_list).sum()
     
@@ -18,18 +19,21 @@ def clean_and_report_nans(data_list, name):
     return clean_list[~np.isnan(clean_list)]  # Return array without NaNs
 
 def fourier_transform(psf):
+    """Return the centered (fftshifted) 2-D Fourier transform of an image."""
     # Compute the Fourier Transform
     ft_psf = np.fft.fft2(psf)
     ft_psf_shifted = np.fft.fftshift(ft_psf)  # Shift zero frequency to center
     return ft_psf_shifted
 
 def inverse_fourier_transform(ft_psf_shifted):
+    """Invert :func:`fourier_transform`, returning the real-space magnitude image."""
     # Shift back and compute Inverse Fourier Transform
     ft_psf = np.fft.ifftshift(ft_psf_shifted)
     psf_reconstructed = np.fft.ifft2(ft_psf)
     return np.abs(psf_reconstructed)
 
 def fft_ifft(psf):
+    """Round-trip an image through FFT and inverse FFT (a numerical sanity check)."""
     # Compute the Fourier Transform
     ft_psf = np.fft.fft2(psf)
     ft_psf_shifted = np.fft.fftshift(ft_psf)  # Shift zero frequency to center
@@ -249,14 +253,17 @@ def _get_priors(seed):
     return priors
 
 def get_em_ngauss(name):
+    """Parse the Gaussian count from an EM model name, e.g. ``'em3'`` -> ``3``."""
     ngauss=int( name[2:] )
     return ngauss
 
 def get_coellip_ngauss(name):
+    """Parse the Gaussian count from a coelliptical model name, e.g. ``'coellip3'`` -> ``3``."""
     ngauss=int( name[7:] )
     return ngauss
 
 def process_obs(obs, boot):
+    """Run a metacal bootstrapper on one observation; return its struct and obs dict."""
     resdict, obsdict = boot.go(obs)
     dlist = [make_struct(res=sres, obs=obsdict[stype], shear_type=stype) for stype, sres in resdict.items()]
     return np.hstack(dlist), obsdict
@@ -354,6 +361,19 @@ def mp_fit_one(obslist, prior, rng, psf_model='gauss', gal_model='gauss', mcal_p
     return data_list, obsdict_list
 
 def ngmix_pred(data_list, return_bad_indices=False):
+    """Extract ``(g1, g2, sigma, flux)`` predictions from NGmix metacal results.
+
+    Reads the unsheared (``noshear``) entry of each galaxy's result struct and
+    converts the moment size ``T`` to ``sigma = sqrt(T/2)``.
+
+    Args:
+        data_list: Per-galaxy metacal structs as produced by :func:`mp_fit_one`.
+        return_bad_indices: If ``True``, also return the indices with invalid
+            (non-positive or NaN) ``T``.
+
+    Returns:
+        np.ndarray of shape ``(N, 4)``, or ``(preds, bad_indices)`` when requested.
+    """
     g1 = np.array([d[0][3][0] for d in data_list])
     g2 = np.array([d[0][3][1] for d in data_list])
     T = np.array([d[0][4] for d in data_list])
@@ -451,8 +471,8 @@ def mp_fit_one_single(obslist, prior, rng, psf_model='gauss', gal_model='gauss',
     return data_list, resdict_list
 
 def get_memory_usage(obj):
+    """Print the memory usage (MB) of each attribute of an object, and the total."""
     from pympler import asizeof
-    """Prints the memory usage of each attribute in an object in MB."""
     memory_usage = {attr: asizeof.asizeof(getattr(obj, attr)) / (1024 * 1024) for attr in obj.__dict__}
     
     for attr, size in memory_usage.items():
@@ -462,6 +482,15 @@ def get_memory_usage(obj):
     print(f"\nTotal memory used by instance: {total_memory:.6f} MB")
 
 def response_calculation(data_list, mcal_shear):
+    """Compute per-galaxy metacalibration response and PSF-leakage terms.
+
+    From the sheared (``1p/1m/2p/2m``) entries of each galaxy's metacal struct,
+    finite-differences the shear response matrix elements (R11, R22, R12, R21) and
+    the additive/PSF terms, using a step of ``mcal_shear``.
+
+    Returns:
+        tuple of eight lists: ``(r11, r22, r12, r21, c1, c2, c1_psf, c2_psf)``.
+    """
     r11_list, r22_list, r12_list, r21_list, c1_list, c2_list, c1_psf_list, c2_psf_list = [], [], [], [], [], [], [], []
 
     for i in range(len(data_list)):

@@ -201,7 +201,10 @@ def main():
         
         # Get values from config (after overrides applied)
         samples = config.get('dataset.samples')
+        # Accept both 'psf_fwhm' (canonical) and the legacy 'psf_sigma' key.
         psf_fwhm = config.get('dataset.psf_fwhm')
+        if psf_fwhm is None:
+            psf_fwhm = config.get('dataset.psf_sigma')
         nse_sd = config.get('dataset.nse_sd')
         exp = config.get('dataset.exp')
         seed = config.get('dataset.seed')

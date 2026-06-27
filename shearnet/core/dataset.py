@@ -25,7 +25,14 @@ WCS_PARAMS = {
 
 MARGIN = 200 # Margins that I wanna use for PSF Rendering
 
-PSF_DATA_DIR = "/home/adfield/SHEARNET_DATA/psfex-output"
+# Directory holding the empirical PSFEx PSF files used for the ``superbit``
+# experiment. Defaults to the SuperBIT PSFs bundled with the repository, but can
+# be overridden with the ``SHEARNET_PSF_DIR`` environment variable to point at a
+# different PSF library.
+PSF_DATA_DIR = os.environ.get(
+    "SHEARNET_PSF_DIR",
+    os.path.join(SHEARNET_ROOT, "psf_data", "emp_psfs_best", "psfex-output"),
+)
 
 _cosmos_cat_cache = None
 
@@ -60,6 +67,44 @@ def _load_cosmos_cat(seed=42, cat_path=None):
     return _cosmos_cat_cache
 
 def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05, base_shear_g1=0.0, base_shear_g2=0.0, psf_file_or_dir=PSF_DATA_DIR, output_keys=("g1", "g2"), hlr_type="constant", flux_type="constant", cosmos_cat_fname=None):
+    """Simulate a dataset of galaxy postage stamps with known shear labels.
+
+    Each sample is a GalSim galaxy (exponential or Gaussian) sheared by values
+    drawn from a COSMOS catalog, convolved with either an analytic Gaussian PSF
+    (``exp='ideal'``) or an empirical PSFEx SuperBIT PSF (``exp='superbit'``),
+    and corrupted with Gaussian noise. See :func:`sim_func` for the per-object
+    simulation details.
+
+    Args:
+        samples: Number of postage stamps to generate.
+        psf_fwhm: FWHM (arcsec) of the analytic Gaussian PSF (``exp='ideal'``).
+        npix: Stamp size in pixels (square).
+        scale: Pixel scale in arcsec/pixel.
+        type: Galaxy light profile, ``'exp'`` or ``'gauss'``.
+        exp: Experiment / PSF mode, ``'ideal'`` or ``'superbit'``.
+        nse_sd: Standard deviation of the additive Gaussian noise.
+        seed: Base random seed for reproducibility.
+        return_clean: Also stack the noise-free galaxy image as an extra channel.
+        return_psf: Also stack the PSF image as an extra channel.
+        return_obs: Additionally return the list of ngmix ``Observation`` objects.
+        apply_psf_shear: Apply a random shear to the PSF (``exp='ideal'`` only).
+        psf_shear_range: Half-width of the uniform PSF-shear distribution.
+        base_shear_g1, base_shear_g2: Constant shear applied to every galaxy.
+        psf_file_or_dir: PSF file or directory of ``.psf`` files for the
+            ``superbit`` mode (defaults to :data:`PSF_DATA_DIR`).
+        output_keys: Label fields to return per sample; subset of
+            ``{"g1", "g2", "hlr", "flux", "psf_e1", "psf_e2", "psf_T"}``.
+        hlr_type: ``'constant'`` (0.5) or ``'catalog'`` half-light radius.
+        flux_type: ``'constant'`` or ``'catalog'`` flux.
+        cosmos_cat_fname: Path to the COSMOS catalog FITS file; a synthetic
+            random catalog is used as a fallback (e.g. in CI) when absent.
+
+    Returns:
+        ``(images, labels)`` as numpy arrays, or ``(images, labels, obs)`` when
+        ``return_obs=True``. ``images`` is ``(samples, npix, npix)`` for a single
+        channel, or has a trailing channel axis when ``return_psf``/``return_clean``
+        are set. ``labels`` has shape ``(samples, len(output_keys))``.
+    """
     images = []
     labels = []
     obs = []
@@ -186,7 +231,34 @@ def split_combined_images(combined_images, has_psf=False, has_clean=False):
         raise ValueError(f"Unexpected number of channels: {combined_images.shape[-1]}")
 
 def sim_func(g1, g2, hlr=1.0, flux=1.0, psf_fwhm=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", apply_psf_shear=False, psf_shear_range=0.05, ud=None, psf_files=None, base_shear_g1=0.0, base_shear_g2=0.0):
+    """Simulate a single galaxy observation and return an ngmix ``Observation``.
 
+    Builds a sheared, randomly-shifted galaxy, convolves it with the chosen PSF,
+    draws the noisy image, fits the PSF adaptive moments, and packages everything
+    into an ngmix ``Observation``. The metadata also stores the clean image and
+    the +/- e1/e2 sheared counterparts used for metacalibration-style responses.
+
+    Args:
+        g1, g2: Intrinsic shear of the galaxy.
+        hlr: Half-light radius (arcsec).
+        flux: Total flux of the galaxy.
+        psf_fwhm: Gaussian PSF FWHM (arcsec) for ``exp='ideal'``.
+        nse_sd: Standard deviation of the additive Gaussian noise.
+        type: Galaxy profile, ``'exp'`` or ``'gauss'``.
+        npix: Stamp size in pixels (square).
+        scale: Pixel scale in arcsec/pixel.
+        seed: Random seed for this object's noise and shifts.
+        exp: PSF mode, ``'ideal'`` (analytic Gaussian) or ``'superbit'`` (PSFEx).
+        apply_psf_shear: Apply a random shear to the analytic PSF.
+        psf_shear_range: Half-width of the uniform PSF-shear distribution.
+        ud: A ``galsim.UniformDeviate`` used to sample the SuperBIT PSF.
+        psf_files: List of ``.psf`` files to draw from for ``exp='superbit'``.
+        base_shear_g1, base_shear_g2: Constant shear applied before the PSF.
+
+    Returns:
+        ngmix.Observation: The noisy galaxy observation, with its ``psf`` set and
+        ``meta`` populated with ``snr``, ``clean_image`` and the metacal images.
+    """
     rng = np.random.RandomState(seed=seed)
 
     gsp = galsim.GSParams(maximum_fft_size=32768)
@@ -308,12 +380,18 @@ def sim_func(g1, g2, hlr=1.0, flux=1.0, psf_fwhm=0.5, nse_sd = 1e-5,  type='gaus
     return obj_obs
 
 def search_psf_files(path):
+    """Return a list of all ``*.psf`` files directly under ``path``."""
     all_psf_files = []
     search_path = os.path.join(path, '*.psf')
     all_psf_files.extend(glob(search_path))
     return all_psf_files
 
 def get_background_file(psf_file):
+    """Map a PSFEx ``.psf`` file path to its matching sky-background FITS file.
+
+    Replaces the ``_starcat.psf`` suffix with ``.bkg_rms.fits`` and swaps the
+    ``psfex-output`` directory for the sibling ``sky_backgrounds`` directory.
+    """
     # Extract base name without directory
     fname = os.path.basename(psf_file)
 
@@ -329,6 +407,21 @@ def get_background_file(psf_file):
     return os.path.join(new_dir, new_fname)
 
 def import_psf(psf_files, ud, xsize=WCS_PARAMS['image_xsize'], ysize=WCS_PARAMS['image_ysize'], margin=MARGIN):
+    """Sample an empirical PSFEx PSF at a random image position.
+
+    Picks a random exposure from ``psf_files`` and a random position within the
+    image (inset by ``margin``), then evaluates the PSFEx model there using the
+    WCS built from :data:`WCS_PARAMS`.
+
+    Args:
+        psf_files: List of PSFEx ``.psf`` files to choose from.
+        ud: A ``galsim.UniformDeviate`` providing the random draws.
+        xsize, ysize: Image dimensions (pixels) used to sample the position.
+        margin: Pixel margin kept clear of the image edges.
+
+    Returns:
+        A ``galsim`` PSF object evaluated at the sampled position.
+    """
     maxexp = len(psf_files)
     # random position
     x = margin + (xsize - 2*margin) * ud()

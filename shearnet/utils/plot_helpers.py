@@ -123,7 +123,15 @@ def visualize_psf_samples(images, num_samples=10, path=None):
         plt.show()
 
 def plot_true_vs_predicted(true_labels, predicted_labels, path=None, mcal=False, preds_mcal=None):
+    """Scatter true vs. predicted g1, g2, sigma and flux for the network.
 
+    Args:
+        true_labels: Ground-truth array with columns ``(g1, g2, sigma, flux)``.
+        predicted_labels: Network predictions in the same column order.
+        path: If given, the figure is saved here; otherwise it is shown.
+        mcal: If ``True``, overlay the moment/NGmix predictions in ``preds_mcal``.
+        preds_mcal: Comparison predictions, required when ``mcal=True``.
+    """
     # True values
     g1_true = true_labels[:, 0]
     g2_true = true_labels[:, 1]

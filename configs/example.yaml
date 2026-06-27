@@ -1,7 +1,7 @@
 # Dataset configuration
 dataset:
   samples: 100000
-  psf_sigma: 0.25
+  psf_fwhm: 0.25
   exp: "ideal"
   nse_sd: 1.0e-3
   seed: 42

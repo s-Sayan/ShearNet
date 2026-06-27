@@ -2,9 +2,19 @@ import flax.linen as nn
 import jax.numpy as jnp
 
 class ResidualBlock(nn.Module):
+    """A two-convolution residual block with a skip connection.
+
+    The input is passed through two convolutions and added back to a
+    (optionally 1x1-projected) copy of itself, following the residual-learning
+    design of He et al. (CVPR 2016). Used as a building block by ``GalaxyResNet``.
+
+    Attributes:
+        filters: Number of output channels for the block.
+        kernel_size: Convolution kernel size (default ``(3, 3)``).
+    """
     filters: int
     kernel_size: tuple = (3, 3)
-    
+
     @nn.compact
     def __call__(self, x):
         residual = x  # Save the input for the skip connection
@@ -26,6 +36,27 @@ class ResidualBlock(nn.Module):
         return x
 
 class SimpleGalaxyNN(nn.Module):
+    """A plain multi-layer perceptron (``nn='mlp'``) for shear estimation.
+
+    Flattens the input stamp and applies dense layers to regress the requested
+    output parameters. The lightest of the available architectures.
+
+    The ``__call__`` signature is shared across all single-branch models:
+
+    Args:
+        x: Input image batch, shape ``(batch, height, width)`` (a leading batch
+            axis is added if a single 2-D stamp is passed).
+        deterministic: Disables stochastic layers (e.g. dropout) when ``True``.
+        fork: If ``True``, return the flattened feature vector instead of the
+            final prediction (used by ``ForkLike`` to fuse two branches).
+        gap: Use global-average-pooling instead of flattening (where supported).
+        output_keys: Names of the parameters to predict; the output dimension
+            equals ``len(output_keys)``.
+
+    Returns:
+        Array of shape ``(batch, len(output_keys))`` with the predicted
+        parameters, or the feature vector when ``fork=True``.
+    """
     @nn.compact
     def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2")):
         if x.ndim == 2:  # If batch dimension is missing
@@ -43,6 +74,15 @@ class SimpleGalaxyNN(nn.Module):
             return x
     
 class EnhancedGalaxyNN(nn.Module):
+    """A compact convolutional network (``nn='cnn'``) for shear estimation.
+
+    Two convolution + average-pool blocks extract spatial features which are
+    flattened and passed through dense layers. A good default architecture.
+
+    Shares the common model signature (see :class:`SimpleGalaxyNN`). In addition,
+    ``return_spatial=True`` returns the intermediate spatial feature map (used by
+    the transformer-fusion path of :class:`ForkLike`).
+    """
     @nn.compact
     def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2"), return_spatial: bool = False):
         # Input handling 
@@ -80,6 +120,13 @@ class EnhancedGalaxyNN(nn.Module):
     
     
 class GalaxyResNet(nn.Module):
+    """A residual CNN (``nn='resnet'``) built from :class:`ResidualBlock`s.
+
+    Applies an initial convolution followed by two residual blocks of growing
+    width, then dense layers with a ``tanh`` output. Heavier than
+    :class:`EnhancedGalaxyNN`; shares the common model signature
+    (see :class:`SimpleGalaxyNN`).
+    """
     @nn.compact
     def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2")):
         if x.ndim == 2:  # If batch dimension is missing
@@ -352,7 +399,13 @@ class ResearchBackedGalaxyResNet(nn.Module):
             return x
 
 class ForkLensPSFNet(nn.Module):
-    """Simple CNN for PSF processing (from ForkLens cnn_layers)"""
+    """Strided CNN for PSF stamps (``nn='forklens_psf'``), from ForkLens.
+
+    Four stride-2 convolution blocks progressively downsample the PSF image.
+    Designed to be used as the PSF branch of :class:`ForkLike`, mirroring the
+    ``cnn_layers`` design of the ForkLens project. Shares the common model
+    signature (see :class:`SimpleGalaxyNN`).
+    """
     
     @nn.compact
     def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2"), return_spatial: bool = False):

@@ -60,14 +60,28 @@ def measure_e1e2(g1=None, g2=None, im=None, sigma=1, scale=0.2, npix=53):
     return e1, e2
 
 def calculate_responsivity(psf_sigma, seed, h=0.01):
+    """Estimate the shear responsivity (R1, R2) by finite differences.
+
+    Simulates galaxies sheared by +/- ``h`` in each component and measures how the
+    recovered ellipticity changes, giving the multiplicative response used to
+    de-bias moment-based shear estimates.
+
+    Args:
+        psf_sigma: Gaussian PSF FWHM (arcsec) passed to :func:`sim_func`.
+        seed: Random seed for the simulated galaxies.
+        h: Finite-difference step in shear.
+
+    Returns:
+        tuple: ``(R1, R2)`` responsivities for g1 and g2.
+    """
     from ..core.dataset import sim_func
-    obj_im_p = sim_func(h, 0, seed=seed, psf_sigma=psf_sigma)
-    obj_im_m = sim_func(-h, 0, seed=seed, psf_sigma=psf_sigma)
+    obj_im_p = sim_func(h, 0, seed=seed, psf_fwhm=psf_sigma)
+    obj_im_m = sim_func(-h, 0, seed=seed, psf_fwhm=psf_sigma)
     e1p, _ = measure_e1e2(im=obj_im_p.image)
     e1m, _ = measure_e1e2(im=obj_im_m.image)
     R1 = (e1p - e1m) / (2 * h)
-    obj_im_p = sim_func(0, h, seed=seed, psf_sigma=psf_sigma)
-    obj_im_m = sim_func(0, -h, seed=seed, psf_sigma=psf_sigma)
+    obj_im_p = sim_func(0, h, seed=seed, psf_fwhm=psf_sigma)
+    obj_im_m = sim_func(0, -h, seed=seed, psf_fwhm=psf_sigma)
     _, e2p = measure_e1e2(im=obj_im_p.image)
     _, e2m  = measure_e1e2(im=obj_im_m.image)
     R2 = (e2p - e2m) / (2 * h)

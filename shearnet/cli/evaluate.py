@@ -1,3 +1,10 @@
+"""Command-line interface for evaluating trained ShearNet models.
+
+Loads a saved checkpoint, regenerates a matching test set, runs the network
+(optionally alongside NGmix metacalibration for comparison), and prints an
+MSE/bias/timing summary.
+"""
+
 import os
 import argparse
 import jax.random as random
@@ -22,6 +29,7 @@ YELLOW = '\033[93m'
 END   = '\033[0m'
 
 def create_parser():
+    """Build the ``shearnet-eval`` argument parser."""
     parser = argparse.ArgumentParser(
         description="Evaluate a trained ShearNet model."
     )
@@ -40,6 +48,14 @@ def create_parser():
     return parser
 
 def load_config(args):
+    """Resolve evaluation settings from CLI args and the saved training config.
+
+    Falls back to the ``training_config.yaml`` written next to the model's plots
+    (so evaluation matches how the model was trained), then to package defaults.
+
+    Returns:
+        dict: A flat settings dictionary consumed by the rest of the pipeline.
+    """
     data_path = os.getenv('SHEARNET_DATA_PATH', os.path.abspath('.'))
     default_save_path = os.path.join(data_path, 'model_checkpoint')
     default_plot_path = os.path.join(data_path, 'plots')
@@ -90,6 +106,7 @@ def load_config(args):
     }
 
 def generate_test_data(config):
+    """Simulate the test set, returning ``(gal_images, psf_images, labels, obs)``."""
     print(f"\n{BOLD}Generating {config['test_samples']} test galaxies...{END}")
     images, labels, obs = generate_dataset(
         config['test_samples'],
@@ -121,6 +138,11 @@ def generate_test_data(config):
     return gal_images, psf_images, labels, obs
 
 def load_model(config, gal_images, psf_images):
+    """Instantiate the configured architecture and restore its best checkpoint.
+
+    Returns:
+        flax.training.train_state.TrainState: State with the restored parameters.
+    """
     print(f"\n{BOLD}Loading model '{config['model_name']}'...{END}")
     rng_key = random.PRNGKey(config['seed'])
     nn = config['nn']
@@ -172,6 +194,14 @@ def load_model(config, gal_images, psf_images):
     return state
 
 def run_shearnet(state, gal_images, psf_images, labels, config, batch_size=128):
+    """Batch-predict with the network and report MSE/bias/time.
+
+    Predictions are inverse-transformed with the saved label normalizer (if
+    present) before metrics are computed.
+
+    Returns:
+        tuple: ``(preds, mse, bias, elapsed_seconds)``.
+    """
     print(f"\n{BOLD}Running ShearNet predictions...{END}")
     start = time.time()
 
@@ -217,6 +247,11 @@ def run_shearnet(state, gal_images, psf_images, labels, config, batch_size=128):
     return preds, mse, bias, elapsed
 
 def run_ngmix(obs, labels, config):
+    """Run NGmix metacalibration on the same observations for comparison.
+
+    Returns:
+        tuple: ``(preds, mse, bias, elapsed_seconds)`` over the non-NaN fits.
+    """
     from ..methods.ngmix import _get_priors, mp_fit_one, ngmix_pred
     print(f"\n{BOLD}Running NGmix metacalibration...{END}")
     start = time.time()
@@ -249,6 +284,7 @@ def run_ngmix(obs, labels, config):
 
 def print_summary(config, sn_mse, sn_bias, sn_time,
                   ngmix_mse=None, ngmix_bias=None, ngmix_time=None):
+    """Print the final evaluation summary, including the NGmix speedup if run."""
     print(f"\n{BOLD}{'='*60}")
     print("EVALUATION SUMMARY")
     print(f"{'='*60}{END}")
@@ -269,6 +305,7 @@ def print_summary(config, sn_mse, sn_bias, sn_time,
     print(f"\n{GREEN}✓ Done{END}\n")
 
 def main():
+    """Entry point for the ``shearnet-eval`` command."""
     parser = create_parser()
     args   = parser.parse_args()
     config = load_config(args)

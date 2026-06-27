@@ -4,7 +4,7 @@
 # Dataset configuration
 dataset:
   samples: 10000
-  psf_sigma: 0.25
+  psf_fwhm: 0.25
   exp: "ideal"
   nse_sd: 1.0e-5
   seed: 42
@@ -22,7 +22,7 @@ model:
     type: "research_backed"
   psf:
     type: "forklens_psf"
-  output_keys: ('g1', 'g2')
+  output_keys: ['g1', 'g2']
   gap: False
   fusion: "concat"  # Options: concat, transformer (fork-like only)
   
@@ -59,4 +59,7 @@ comparison:
   gal_model: "gauss"
 
 catalog:
-  cosmos_cat_fname: "/home/adfield/ShearNet/cosmos_catalog_train.fits"
+  # Path to a COSMOS catalog FITS file with G1/G2/HLR/FLUX columns. When null (or
+  # the file is missing) a synthetic random catalog is used instead, so training
+  # works out of the box.
+  cosmos_cat_fname: null

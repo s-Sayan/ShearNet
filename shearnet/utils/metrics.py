@@ -22,6 +22,7 @@ GREEN = '\033[92m'
 END = '\033[0m'
 
 def remove_nan_preds_multi(pred1: np.ndarray, pred2: np.ndarray, labels: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Drop rows where either prediction array contains a NaN, keeping rows aligned."""
     mask = ~np.any(np.isnan(pred1) | np.isnan(pred2), axis=1)
     num_removed = np.sum(~mask)
     if num_removed > 0:
@@ -29,6 +30,7 @@ def remove_nan_preds_multi(pred1: np.ndarray, pred2: np.ndarray, labels: np.ndar
     return pred1[mask], pred2[mask], labels[mask]
 
 def remove_nan_preds(preds: np.ndarray, labels: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Drop rows with NaN predictions, returning the filtered ``(preds, labels)``."""
     mask = ~np.any(np.isnan(preds), axis=1)
     num_removed = np.sum(~mask)
     if num_removed > 0:
@@ -36,7 +38,8 @@ def remove_nan_preds(preds: np.ndarray, labels: np.ndarray) -> Tuple[np.ndarray,
     return preds[mask], labels[mask]
 
 def loss_fn_mcal(images, labels, psf_fwhm):
-    from ..methods.metacal import mcal_preds
+    """MSE loss and per-component breakdown for moment-based metacalibration."""
+    from ..methods.mcal import mcal_preds
     preds = mcal_preds(images, psf_fwhm)
     loss = optax.l2_loss(preds[:, :2], labels[:, :2]).mean()
     loss_per_label = {
@@ -48,6 +51,7 @@ def loss_fn_mcal(images, labels, psf_fwhm):
 
 
 def loss_fn_ngmix(obs_list, labels, seed=1234, psf_model='gauss', gal_model='gauss'):
+    """MSE loss, predictions and per-component bias for NGmix fits."""
     from ..methods.ngmix import _get_priors, mp_fit_one, ngmix_pred
     prior = _get_priors(seed)
     rng = np.random.RandomState(seed)
@@ -71,6 +75,12 @@ def loss_fn_ngmix(obs_list, labels, seed=1234, psf_model='gauss', gal_model='gau
 
 
 def eval_ngmix(test_obs, test_labels, seed=1234, psf_model='gauss', gal_model='gauss') -> Dict[str, Any]:
+    """Run NGmix metacalibration and report loss, bias, timing and response matrix.
+
+    Returns:
+        dict: Metrics including ``loss``, ``bias``, per-label breakdowns, the mean
+        metacal response matrix ``R``, per-galaxy responses, predictions and timing.
+    """
     from ..methods.ngmix import _get_priors, mp_fit_one, ngmix_pred, response_calculation
     start_time = time.time()
     prior = _get_priors(seed)
@@ -134,12 +144,14 @@ def eval_ngmix(test_obs, test_labels, seed=1234, psf_model='gauss', gal_model='g
 
 @jax.jit
 def eval_step(state, images, labels):
+    """Deterministic forward pass for a single-branch model; returns ``(loss, preds)``."""
     preds = state.apply_fn(state.params, images, deterministic=True)
     loss = optax.l2_loss(preds, labels).mean()
     return loss, preds
 
 @jax.jit
 def fork_eval_step(state, images, psf_images, labels):
+    """Deterministic forward pass for the ``fork-like`` model; returns ``(loss, preds)``."""
     preds = state.apply_fn(state.params, images, psf_images, deterministic=True)
     loss = optax.l2_loss(preds, labels).mean()
     return loss, preds
@@ -161,6 +173,11 @@ def _per_label_metrics(preds, labels, output_keys):
 
 
 def eval_model(state, test_images, test_labels, output_keys=("g1", "g2"), batch_size=32) -> Dict[str, Any]:
+    """Evaluate a single-branch ShearNet model over a test set in batches.
+
+    Returns:
+        dict: ``loss``, ``bias``, per-label MSE/bias, stacked predictions and timing.
+    """
     start_time = time.time()
     total_loss = 0
     total_samples = 0
@@ -209,6 +226,11 @@ def eval_model(state, test_images, test_labels, output_keys=("g1", "g2"), batch_
     }
 
 def fork_eval_model(state, test_images, test_psf_images, test_labels, output_keys=("g1", "g2"), batch_size=32) -> Dict[str, Any]:
+    """Evaluate a two-branch ``fork-like`` model over a test set in batches.
+
+    Returns:
+        dict: ``loss``, ``bias``, per-label MSE/bias, stacked predictions and timing.
+    """
     start_time = time.time()
     total_loss = 0
     total_samples = 0
@@ -258,6 +280,24 @@ def fork_eval_model(state, test_images, test_psf_images, test_labels, output_key
     }
 
 def calculate_response_matrix(state, observations, batch_size=32, h=0.01, model_type='standard', psf_images=None):
+    """Estimate the metacalibration response matrix R for a ShearNet model.
+
+    Uses the pre-rendered +/- e1/e2 sheared images stored in each observation's
+    ``meta`` (see :func:`shearnet.core.dataset.sim_func`) to finite-difference the
+    network's response to an applied shear.
+
+    Args:
+        state: Trained ``TrainState`` to evaluate.
+        observations: List of ngmix observations carrying the sheared-image meta.
+        batch_size: Inference batch size.
+        h: Applied shear step used to render the sheared images.
+        model_type: ``'standard'`` (single branch) or ``'fork'`` (two branches).
+        psf_images: PSF stamps, required when ``model_type='fork'``.
+
+    Returns:
+        tuple: ``(R, R_per_galaxy)`` — the mean 2x2 response matrix and the
+        per-galaxy responses.
+    """
     import jax.numpy as jnp
     print(f"\n{BOLD}Calculating Response Matrix...{END}")
     n_gal = len(observations)
@@ -313,6 +353,16 @@ def calculate_multiplicative_bias(state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs
                                   psf_g1_pos=None, psf_g1_neg=None,
                                   psf_g2_pos=None, psf_g2_neg=None,
                                   R=None):
+    """Estimate multiplicative (m) and additive (c) shear bias for a ShearNet model.
+
+    Predicts shears on galaxy sets sheared by +/- ``true_shear_step`` in each
+    component, calibrates them with the metacalibration response matrix, and fits
+    ``gamma_est = (1 + m) * gamma_true + c`` per component.
+
+    Returns:
+        dict: ``m1``, ``c1``, ``m2``, ``c2``, the per-dataset gamma estimates and
+        the response matrix ``R`` used.
+    """
     import jax.numpy as jnp
     print(f"\n{BOLD}{'='*70}")
     print("CALCULATING MULTIPLICATIVE AND ADDITIVE BIAS")
@@ -382,6 +432,12 @@ def calculate_multiplicative_bias(state, obs_g1_pos, obs_g1_neg, obs_g2_pos, obs
 def calculate_multiplicative_bias_ngmix(obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_g2_neg,
                                        true_shear_step=0.02, h=0.01,
                                        seed=1234, psf_model='gauss', gal_model='gauss'):
+    """NGmix counterpart of :func:`calculate_multiplicative_bias`.
+
+    Computes multiplicative (m) and additive (c) shear bias for the NGmix
+    metacalibration estimator on the same +/- sheared galaxy datasets, for an
+    apples-to-apples comparison against ShearNet.
+    """
     from ..methods.ngmix import _get_priors, mp_fit_one, ngmix_pred, response_calculation
     print(f"\n{BOLD}{'='*70}")
     print("CALCULATING MULTIPLICATIVE AND ADDITIVE BIAS (NGMIX)")
@@ -452,6 +508,21 @@ def calculate_multiplicative_bias_ngmix(obs_g1_pos, obs_g1_neg, obs_g2_pos, obs_
     }
 
 def get_admoms_ngmix_fit(obs: "ngmix.Observation", reduced: bool = True) -> dict:
+    """Measure adaptive-moment ellipticity and size for an observation.
+
+    Fits adaptive moments with ngmix (for e1/e2) and GalSim HSM (for size), on a
+    flux-normalized copy of the image. Used to characterize PSF shape in
+    :func:`shearnet.core.dataset.sim_func`.
+
+    Args:
+        obs: The ngmix observation to fit.
+        reduced: If ``True``, convert the distortion (e1, e2) to reduced shear
+            (g1, g2) before returning.
+
+    Returns:
+        dict: ``{"e1", "e2", "T", "flags"}`` where ``flags`` is non-zero if either
+        fit failed or the image had no positive flux.
+    """
     jac = obs._jacobian
     scale = jac.get_scale()
     image = obs.image

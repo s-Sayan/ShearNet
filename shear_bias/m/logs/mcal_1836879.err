@@ -1,2 +1,0 @@
-/home/adfield/.conda/envs/shearnet_gpu/lib/python3.11/multiprocessing/popen_fork.py:66: RuntimeWarning: os.fork() was called. os.fork() is incompatible with multithreaded code, and JAX is multithreaded, so this will likely lead to a deadlock.
-  self.pid = os.fork()
