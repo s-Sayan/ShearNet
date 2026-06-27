@@ -60,6 +60,8 @@ Thumbs.db
 model_checkpoint/
 plots/
 datasets/
+# generated API docs (copied into the separate ShearNet.wiki repo)
+wiki/
 *.fits
 *.npy
 *.npz
