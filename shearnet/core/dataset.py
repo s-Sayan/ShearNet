@@ -5,6 +5,7 @@ import galsim
 import ngmix
 from tqdm import tqdm
 import galsim.des
+import sys
 from astropy.table import Table
 from astropy.io import fits
 from ..utils.metrics import get_admoms_ngmix_fit
@@ -87,7 +88,7 @@ def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='i
     if not _requested.issubset(_valid):
         raise ValueError(f"Invalid output_keys: {_requested - _valid}. Must be subset of {_valid}.")
         
-    for i in tqdm(range(samples)):
+    for i in tqdm(range(samples), disable=not sys.stderr.isatty(), mininterval=10):
         g1, g2 = g1_list[i], g2_list[i]
         if hlr_type == 'catalog':
             hlr = hlr_list[i]
