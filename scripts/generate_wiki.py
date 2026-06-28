@@ -72,6 +72,15 @@ def load_modules():
     loader = PythonLoader(search_path=[REPO_ROOT], packages=[PACKAGE])
     loader.init(context)
     modules = list(loader.load())
+    
+    # Skip junk picked up from the source tree, e.g. Jupyter's
+    # ``.ipynb_checkpoints/<name>-checkpoint.py`` files. Any real module has a
+    # dotted name whose every component is a valid Python identifier; the
+    # checkpoint dirs/files are not (".ipynb_checkpoints", "dataset-checkpoint").
+    modules = [
+        m for m in modules
+        if all(part.isidentifier() for part in m.name.split("."))
+    ]
 
     processors = (
         FilterProcessor(

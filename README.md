@@ -122,6 +122,33 @@ configs (e.g. `configs/shearnet/forklike/...`, `configs/shearnet/old_cnn/...`).
 
 ---
 
+## Documentation
+
+The full API reference (generated from the in-code docstrings) is published in the project wiki:
+
+**[ShearNet Wiki - API Reference](https://github.com/s-Sayan/ShearNet/wiki)**
+
+It documents every public module, model, and function in the `shearnet` package, grouped into Core, CLI, Configuration, Methods, and Utilities.
+
+### Rebuilding the wiki
+
+The wiki pages are produced with [pydoc-markdown](https://niklasrosenstein.github.io/pydoc-markdown/) via `scripts/generate_wiki.py`. After editing docstrings, regenerate and publish:
+
+```bash
+pip install -e ".[dev]"                          # installs pydoc-markdown
+
+# Write the pages straight into your wiki clone (a separate ShearNet.wiki repo)
+python scripts/generate_wiki.py ~/ShearNet.wiki
+
+cd ~/ShearNet.wiki
+
+git add -A
+git commit -m "Regenerate API reference"
+git push                                          # wiki default branch is 'master'
+```
+
+Run without an argument (`python scripts/generate_wiki.py`) to write the pages to a local `wiki/` folder instead.
+
 ## Data & paths
 
 - **`SHEARNET_DATA_PATH`** — where trained models (`model_checkpoint/`) and
