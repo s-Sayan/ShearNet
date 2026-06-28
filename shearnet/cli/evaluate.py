@@ -5,47 +5,57 @@ Loads a saved checkpoint, regenerates a matching test set, runs the network
 MSE/bias/timing summary.
 """
 
-import os
 import argparse
-import jax.random as random
-import jax.numpy as jnp
-import numpy as np
+import os
 import time
+
+import jax.numpy as jnp
+import jax.random as random
+import numpy as np
 import optax
 from flax.training import checkpoints, train_state
 
 from ..config.config_handler import Config
 from ..core.dataset import generate_dataset, split_combined_images
 from ..core.models import (
-    SimpleGalaxyNN, EnhancedGalaxyNN, GalaxyResNet,
-    ResearchBackedGalaxyResNet, ForkLensPSFNet, ForkLike
+    EnhancedGalaxyNN,
+    ForkLensPSFNet,
+    ForkLike,
+    GalaxyResNet,
+    ResearchBackedGalaxyResNet,
+    SimpleGalaxyNN,
 )
-from ..utils.normalization import load_normalizer, inverse_transform_labels
+from ..utils.normalization import inverse_transform_labels, load_normalizer
 
-BOLD  = '\033[1m'
-CYAN  = '\033[96m'
-GREEN = '\033[92m'
-YELLOW = '\033[93m'
-END   = '\033[0m'
+BOLD = "\033[1m"
+CYAN = "\033[96m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+END = "\033[0m"
+
 
 def create_parser():
     """Build the ``shearnet-eval`` argument parser."""
-    parser = argparse.ArgumentParser(
-        description="Evaluate a trained ShearNet model."
+    parser = argparse.ArgumentParser(description="Evaluate a trained ShearNet model.")
+    parser.add_argument("--model_name", type=str, required=True, help="Name of the model to load.")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to config file (optional, defaults to saved training config).",
     )
-    parser.add_argument('--model_name', type=str, required=True,
-                        help='Name of the model to load.')
-    parser.add_argument('--config', type=str, default=None,
-                        help='Path to config file (optional, defaults to saved training config).')
-    parser.add_argument('--seed', type=int, default=None,
-                        help='Random seed (overrides config).')
-    parser.add_argument('--test_samples', type=int, default=None,
-                        help='Number of test samples (overrides config).')
-    parser.add_argument('--mcal', action='store_true',
-                        help='Also evaluate with NGmix metacalibration.')
-    parser.add_argument('--plot', action='store_true',
-                        help='Save learning curve and residual plots.')
+    parser.add_argument("--seed", type=int, default=None, help="Random seed (overrides config).")
+    parser.add_argument(
+        "--test_samples", type=int, default=None, help="Number of test samples (overrides config)."
+    )
+    parser.add_argument(
+        "--mcal", action="store_true", help="Also evaluate with NGmix metacalibration."
+    )
+    parser.add_argument(
+        "--plot", action="store_true", help="Save learning curve and residual plots."
+    )
     return parser
+
 
 def load_config(args):
     """Resolve evaluation settings from CLI args and the saved training config.
@@ -56,13 +66,13 @@ def load_config(args):
     Returns:
         dict: A flat settings dictionary consumed by the rest of the pipeline.
     """
-    data_path = os.getenv('SHEARNET_DATA_PATH', os.path.abspath('.'))
-    default_save_path = os.path.join(data_path, 'model_checkpoint')
-    default_plot_path = os.path.join(data_path, 'plots')
+    data_path = os.getenv("SHEARNET_DATA_PATH", os.path.abspath("."))
+    default_save_path = os.path.join(data_path, "model_checkpoint")
+    default_plot_path = os.path.join(data_path, "plots")
     os.makedirs(default_save_path, exist_ok=True)
     os.makedirs(default_plot_path, exist_ok=True)
 
-    model_config_path = os.path.join(default_plot_path, args.model_name, 'training_config.yaml')
+    model_config_path = os.path.join(default_plot_path, args.model_name, "training_config.yaml")
     if args.config:
         config = Config(args.config)
     elif os.path.exists(model_config_path):
@@ -72,62 +82,71 @@ def load_config(args):
         print(f"\nNo saved config found at {model_config_path}, using defaults.")
         config = Config()
 
-    seed         = args.seed         if args.seed         is not None else config.get('evaluation.seed',         config.get('dataset.seed', 58))
-    test_samples = args.test_samples if args.test_samples is not None else config.get('evaluation.test_samples', 1000)
+    seed = (
+        args.seed
+        if args.seed is not None
+        else config.get("evaluation.seed", config.get("dataset.seed", 58))
+    )
+    test_samples = (
+        args.test_samples
+        if args.test_samples is not None
+        else config.get("evaluation.test_samples", 1000)
+    )
 
     return {
-        'model_name':    args.model_name,
-        'seed':          seed,
-        'test_samples':  test_samples,
-        'psf_sigma':     config.get('dataset.psf_sigma') or config.get('dataset.psf_fwhm', 0.25),
-        'nse_sd':        config.get('dataset.nse_sd',        1e-5),
-        'exp':           config.get('dataset.exp',           'ideal'),
-        'stamp_size':    config.get('dataset.stamp_size',    53),
-        'pixel_size':    config.get('dataset.pixel_size',    0.141),
-        'apply_psf_shear':  config.get('dataset.apply_psf_shear',  False),
-        'psf_shear_range':  config.get('dataset.psf_shear_range',  0.05),
-        'process_psf':   config.get('model.process_psf',    False),
-        'nn':            config.get('model.type',            'cnn'),
-        'galaxy_type':   config.get('model.galaxy.type',    'research_backed'),
-        'psf_type':      config.get('model.psf.type',       'forklens_psf'),
-        'fusion':        config.get('model.fusion',          'concat'),
-        'output_keys':   tuple(config.get('model.output_keys', ('g1', 'g2'))),
-        'mcal':          args.mcal,
-        'plot':          args.plot  or config.get('plotting.plot',   False),
-        'psf_model':     config.get('comparison.psf_model', 'gauss'),
-        'gal_model':     config.get('comparison.gal_model', config.get('dataset.type', 'gauss')),
-        'save_path':     default_save_path,
-        'plot_path':     default_plot_path,
-        'gap':           config.get('model.gap', False),
-        'cosmos_cat_fname': config.get('catalog.cosmos_cat_fname'),
-        'psfex_model_file': config.get('dataset.psfex_model_file'),
-        'hlr_type':         config.get('dataset.hlr_type', 'constant'),
-        'flux_type':        config.get('dataset.flux_type', 'constant')
+        "model_name": args.model_name,
+        "seed": seed,
+        "test_samples": test_samples,
+        "psf_sigma": config.get("dataset.psf_sigma") or config.get("dataset.psf_fwhm", 0.25),
+        "nse_sd": config.get("dataset.nse_sd", 1e-5),
+        "exp": config.get("dataset.exp", "ideal"),
+        "stamp_size": config.get("dataset.stamp_size", 53),
+        "pixel_size": config.get("dataset.pixel_size", 0.141),
+        "apply_psf_shear": config.get("dataset.apply_psf_shear", False),
+        "psf_shear_range": config.get("dataset.psf_shear_range", 0.05),
+        "process_psf": config.get("model.process_psf", False),
+        "nn": config.get("model.type", "cnn"),
+        "galaxy_type": config.get("model.galaxy.type", "research_backed"),
+        "psf_type": config.get("model.psf.type", "forklens_psf"),
+        "fusion": config.get("model.fusion", "concat"),
+        "output_keys": tuple(config.get("model.output_keys", ("g1", "g2"))),
+        "mcal": args.mcal,
+        "plot": args.plot or config.get("plotting.plot", False),
+        "psf_model": config.get("comparison.psf_model", "gauss"),
+        "gal_model": config.get("comparison.gal_model", config.get("dataset.type", "gauss")),
+        "save_path": default_save_path,
+        "plot_path": default_plot_path,
+        "gap": config.get("model.gap", False),
+        "cosmos_cat_fname": config.get("catalog.cosmos_cat_fname"),
+        "psfex_model_file": config.get("dataset.psfex_model_file"),
+        "hlr_type": config.get("dataset.hlr_type", "constant"),
+        "flux_type": config.get("dataset.flux_type", "constant"),
     }
+
 
 def generate_test_data(config):
     """Simulate the test set, returning ``(gal_images, psf_images, labels, obs)``."""
     print(f"\n{BOLD}Generating {config['test_samples']} test galaxies...{END}")
     images, labels, obs = generate_dataset(
-        config['test_samples'],
-        config['psf_sigma'],
-        exp=config['exp'],
-        seed=config['seed'],
-        nse_sd=config['nse_sd'],
-        npix=config['stamp_size'],
-        scale=config['pixel_size'],
-        return_psf=config['process_psf'],
+        config["test_samples"],
+        config["psf_sigma"],
+        exp=config["exp"],
+        seed=config["seed"],
+        nse_sd=config["nse_sd"],
+        npix=config["stamp_size"],
+        scale=config["pixel_size"],
+        return_psf=config["process_psf"],
         return_obs=True,
-        apply_psf_shear=config['apply_psf_shear'],
-        psf_shear_range=config['psf_shear_range'],
-        psf_file_or_dir=config['psfex_model_file'],
-        output_keys=config['output_keys'],
-        hlr_type=config['hlr_type'],
-        flux_type=config['flux_type'],
-        cosmos_cat_fname=config['cosmos_cat_fname'],
+        apply_psf_shear=config["apply_psf_shear"],
+        psf_shear_range=config["psf_shear_range"],
+        psf_file_or_dir=config["psfex_model_file"],
+        output_keys=config["output_keys"],
+        hlr_type=config["hlr_type"],
+        flux_type=config["flux_type"],
+        cosmos_cat_fname=config["cosmos_cat_fname"],
     )
 
-    if config['process_psf']:
+    if config["process_psf"]:
         gal_images, psf_images = split_combined_images(images, has_psf=True, has_clean=False)
     else:
         gal_images = images
@@ -137,6 +156,7 @@ def generate_test_data(config):
     print(f"  Labels:        {labels.shape}")
     return gal_images, psf_images, labels, obs
 
+
 def load_model(config, gal_images, psf_images):
     """Instantiate the configured architecture and restore its best checkpoint.
 
@@ -144,44 +164,54 @@ def load_model(config, gal_images, psf_images):
         flax.training.train_state.TrainState: State with the restored parameters.
     """
     print(f"\n{BOLD}Loading model '{config['model_name']}'...{END}")
-    rng_key = random.PRNGKey(config['seed'])
-    nn = config['nn']
+    rng_key = random.PRNGKey(config["seed"])
+    nn = config["nn"]
 
-    if nn == 'mlp':
+    if nn == "mlp":
         model = SimpleGalaxyNN()
-    elif nn == 'cnn':
+    elif nn == "cnn":
         model = EnhancedGalaxyNN()
-    elif nn == 'resnet':
+    elif nn == "resnet":
         model = GalaxyResNet()
-    elif nn == 'research_backed':
+    elif nn == "research_backed":
         model = ResearchBackedGalaxyResNet()
-    elif nn == 'forklens_psfnet':
+    elif nn == "forklens_psfnet":
         model = ForkLensPSFNet()
-    elif nn == 'fork-like':
+    elif nn == "fork-like":
         model = ForkLike(
-            galaxy_model_type=config['galaxy_type'],
-            psf_model_type=config['psf_type'],
-            fusion=config.get('fusion', 'concat'),
+            galaxy_model_type=config["galaxy_type"],
+            psf_model_type=config["psf_type"],
+            fusion=config.get("fusion", "concat"),
         )
     else:
         raise ValueError(f"Unknown model type: {nn}")
 
-    output_keys = tuple(config['output_keys'])
-    if config['process_psf']:
-        init_params = model.init(rng_key, jnp.ones_like(gal_images[0]), jnp.ones_like(psf_images[0]), 
-                                 output_keys=output_keys, gap=config.get('gap', False))
+    output_keys = tuple(config["output_keys"])
+    if config["process_psf"]:
+        init_params = model.init(
+            rng_key,
+            jnp.ones_like(gal_images[0]),
+            jnp.ones_like(psf_images[0]),
+            output_keys=output_keys,
+            gap=config.get("gap", False),
+        )
     else:
-        init_params = model.init(rng_key, jnp.ones_like(gal_images[0]), 
-                                 output_keys=output_keys, gap=config.get('gap', False))
+        init_params = model.init(
+            rng_key,
+            jnp.ones_like(gal_images[0]),
+            output_keys=output_keys,
+            gap=config.get("gap", False),
+        )
 
     state = train_state.TrainState.create(
         apply_fn=model.apply, params=init_params, tx=optax.adam(1e-3)
     )
 
-    load_path = config['save_path']
+    load_path = config["save_path"]
     matching = [
-        d for d in os.listdir(load_path)
-        if os.path.isdir(os.path.join(load_path, d)) and d.startswith(config['model_name'])
+        d
+        for d in os.listdir(load_path)
+        if os.path.isdir(os.path.join(load_path, d)) and d.startswith(config["model_name"])
     ]
     if not matching:
         raise FileNotFoundError(
@@ -192,6 +222,7 @@ def load_model(config, gal_images, psf_images):
     state = checkpoints.restore_checkpoint(ckpt_dir=model_dir, target=state)
     print(f"  {GREEN}✓ Loaded{END}")
     return state
+
 
 def run_shearnet(state, gal_images, psf_images, labels, config, batch_size=128):
     """Batch-predict with the network and report MSE/bias/time.
@@ -206,7 +237,7 @@ def run_shearnet(state, gal_images, psf_images, labels, config, batch_size=128):
     start = time.time()
 
     normalizer_path = os.path.join(
-        config['plot_path'], config['model_name'], 'label_normalizer.npz'
+        config["plot_path"], config["model_name"], "label_normalizer.npz"
     )
     norm_params = load_normalizer(normalizer_path) if os.path.exists(normalizer_path) else None
 
@@ -214,7 +245,7 @@ def run_shearnet(state, gal_images, psf_images, labels, config, batch_size=128):
     n = len(gal_images)
     for i in range(0, n, batch_size):
         sl = slice(i, min(i + batch_size, n))
-        if config['process_psf']:
+        if config["process_psf"]:
             batch_preds = state.apply_fn(
                 state.params,
                 gal_images[sl],
@@ -237,7 +268,7 @@ def run_shearnet(state, gal_images, psf_images, labels, config, batch_size=128):
     elapsed = time.time() - start
 
     n_out = min(preds.shape[1], labels.shape[1], 2)
-    mse  = float(np.mean((preds[:, :n_out] - labels[:, :n_out])**2))
+    mse = float(np.mean((preds[:, :n_out] - labels[:, :n_out]) ** 2))
     bias = float(np.mean(preds[:, :n_out] - labels[:, :n_out]))
 
     print(f"  MSE  (g1,g2): {YELLOW}{mse:.6e}{END}")
@@ -246,6 +277,7 @@ def run_shearnet(state, gal_images, psf_images, labels, config, batch_size=128):
 
     return preds, mse, bias, elapsed
 
+
 def run_ngmix(obs, labels, config):
     """Run NGmix metacalibration on the same observations for comparison.
 
@@ -253,15 +285,18 @@ def run_ngmix(obs, labels, config):
         tuple: ``(preds, mse, bias, elapsed_seconds)`` over the non-NaN fits.
     """
     from ..methods.ngmix import _get_priors, mp_fit_one, ngmix_pred
+
     print(f"\n{BOLD}Running NGmix metacalibration...{END}")
     start = time.time()
 
-    prior = _get_priors(config['seed'])
-    rng   = np.random.RandomState(config['seed'])
+    prior = _get_priors(config["seed"])
+    rng = np.random.RandomState(config["seed"])
     datalist, _ = mp_fit_one(
-        obs, prior, rng,
-        psf_model=config['psf_model'],
-        gal_model=config['gal_model'],
+        obs,
+        prior,
+        rng,
+        psf_model=config["psf_model"],
+        gal_model=config["gal_model"],
     )
     preds = ngmix_pred(datalist)
 
@@ -272,18 +307,20 @@ def run_ngmix(obs, labels, config):
     if n_nan:
         print(f"  Filtered {n_nan} NaN predictions.")
 
-    mse  = float(np.mean((preds[valid, :2] - labels[valid, :2])**2))
+    mse = float(np.mean((preds[valid, :2] - labels[valid, :2]) ** 2))
     bias = float(np.mean(preds[valid, :2] - labels[valid, :2]))
 
     print(f"  MSE  (g1,g2): {YELLOW}{mse:.6e}{END}")
     print(f"  Bias (g1,g2): {YELLOW}{bias:+.6e}{END}")
     print(f"  Time:         {CYAN}{elapsed:.2f}s{END}")
-    print(f"  Speedup vs ShearNet: measured separately above")
+    print("  Speedup vs ShearNet: measured separately above")
 
     return preds, mse, bias, elapsed
 
-def print_summary(config, sn_mse, sn_bias, sn_time,
-                  ngmix_mse=None, ngmix_bias=None, ngmix_time=None):
+
+def print_summary(
+    config, sn_mse, sn_bias, sn_time, ngmix_mse=None, ngmix_bias=None, ngmix_time=None
+):
     """Print the final evaluation summary, including the NGmix speedup if run."""
     print(f"\n{BOLD}{'='*60}")
     print("EVALUATION SUMMARY")
@@ -304,24 +341,23 @@ def print_summary(config, sn_mse, sn_bias, sn_time,
         print(f"    Speedup: {ngmix_time / sn_time:.1f}x")
     print(f"\n{GREEN}✓ Done{END}\n")
 
+
 def main():
     """Entry point for the ``shearnet-eval`` command."""
     parser = create_parser()
-    args   = parser.parse_args()
+    args = parser.parse_args()
     config = load_config(args)
 
     gal_images, psf_images, labels, obs = generate_test_data(config)
     state = load_model(config, gal_images, psf_images)
-    sn_preds, sn_mse, sn_bias, sn_time = run_shearnet(
-        state, gal_images, psf_images, labels, config
-    )
+    sn_preds, sn_mse, sn_bias, sn_time = run_shearnet(state, gal_images, psf_images, labels, config)
 
     ngmix_mse = ngmix_bias = ngmix_time = None
-    if config['mcal']:
+    if config["mcal"]:
         ng_preds, ngmix_mse, ngmix_bias, ngmix_time = run_ngmix(obs, labels, config)
 
-    print_summary(config, sn_mse, sn_bias, sn_time,
-                  ngmix_mse, ngmix_bias, ngmix_time)
+    print_summary(config, sn_mse, sn_bias, sn_time, ngmix_mse, ngmix_bias, ngmix_time)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

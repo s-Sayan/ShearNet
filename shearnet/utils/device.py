@@ -1,4 +1,7 @@
+"""JAX device selection helpers for ShearNet."""
+
 import jax
+
 
 def get_device():
     """Return (and print) the default JAX device, i.e. the CPU or GPU in use."""

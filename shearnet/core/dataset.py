@@ -1,13 +1,16 @@
+"""Galaxy/PSF postage-stamp simulation and dataset generation for ShearNet."""
+
 import os
-from glob import glob
-import numpy as np
-import galsim
-import ngmix
-from tqdm import tqdm
-import galsim.des
 import sys
-from astropy.table import Table
+from glob import glob
+
+import galsim
+import galsim.des
+import ngmix
+import numpy as np
 from astropy.io import fits
+from tqdm import tqdm
+
 from ..utils.metrics import get_admoms_ngmix_fit
 from ..utils.simutils import create_wcs_from_params
 
@@ -17,13 +20,13 @@ SHEARNET_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
 WCS_PARAMS = {
     "image_xsize": 9600,
     "image_ysize": 6422,
-    "pixel_scale": 0.1408,     # arcsec/pixel
+    "pixel_scale": 0.1408,  # arcsec/pixel
     "center_ra": 13.3,
     "center_dec": 33.1,
-    "theta": 0.0            # optional
+    "theta": 0.0,  # optional
 }
 
-MARGIN = 200 # Margins that I wanna use for PSF Rendering
+MARGIN = 200  # Margins that I wanna use for PSF Rendering
 
 # Directory holding the empirical PSFEx PSF files used for the ``superbit``
 # experiment. Defaults to the SuperBIT PSFs bundled with the repository, but can
@@ -36,6 +39,7 @@ PSF_DATA_DIR = os.environ.get(
 
 _cosmos_cat_cache = None
 
+
 def _load_cosmos_cat(seed=42, cat_path=None):
     """Lazy-load the COSMOS catalog, with a random fallback for CI."""
     global _cosmos_cat_cache
@@ -47,8 +51,10 @@ def _load_cosmos_cat(seed=42, cat_path=None):
             _cosmos_cat_cache = hdul[1].data
         return _cosmos_cat_cache
 
-    print("WARNING: cosmos_catalog_train.fits not found. "
-          "Using synthetic random catalog for g1/g2/hlr/flux.")
+    print(
+        "WARNING: cosmos_catalog_train.fits not found. "
+        "Using synthetic random catalog for g1/g2/hlr/flux."
+    )
     rng = np.random.RandomState(seed)
     n = 5000
     g_1 = rng.normal(0.0, 0.26, n)
@@ -56,17 +62,40 @@ def _load_cosmos_cat(seed=42, cat_path=None):
 
     class _SyntheticCat:
         def __init__(self):
-            self.G1   = g_1
-            self.G2   = g_2
-            self.HLR  = np.full(n, 0.5)
+            self.G1 = g_1
+            self.G2 = g_2
+            self.HLR = np.full(n, 0.5)
             self.FLUX = np.full(n, 12258.97)
+
         def __getitem__(self, key):
             return getattr(self, key)
 
     _cosmos_cat_cache = _SyntheticCat()
     return _cosmos_cat_cache
 
-def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='ideal', nse_sd=1e-5, seed=42, return_clean=False, return_psf=False,return_obs=False,apply_psf_shear=False, psf_shear_range=0.05, base_shear_g1=0.0, base_shear_g2=0.0, psf_file_or_dir=PSF_DATA_DIR, output_keys=("g1", "g2"), hlr_type="constant", flux_type="constant", cosmos_cat_fname=None):
+
+def generate_dataset(
+    samples,
+    psf_fwhm,
+    npix=53,
+    scale=0.141,
+    type="exp",
+    exp="ideal",
+    nse_sd=1e-5,
+    seed=42,
+    return_clean=False,
+    return_psf=False,
+    return_obs=False,
+    apply_psf_shear=False,
+    psf_shear_range=0.05,
+    base_shear_g1=0.0,
+    base_shear_g2=0.0,
+    psf_file_or_dir=PSF_DATA_DIR,
+    output_keys=("g1", "g2"),
+    hlr_type="constant",
+    flux_type="constant",
+    cosmos_cat_fname=None,
+):
     """Simulate a dataset of galaxy postage stamps with known shear labels.
 
     Each sample is a GalSim galaxy (exponential or Gaussian) sheared by values
@@ -110,13 +139,13 @@ def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='i
     obs = []
 
     cosmos_cat = _load_cosmos_cat(seed=seed, cat_path=cosmos_cat_fname)
-    g1_list   = cosmos_cat['G1']
-    g2_list   = cosmos_cat['G2']
-    hlr_list  = cosmos_cat['HLR']
-    flux_list = cosmos_cat['FLUX']
+    g1_list = cosmos_cat["G1"]
+    g2_list = cosmos_cat["G2"]
+    hlr_list = cosmos_cat["HLR"]
+    flux_list = cosmos_cat["FLUX"]
 
     ud = galsim.UniformDeviate(seed)
-    if exp=="superbit":
+    if exp == "superbit":
         if os.path.isfile(psf_file_or_dir):
             psf_files = [psf_file_or_dir]
         elif os.path.isdir(psf_file_or_dir):
@@ -132,31 +161,46 @@ def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='i
     _requested = set(output_keys)
     if not _requested.issubset(_valid):
         raise ValueError(f"Invalid output_keys: {_requested - _valid}. Must be subset of {_valid}.")
-        
+
     for i in tqdm(range(samples), disable=not sys.stderr.isatty(), mininterval=10):
         g1, g2 = g1_list[i], g2_list[i]
-        if hlr_type == 'catalog':
+        if hlr_type == "catalog":
             hlr = hlr_list[i]
-        elif hlr_type == 'constant':
+        elif hlr_type == "constant":
             hlr = 0.5
         else:
             raise ValueError("hlr can only be 'constant' or 'catalog'")
-        
-        if flux_type == 'catalog':
+
+        if flux_type == "catalog":
             flux = flux_list[i]
-        elif flux_type == 'constant':
+        elif flux_type == "constant":
             flux = 12258.97
         else:
             raise ValueError("flux can only be 'constant' or 'catalog'")
-        
-        obj_obs = sim_func(g1, g2, hlr=hlr, flux=flux, psf_fwhm=psf_fwhm, 
-                            nse_sd=nse_sd, type=type, npix=npix, scale=scale, seed=i, 
-                            exp=exp, apply_psf_shear=apply_psf_shear, psf_shear_range=psf_shear_range, 
-                            ud=ud, psf_files=psf_files, base_shear_g1=base_shear_g1, base_shear_g2=base_shear_g2)
-        
+
+        obj_obs = sim_func(
+            g1,
+            g2,
+            hlr=hlr,
+            flux=flux,
+            psf_fwhm=psf_fwhm,
+            nse_sd=nse_sd,
+            type=type,
+            npix=npix,
+            scale=scale,
+            seed=i,
+            exp=exp,
+            apply_psf_shear=apply_psf_shear,
+            psf_shear_range=psf_shear_range,
+            ud=ud,
+            psf_files=psf_files,
+            base_shear_g1=base_shear_g1,
+            base_shear_g2=base_shear_g2,
+        )
+
         galaxy_images = obj_obs.image
         psf_images = obj_obs.psf.image
-        clean_images = obj_obs.meta['clean_image']
+        clean_images = obj_obs.meta["clean_image"]
 
         if return_psf and return_clean:
             # Create (height, width, 3) array: [galaxy, psf, clean]
@@ -173,31 +217,40 @@ def generate_dataset(samples, psf_fwhm, npix=53, scale=0.141, type='exp', exp='i
         else:
             # Just galaxy images
             images.append(galaxy_images)
-        
-        psf_e1 = obj_obs.psf.meta['e1']
-        psf_e2 = obj_obs.psf.meta['e2']
-        psf_T = obj_obs.psf.meta['T']
 
-        _available = {"g1": g1, "g2": g2, "hlr": hlr, "flux": flux, "psf_e1": psf_e1, "psf_e2": psf_e2, "psf_T": psf_T}
+        psf_e1 = obj_obs.psf.meta["e1"]
+        psf_e2 = obj_obs.psf.meta["e2"]
+        psf_T = obj_obs.psf.meta["T"]
+
+        _available = {
+            "g1": g1,
+            "g2": g2,
+            "hlr": hlr,
+            "flux": flux,
+            "psf_e1": psf_e1,
+            "psf_e2": psf_e2,
+            "psf_T": psf_T,
+        }
 
         labels.append(np.array([_available[k] for k in output_keys], dtype=np.float32))
-        
+
         obs.append(obj_obs)
-    
+
     if return_obs:
-        return np.array(images), np.array(labels), obs    
-    
+        return np.array(images), np.array(labels), obs
+
     return np.array(images), np.array(labels)
+
 
 def split_combined_images(combined_images, has_psf=False, has_clean=False):
     """
     Split concatenated images back into separate arrays.
-    
+
     Args:
         combined_images: np.ndarray of shape (samples, height, width, 2 or 3)
         has_psf: bool, whether PSF images are included
         has_clean: bool, whether clean images are included
-        
+
     Returns:
         Tuple of arrays depending on combination:
         - If has_psf=True, has_clean=True: (galaxy, psf, clean)
@@ -216,8 +269,10 @@ def split_combined_images(combined_images, has_psf=False, has_clean=False):
             clean_images = combined_images[..., 1]
             return galaxy_images, clean_images
         else:
-            raise ValueError("Invalid combination: 2 channels requires either PSF or clean images, not both")
-            
+            raise ValueError(
+                "Invalid combination: 2 channels requires either PSF or clean images, not both"
+            )
+
     elif combined_images.shape[-1] == 3:
         if has_psf and has_clean:
             # Galaxy + PSF + Clean
@@ -230,7 +285,26 @@ def split_combined_images(combined_images, has_psf=False, has_clean=False):
     else:
         raise ValueError(f"Unexpected number of channels: {combined_images.shape[-1]}")
 
-def sim_func(g1, g2, hlr=1.0, flux=1.0, psf_fwhm=0.5, nse_sd = 1e-5,  type='gauss', npix=53, scale=0.141, seed=42, exp="ideal", apply_psf_shear=False, psf_shear_range=0.05, ud=None, psf_files=None, base_shear_g1=0.0, base_shear_g2=0.0):
+
+def sim_func(
+    g1,
+    g2,
+    hlr=1.0,
+    flux=1.0,
+    psf_fwhm=0.5,
+    nse_sd=1e-5,
+    type="gauss",
+    npix=53,
+    scale=0.141,
+    seed=42,
+    exp="ideal",
+    apply_psf_shear=False,
+    psf_shear_range=0.05,
+    ud=None,
+    psf_files=None,
+    base_shear_g1=0.0,
+    base_shear_g2=0.0,
+):
     """Simulate a single galaxy observation and return an ngmix ``Observation``.
 
     Builds a sheared, randomly-shifted galaxy, convolves it with the chosen PSF,
@@ -264,9 +338,9 @@ def sim_func(g1, g2, hlr=1.0, flux=1.0, psf_fwhm=0.5, nse_sd = 1e-5,  type='gaus
     gsp = galsim.GSParams(maximum_fft_size=32768)
 
     # Create a galaxy object
-    if type == 'exp':
+    if type == "exp":
         gal = galsim.Exponential(half_light_radius=hlr, flux=flux).shear(g1=g1, g2=g2)
-    elif type == 'gauss':
+    elif type == "gauss":
         gal = galsim.Gaussian(half_light_radius=hlr, flux=flux).shear(g1=g1, g2=g2)
     else:
         raise ValueError("type must be 'exp' or 'gauss'")
@@ -282,27 +356,27 @@ def sim_func(g1, g2, hlr=1.0, flux=1.0, psf_fwhm=0.5, nse_sd = 1e-5,  type='gaus
     sheared_gal = gal.shift(dx, dy)
 
     sheared_gal = sheared_gal.shear(g1=base_shear_g1, g2=base_shear_g2)
-    
+
     sheared_gal_e1_positive = sheared_gal.shear(g1=0.01, g2=0.0)
     sheared_gal_e1_negative = sheared_gal.shear(g1=-0.01, g2=0.0)
     sheared_gal_e2_positive = sheared_gal.shear(g1=0.0, g2=0.01)
     sheared_gal_e2_negative = sheared_gal.shear(g1=0.0, g2=-0.01)
 
     # Convolve with PSF
-    if exp == 'ideal':
+    if exp == "ideal":
         psf = galsim.Gaussian(fwhm=psf_fwhm)
 
         if apply_psf_shear:
             psf = psf.shear(g1=psf_g1, g2=psf_g2)
 
         obj = galsim.Convolve([sheared_gal, psf], gsparams=gsp)
-        
+
         obj_e1_positive = galsim.Convolve([sheared_gal_e1_positive, psf], gsparams=gsp)
         obj_e1_negative = galsim.Convolve([sheared_gal_e1_negative, psf], gsparams=gsp)
         obj_e2_positive = galsim.Convolve([sheared_gal_e2_positive, psf], gsparams=gsp)
         obj_e2_negative = galsim.Convolve([sheared_gal_e2_negative, psf], gsparams=gsp)
 
-    elif exp == 'superbit':
+    elif exp == "superbit":
         psf = import_psf(psf_files, ud)
         obj = galsim.Convolve([psf, sheared_gal], gsparams=gsp)
 
@@ -340,13 +414,15 @@ def sim_func(g1, g2, hlr=1.0, flux=1.0, psf_fwhm=0.5, nse_sd = 1e-5,  type='gaus
         jacobian=psf_jac,
     )
     admom_psf_measurement = get_admoms_ngmix_fit(obs=psf_obs, reduced=True)
-    psf_obs.update_meta_data({
-        'e1': admom_psf_measurement['e1'],
-        'e2': admom_psf_measurement['e2'],
-        'T': admom_psf_measurement['T'],
-        'admom_flags': admom_psf_measurement['flags']
-    })
-    
+    psf_obs.update_meta_data(
+        {
+            "e1": admom_psf_measurement["e1"],
+            "e2": admom_psf_measurement["e2"],
+            "T": admom_psf_measurement["T"],
+            "admom_flags": admom_psf_measurement["flags"],
+        }
+    )
+
     obj_obs = ngmix.Observation(
         image=obj_im + nse,
         noise=nse_im,
@@ -354,37 +430,40 @@ def sim_func(g1, g2, hlr=1.0, flux=1.0, psf_fwhm=0.5, nse_sd = 1e-5,  type='gaus
         jacobian=jac,
         bmask=np.zeros_like(nse_im, dtype=np.int32),
         ormask=np.zeros_like(nse_im, dtype=np.int32),
-        psf=psf_obs
+        psf=psf_obs,
     )
 
     # Calculate SNR using ngmix built-in method
     snr = obj_obs.get_s2n()
-
 
     # Store the clean image as an attribute
     try:
         sheared_im = sheared_gal.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
     except galsim.errors.GalSimFFTSizeError:
         # Only use slow real_space rendering if FFT fails
-        sheared_im = sheared_gal.drawImage(nx=npix, ny=npix, scale=scale, method='real_space').array
+        sheared_im = sheared_gal.drawImage(nx=npix, ny=npix, scale=scale, method="real_space").array
 
-    obj_obs.update_meta_data({
-        'snr': snr,
-        'clean_image': sheared_im,
-        'e1_positive': e1_positive_im,
-        'e1_negative': e1_negative_im,
-        'e2_positive': e2_positive_im,
-        'e2_negative': e2_negative_im
-    })
+    obj_obs.update_meta_data(
+        {
+            "snr": snr,
+            "clean_image": sheared_im,
+            "e1_positive": e1_positive_im,
+            "e1_negative": e1_negative_im,
+            "e2_positive": e2_positive_im,
+            "e2_negative": e2_negative_im,
+        }
+    )
 
     return obj_obs
+
 
 def search_psf_files(path):
     """Return a list of all ``*.psf`` files directly under ``path``."""
     all_psf_files = []
-    search_path = os.path.join(path, '*.psf')
+    search_path = os.path.join(path, "*.psf")
     all_psf_files.extend(glob(search_path))
     return all_psf_files
+
 
 def get_background_file(psf_file):
     """Map a PSFEx ``.psf`` file path to its matching sky-background FITS file.
@@ -406,7 +485,10 @@ def get_background_file(psf_file):
 
     return os.path.join(new_dir, new_fname)
 
-def import_psf(psf_files, ud, xsize=WCS_PARAMS['image_xsize'], ysize=WCS_PARAMS['image_ysize'], margin=MARGIN):
+
+def import_psf(
+    psf_files, ud, xsize=WCS_PARAMS["image_xsize"], ysize=WCS_PARAMS["image_ysize"], margin=MARGIN
+):
     """Sample an empirical PSFEx PSF at a random image position.
 
     Picks a random exposure from ``psf_files`` and a random position within the
@@ -424,12 +506,12 @@ def import_psf(psf_files, ud, xsize=WCS_PARAMS['image_xsize'], ysize=WCS_PARAMS[
     """
     maxexp = len(psf_files)
     # random position
-    x = margin + (xsize - 2*margin) * ud()
-    y = margin + (ysize - 2*margin) * ud()
+    x = margin + (xsize - 2 * margin) * ud()
+    y = margin + (ysize - 2 * margin) * ud()
 
     # random integer between 1 and maxexp
-    exp = int(maxexp * ud()) 
-    image_pos = galsim.PositionD(x=x, y=y)  
+    exp = int(maxexp * ud())
+    image_pos = galsim.PositionD(x=x, y=y)
     psf_file = psf_files[exp]
 
     wcs = create_wcs_from_params(WCS_PARAMS)

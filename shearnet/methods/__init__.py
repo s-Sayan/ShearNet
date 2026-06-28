@@ -7,7 +7,7 @@ This module contains implementations of various shear estimation methods:
 """
 
 from .mcal import mcal_preds
-from .ngmix import mp_fit_one, ngmix_pred, _get_priors
+from .ngmix import _get_priors, mp_fit_one, ngmix_pred
 
 __all__ = [
     # Metacalibration

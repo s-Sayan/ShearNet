@@ -1,9 +1,11 @@
+"""GalSim WCS construction helpers for ShearNet simulations."""
+
 import galsim
 import numpy as np
 
+
 def create_wcs_from_params(params):
-    """
-    Create a GalSim TanWCS from a dictionary of image and pointing parameters.
+    """Create a GalSim TanWCS from a dictionary of image and pointing parameters.
 
     Parameters
     ----------
@@ -38,10 +40,7 @@ def create_wcs_from_params(params):
     dvdx = np.sin(theta) * pixel_scale
     dvdy = np.cos(theta) * pixel_scale
 
-    affine = galsim.AffineTransform(
-        dudx, dudy, dvdx, dvdy,
-        origin=fiducial_full_image.true_center
-    )
+    affine = galsim.AffineTransform(dudx, dudy, dvdx, dvdy, origin=fiducial_full_image.true_center)
 
     # Create sky center and WCS
     sky_center = galsim.CelestialCoord(ra=center_ra, dec=center_dec)

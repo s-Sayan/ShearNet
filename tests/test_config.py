@@ -4,13 +4,14 @@ These import the ``shearnet`` package, which pulls in GalSim via the package
 ``__init__``; the ``importorskip`` keeps collection clean where that heavy
 dependency is not installed.
 """
+
 import os
 
 import pytest
 
 pytest.importorskip("galsim")
 
-from shearnet.config.config_handler import Config
+from shearnet.config.config_handler import Config  # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

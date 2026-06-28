@@ -1,5 +1,8 @@
+"""Flax neural-network architectures for galaxy shear estimation."""
+
 import flax.linen as nn
 import jax.numpy as jnp
+
 
 class ResidualBlock(nn.Module):
     """A two-convolution residual block with a skip connection.
@@ -12,11 +15,13 @@ class ResidualBlock(nn.Module):
         filters: Number of output channels for the block.
         kernel_size: Convolution kernel size (default ``(3, 3)``).
     """
+
     filters: int
     kernel_size: tuple = (3, 3)
 
     @nn.compact
     def __call__(self, x):
+        """Apply the residual block to ``x`` and return the activated output."""
         residual = x  # Save the input for the skip connection
 
         # Ensure residual has the same number of channels as the output
@@ -32,8 +37,9 @@ class ResidualBlock(nn.Module):
 
         # Add the residual (skip connection)
         x = x + residual
-        x = nn.leaky_relu(x, negative_slope=0.01) # Activation after residual addition
+        x = nn.leaky_relu(x, negative_slope=0.01)  # Activation after residual addition
         return x
+
 
 class SimpleGalaxyNN(nn.Module):
     """A plain multi-layer perceptron (``nn='mlp'``) for shear estimation.
@@ -57,22 +63,34 @@ class SimpleGalaxyNN(nn.Module):
         Array of shape ``(batch, len(output_keys))`` with the predicted
         parameters, or the feature vector when ``fork=True``.
     """
+
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2")):
+    def __call__(
+        self,
+        x,
+        deterministic: bool = False,
+        fork: bool = False,
+        gap: bool = False,
+        output_keys: tuple = ("g1", "g2"),
+    ):
+        """Run the MLP and return the predictions (or features when ``fork``)."""
         if x.ndim == 2:  # If batch dimension is missing
             x = jnp.expand_dims(x, axis=0)
-        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
+        assert (
+            x.ndim == 3
+        ), f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
         x = jnp.reshape(x, (x.shape[0], -1))  # Flatten
-        if fork :
+        if fork:
             return x
-        else :
+        else:
             x = nn.Dense(128)(x)
             x = nn.relu(x)
             x = nn.Dense(64)(x)
             x = nn.relu(x)
             x = nn.Dense(len(output_keys))(x)  # Output e1, e2
             return x
-    
+
+
 class EnhancedGalaxyNN(nn.Module):
     """A compact convolutional network (``nn='cnn'``) for shear estimation.
 
@@ -83,42 +101,55 @@ class EnhancedGalaxyNN(nn.Module):
     ``return_spatial=True`` returns the intermediate spatial feature map (used by
     the transformer-fusion path of :class:`ForkLike`).
     """
+
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2"), return_spatial: bool = False):
-        # Input handling 
+    def __call__(
+        self,
+        x,
+        deterministic: bool = False,
+        fork: bool = False,
+        gap: bool = False,
+        output_keys: tuple = ("g1", "g2"),
+        return_spatial: bool = False,
+    ):
+        """Run the CNN and return predictions, features, or the spatial map."""
+        # Input handling
         if x.ndim == 2:
             x = jnp.expand_dims(x, axis=0)
-        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
-        
+        assert (
+            x.ndim == 3
+        ), f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
+
         x = jnp.expand_dims(x, axis=-1)
-        
+
         # Simple conv stack with pooling
-        x = nn.Conv(16, (3, 3), padding='SAME')(x)
+        x = nn.Conv(16, (3, 3), padding="SAME")(x)
         x = nn.relu(x)
         x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))  # 27x27x16
-        
-        x = nn.Conv(32, (3, 3), padding='SAME')(x)
+
+        x = nn.Conv(32, (3, 3), padding="SAME")(x)
         x = nn.relu(x)
         x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))  # 14x14x32
-        
+
         if return_spatial:
             return x
 
         # Flatten: 14*14*32 = 6,272 features
         x = x.reshape((x.shape[0], -1))
-        
-        if fork : 
+
+        if fork:
             return x
-        else :
+        else:
             # Dense layers similar to working FNN
             x = nn.Dense(128)(x)
             x = nn.relu(x)
-            #x = nn.Dropout(0.5)(x, deterministic=deterministic)  # Dropout applied only if deterministic=False
+            # x = nn.Dropout(0.5)(x, deterministic=deterministic)  # Dropout applied only if
+            # deterministic=False
             x = nn.Dense(len(output_keys))(x)
-            #x = 0.5*nn.tanh(x)
+            # x = 0.5*nn.tanh(x)
             return x
-    
-    
+
+
 class GalaxyResNet(nn.Module):
     """A residual CNN (``nn='resnet'``) built from :class:`ResidualBlock`s.
 
@@ -127,37 +158,38 @@ class GalaxyResNet(nn.Module):
     :class:`EnhancedGalaxyNN`; shares the common model signature
     (see :class:`SimpleGalaxyNN`).
     """
+
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2")):
+    def __call__(
+        self,
+        x,
+        deterministic: bool = False,
+        fork: bool = False,
+        gap: bool = False,
+        output_keys: tuple = ("g1", "g2"),
+    ):
+        """Run the residual CNN and return predictions (or features)."""
         if x.ndim == 2:  # If batch dimension is missing
             x = jnp.expand_dims(x, axis=0)
-        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
+        assert (
+            x.ndim == 3
+        ), f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
         x = jnp.expand_dims(x, axis=-1)
         x = nn.Conv(32, (3, 3))(x)  # First convolution (32 filters)
         x = nn.leaky_relu(x, negative_slope=0.01)
-        #print(f"Shape before resnet: {x.shape}")
+        # print(f"Shape before resnet: {x.shape}")
         # Use ResidualBlocks for feature extraction
         x = ResidualBlock(64)(x)  # First residual block with 64 filters
         x = ResidualBlock(128)(x)  # Second residual block with 128 filters
 
-        '''print(f"Before pooling: {x.shape}")
-        
-        # Ensure even dimensions with padding
-        x = jnp.pad(x, pad_width=((0, 0), (0, 1), (0, 0)), mode='constant', constant_values=0)
-        print(f"After padding: {x.shape}")
-
-        # Pooling with window_shape (2, 2) and strides (2, 2)
-        x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
-        print(f"After pooling: {x.shape}")'''
-       
         # Flatten the output of the conv layers for the fully connected layers
         x = jnp.reshape(x, (x.shape[0], -1))
-        #print(f"Shape after resnet: {x.shape}")
+        # print(f"Shape after resnet: {x.shape}")
 
-        if fork :
+        if fork:
             return x
-        else :
-            # Fully connected layers        
+        else:
+            # Fully connected layers
             x = nn.Dense(128)(x)
             x = nn.leaky_relu(x, negative_slope=0.01)
             # x = nn.Dropout(0.5, deterministic=deterministic)(x)  # Dropout for regularization
@@ -167,31 +199,34 @@ class GalaxyResNet(nn.Module):
             x = nn.tanh(x)
             return x
 
+
 class CBAM_Attention(nn.Module):
-    """
-    Convolutional Block Attention Module with full citations.
-    """
+    """Convolutional Block Attention Module with full citations."""
+
     reduction_ratio: int = 8
 
     @nn.compact
     def __call__(self, x):
+        """Apply channel and spatial attention to ``x`` and return the result."""
         # ==================== CHANNEL ATTENTION MODULE ====================
         # CITATION: "CBAM: Convolutional Block Attention Module" (Woo et al., ECCV 2018)
         # MOTIVATION: "What meaningful features to emphasize or suppress"
         # RATIONALE: Different feature channels encode different types of information
-        
+
         # CITATION: "Squeeze-and-Excitation Networks" (Hu et al., CVPR 2018)
         # RATIONALE: Global context via spatial pooling
         avg_pool = jnp.mean(x, axis=(1, 2), keepdims=True)  # Global average pooling
-        max_pool = jnp.max(x, axis=(1, 2), keepdims=True)   # Global max pooling
+        max_pool = jnp.max(x, axis=(1, 2), keepdims=True)  # Global max pooling
 
         # CITATION: CBAM paper - shared MLP for efficient parameter usage
         # RATIONALE: Reduces overfitting by sharing weights between avg and max paths
-        shared_mlp = lambda inp: nn.Dense(x.shape[-1])(nn.relu(nn.Dense(x.shape[-1] // self.reduction_ratio)(inp)))
+        def shared_mlp(inp):
+            reduced = nn.Dense(x.shape[-1] // self.reduction_ratio)(inp)
+            return nn.Dense(x.shape[-1])(nn.relu(reduced))
 
         avg_out = shared_mlp(avg_pool)
         max_out = shared_mlp(max_pool)
-        
+
         # CITATION: "Sigmoid" activation for attention weights (Hochreiter & Schmidhuber, 1997)
         # RATIONALE: Produces weights between 0 and 1 for soft attention
         channel_att = nn.sigmoid(avg_out + max_out)
@@ -203,78 +238,83 @@ class CBAM_Attention(nn.Module):
         # CITATION: "CBAM: Convolutional Block Attention Module" (Woo et al., ECCV 2018)
         # MOTIVATION: "Where to focus" in spatial dimension
         # RATIONALE: Important for galaxy shape measurement where spatial location matters
-        
+
         avg_spatial = jnp.mean(x, axis=-1, keepdims=True)
         max_spatial = jnp.max(x, axis=-1, keepdims=True)
         spatial_concat = jnp.concatenate([avg_spatial, max_spatial], axis=-1)
 
         # CITATION: CBAM paper recommends 7x7 kernel for spatial attention
         # RATIONALE: Large kernel captures broader spatial context
-        spatial_att = nn.Conv(1, (7, 7), padding='SAME')(spatial_concat)
+        spatial_att = nn.Conv(1, (7, 7), padding="SAME")(spatial_concat)
         spatial_att = nn.sigmoid(spatial_att)
 
         # Apply spatial attention
         return x * spatial_att
 
+
 class EnhancedMultiScaleBlock(nn.Module):
-    """
-    Enhanced Multi-Scale Residual Block with comprehensive citations.
-    """
+    """Enhanced multi-scale residual block with comprehensive citations."""
+
     filters_per_scale: int
     scales: tuple
     use_dilated: bool = True
 
     @nn.compact
     def __call__(self, x, deterministic: bool = False):
+        """Apply the multi-scale residual block to ``x`` and return the result."""
         residual = x
 
         # ==================== MULTI-SCALE CONVOLUTIONS ====================
         scale_outputs = []
         for scale in self.scales:
             if self.use_dilated and scale > 3:
-                # CITATION: "Multi-Scale Context Aggregation by Dilated Convolutions" (Yu & Koltun, ICLR 2016)
-                # QUOTE: "systematically aggregates multi-scale contextual information without losing resolution"
-                # RATIONALE: Achieves large receptive fields with fewer parameters than large kernels
-                # MATH: 21x21 kernel = 441 parameters, 3x3 dilated with rate 7 = 9 parameters (same receptive field)
+                # CITATION: "Multi-Scale Context Aggregation by Dilated Convolutions" (Yu & Koltun,
+                # ICLR 2016)
+                # QUOTE: "systematically aggregates multi-scale contextual information without
+                # losing resolution"
+                # RATIONALE: Achieves large receptive fields with fewer parameters than large
+                # kernels
+                # MATH: 21x21 kernel = 441 parameters, 3x3 dilated with rate 7 = 9 parameters (same
+                # receptive field)
                 dilation = scale // 3
                 scale_out = nn.Conv(
-                    self.filters_per_scale, 
-                    (3, 3), 
-                    padding='SAME',
-                    kernel_dilation=(dilation, dilation)
+                    self.filters_per_scale,
+                    (3, 3),
+                    padding="SAME",
+                    kernel_dilation=(dilation, dilation),
                 )(x)
             else:
-                # CITATION: Standard convolution from "Gradient-Based Learning Applied to Document Recognition" (LeCun et al., 1998)
+                # CITATION: Standard convolution from "Gradient-Based Learning Applied to Document
+                # Recognition" (LeCun et al., 1998)
                 # RATIONALE: Regular convolutions for smaller scales where dilation isn't beneficial
-                scale_out = nn.Conv(
-                    self.filters_per_scale, 
-                    (scale, scale), 
-                    padding='SAME'
-                )(x)
+                scale_out = nn.Conv(self.filters_per_scale, (scale, scale), padding="SAME")(x)
 
-            # CITATION: "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift"
+            # CITATION: "Batch Normalization: Accelerating Deep Network Training by Reducing
+            # Internal Covariate Shift"
             #           (Ioffe & Szegedy, ICML 2015)
             # PLACEMENT: After convolution, before activation (standard practice)
             scale_out = nn.GroupNorm(num_groups=8)(scale_out)
             scale_out = nn.relu(scale_out)
             scale_outputs.append(scale_out)
-        
+
         # ==================== FEATURE CONCATENATION ====================
-        # CITATION: "Going Deeper with Convolutions" (Szegedy et al., CVPR 2015) - Inception architecture
+        # CITATION: "Going Deeper with Convolutions" (Szegedy et al., CVPR 2015) - Inception
+        # architecture
         # RATIONALE: Combines features from different scales for richer representation
         x = jnp.concatenate(scale_outputs, axis=-1)
 
         # ==================== CBAM ATTENTION ====================
         # CITATION: "CBAM: Convolutional Block Attention Module" (Woo et al., ECCV 2018)
         # PERFORMANCE: "consistently improved classification and detection performances"
-        # RATIONALE: Focuses on important spatial locations and channels for galaxy shape measurement
+        # RATIONALE: Focuses on important spatial locations and channels for galaxy shape
+        # measurement
         x = CBAM_Attention()(x)
 
         # ==================== RESIDUAL CONNECTION ====================
         # CITATION: "Deep Residual Learning for Image Recognition" (He et al., CVPR 2016)
         # QUOTE: "explicitly reformulate the layers as learning residual functions"
         # RATIONALE: Enables training of deeper networks by addressing vanishing gradient problem
-        
+
         total_filters = self.filters_per_scale * len(self.scales)
         if residual.shape[-1] != total_filters:
             # CITATION: "Identity Mappings in Deep Residual Networks" (He et al., ECCV 2016)
@@ -284,13 +324,15 @@ class EnhancedMultiScaleBlock(nn.Module):
 
         # CITATION: "Identity Mappings in Deep Residual Networks" (He et al., ECCV 2016)
         # RATIONALE: Pre-activation design for better gradient flow
-        # QUOTE: "the forward and backward signals can be directly propagated from one block to any other block"
+        # QUOTE: "the forward and backward signals can be directly propagated from one block to any
+        # other block"
         return nn.relu(x + residual)
+
 
 class ResearchBackedGalaxyResNet(nn.Module):
     """
     Research-backed Galaxy ResNet with comprehensive citations for every design decision.
-    
+
     OVERALL ARCHITECTURE PHILOSOPHY:
     - Multi-scale processing: Inspired by galaxy morphology having features at different scales
     - Residual learning: "Deep Residual Learning for Image Recognition" (He et al., CVPR 2016)
@@ -298,51 +340,72 @@ class ResearchBackedGalaxyResNet(nn.Module):
     """
 
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool=False, output_keys: tuple = ("g1", "g2"), return_spatial: bool = False):
-        
+    def __call__(
+        self,
+        x,
+        deterministic: bool = False,
+        fork: bool = False,
+        gap: bool = False,
+        output_keys: tuple = ("g1", "g2"),
+        return_spatial: bool = False,
+    ):
+        """Run the multi-scale ResNet and return predictions, features, or map."""
         # ==================== INPUT HANDLING ====================
-        # CITATION: Standard practice in computer vision, established in LeNet-5 (LeCun et al., 1998)
+        # CITATION: Standard practice in computer vision, established in LeNet-5 (LeCun et al.,
+        # 1998)
         # RATIONALE: Ensures consistent tensor dimensions for batch processing
         if x.ndim == 2:
             x = jnp.expand_dims(x, axis=0)
-        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
+        assert (
+            x.ndim == 3
+        ), f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
 
-        # CITATION: "ImageNet Classification with Deep Convolutional Neural Networks" (Krizhevsky et al., NIPS 2012)
+        # CITATION: "ImageNet Classification with Deep Convolutional Neural Networks" (Krizhevsky
+        # et al., NIPS 2012)
         # RATIONALE: Convert grayscale to single-channel format expected by CNNs
         x = jnp.expand_dims(x, axis=-1)
 
         # ==================== INITIAL FEATURE EXTRACTION ====================
-        # CITATION: "Very Deep Convolutional Networks for Large-Scale Image Recognition" (Simonyan & Zisserman, ICLR 2015)
+        # CITATION: "Very Deep Convolutional Networks for Large-Scale Image Recognition" (Simonyan
+        # & Zisserman, ICLR 2015)
         # RATIONALE: 3x3 kernels are computationally efficient while capturing local features
         # DECISION: Small initial feature count (16) to match your successful original design
-        x = nn.Conv(16, (3, 3), padding='SAME')(x)
-        
-        # CITATION: "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift" 
+        x = nn.Conv(16, (3, 3), padding="SAME")(x)
+
+        # CITATION: "Batch Normalization: Accelerating Deep Network Training by Reducing Internal
+        # Covariate Shift"
         #           (Ioffe & Szegedy, ICML 2015)
-        # RATIONALE: "allows us to use much higher learning rates and be less careful about initialization"
+        # RATIONALE: "allows us to use much higher learning rates and be less careful about
+        # initialization"
         # DECISION: use_running_average=True prevents batch_stats complexity in existing pipeline
         x = nn.GroupNorm(num_groups=8)(x)
-        
-        # CITATION: "Rectified Linear Units Improve Restricted Boltzmann Machines" (Nair & Hinton, ICML 2010)
+
+        # CITATION: "Rectified Linear Units Improve Restricted Boltzmann Machines" (Nair & Hinton,
+        # ICML 2010)
         # RATIONALE: ReLU prevents vanishing gradients and is computationally efficient
         x = nn.relu(x)
 
         # ==================== FIRST MULTI-SCALE BLOCK ====================
         # CITATION: Multi-scale approach inspired by:
-        # 1. "Inception-v4, Inception-ResNet and the Impact of Residual Connections on Learning" (Szegedy et al., 2017)
+        # 1. "Inception-v4, Inception-ResNet and the Impact of Residual Connections on Learning"
+        # (Szegedy et al., 2017)
         # 2. Your own successful results with scales (3, 9, 21)
-        # RATIONALE: Galaxies have features at multiple spatial scales (PSF effects, substructure, overall shape)
+        # RATIONALE: Galaxies have features at multiple spatial scales (PSF effects, substructure,
+        # overall shape)
         x = EnhancedMultiScaleBlock(
             filters_per_scale=16,  # DECISION: Matches your successful original design
-            scales=(3, 9, 21),     # DECISION: Preserves your empirically successful scale selection
-            use_dilated=True       # CITATION: "Multi-Scale Context Aggregation by Dilated Convolutions" (Yu & Koltun, ICLR 2016)
+            scales=(3, 9, 21),  # DECISION: Preserves your empirically successful scale selection
+            # CITATION: "Multi-Scale Context Aggregation by Dilated Convolutions"
+            # (Yu & Koltun, ICLR 2016)
+            use_dilated=True,
         )(x, deterministic=deterministic)
 
         # ==================== LEARNABLE DOWNSAMPLING ====================
-        # CITATION: "Striving for Simplicity: The All Convolutional Net" (Springenberg et al., ICLR 2015)
+        # CITATION: "Striving for Simplicity: The All Convolutional Net" (Springenberg et al., ICLR
+        # 2015)
         # RATIONALE: "replacing pooling operations with convolutional layers with stride > 1"
         # ADVANTAGE: Learnable parameters vs fixed pooling operation
-        x = nn.Conv(x.shape[-1], (3, 3), strides=(2, 2), padding='SAME')(x)
+        x = nn.Conv(x.shape[-1], (3, 3), strides=(2, 2), padding="SAME")(x)
         x = nn.GroupNorm(num_groups=8)(x)
         x = nn.relu(x)
 
@@ -351,18 +414,19 @@ class ResearchBackedGalaxyResNet(nn.Module):
         # DECISION: filters_per_scale=32 matches your successful original design
         x = EnhancedMultiScaleBlock(
             filters_per_scale=32,  # DECISION: 2x increase in capacity, matches your original
-            scales=(3, 9, 21),     # DECISION: Consistent scale selection
-            use_dilated=True
+            scales=(3, 9, 21),  # DECISION: Consistent scale selection
+            use_dilated=True,
         )(x, deterministic=deterministic)
-        
+
         if return_spatial:
             return x
 
-        if gap == True:
+        if gap:
             # ==================== GLOBAL AVERAGE POOLING ====================
             # CITATION: "Network In Network" (Lin, Chen & Yan, ICLR 2014)
             # QUOTE: "more robust to spatial translations of the input"
-            # QUOTE: "no parameter to optimize in the fully connected layers, overfitting is avoided"
+            # QUOTE: "no parameter to optimize in the fully connected layers, overfitting is
+            # avoided"
             # RATIONALE: Reduces parameters from ~16,224 to 96, preventing overfitting
             # TRADE-OFF: May lose spatial information important for galaxy shape measurement
             x = jnp.mean(x, axis=(1, 2))
@@ -371,32 +435,37 @@ class ResearchBackedGalaxyResNet(nn.Module):
 
         # print(f"Flattened shape: {x.shape}")
 
-        if fork :
+        if fork:
             return x
-        else :
+        else:
 
             # ==================== CLASSIFICATION HEAD ====================
-            # CITATION: "ImageNet Classification with Deep Convolutional Neural Networks" (Krizhevsky et al., NIPS 2012)
+            # CITATION: "ImageNet Classification with Deep Convolutional Neural Networks"
+            # (Krizhevsky et al., NIPS 2012)
             # RATIONALE: Dense layers for final feature combination and prediction
             # DECISION: 128 units matches your successful original design
             x = nn.Dense(128)(x)
-            
-            # CITATION: Batch norm in dense layers: "Batch Normalization: Accelerating Deep Network Training"
+
+            # CITATION: Batch norm in dense layers: "Batch Normalization: Accelerating Deep Network
+            # Training"
             # RATIONALE: Normalizes inputs to activation function
             x = nn.GroupNorm(num_groups=8)(x)
             x = nn.relu(x)
-            
+
             # OPTIONAL REGULARIZATION (commented out for initial testing):
-            # CITATION: "Dropout: A Simple Way to Prevent Neural Networks from Overfitting" (Srivastava et al., JMLR 2014)
+            # CITATION: "Dropout: A Simple Way to Prevent Neural Networks from Overfitting"
+            # (Srivastava et al., JMLR 2014)
             # x = nn.Dropout(0.5)(x, deterministic=deterministic)
 
             # ==================== FINAL PREDICTION LAYER ====================
             # DECISION: output_keys to match your pipeline expectations (g1, g2, sigma, flux)
-            # CITATION: Standard practice since "Gradient-Based Learning Applied to Document Recognition" (LeCun et al., 1998)
+            # CITATION: Standard practice since "Gradient-Based Learning Applied to Document
+            # Recognition" (LeCun et al., 1998)
             # RATIONALE: Linear layer for regression output, no activation for unbounded predictions
             x = nn.Dense(len(output_keys))(x)
 
             return x
+
 
 class ForkLensPSFNet(nn.Module):
     """Strided CNN for PSF stamps (``nn='forklens_psf'``), from ForkLens.
@@ -406,68 +475,79 @@ class ForkLensPSFNet(nn.Module):
     ``cnn_layers`` design of the ForkLens project. Shares the common model
     signature (see :class:`SimpleGalaxyNN`).
     """
-    
+
     @nn.compact
-    def __call__(self, x, deterministic: bool = False, fork: bool = False, gap: bool = False, output_keys: tuple = ("g1", "g2"), return_spatial: bool = False):
+    def __call__(
+        self,
+        x,
+        deterministic: bool = False,
+        fork: bool = False,
+        gap: bool = False,
+        output_keys: tuple = ("g1", "g2"),
+        return_spatial: bool = False,
+    ):
+        """Run the strided PSF CNN and return predictions, features, or map."""
         # Input handling
         if x.ndim == 2:
             x = jnp.expand_dims(x, axis=0)
-        assert x.ndim == 3, f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
+        assert (
+            x.ndim == 3
+        ), f"Expected input with 3 dimensions (batch_size, height, width), got {x.shape}"
         x = jnp.expand_dims(x, axis=-1)
-        
+
         # First conv block
         x = nn.Conv(
             features=32,
             kernel_size=(3, 3),
             strides=(2, 2),
             padding=((3, 3), (3, 3)),
-            use_bias=False
+            use_bias=False,
         )(x)
         x = nn.GroupNorm(num_groups=8)(x)
         x = nn.relu(x)
-        
+
         # Second conv block
         x = nn.Conv(
             features=64,
             kernel_size=(3, 3),
             strides=(2, 2),
             padding=((3, 3), (3, 3)),
-            use_bias=False
+            use_bias=False,
         )(x)
         x = nn.GroupNorm(num_groups=8)(x)
         x = nn.relu(x)
-        
+
         # Third conv block
         x = nn.Conv(
             features=32,
             kernel_size=(3, 3),
             strides=(2, 2),
             padding=((3, 3), (3, 3)),
-            use_bias=False
+            use_bias=False,
         )(x)
         x = nn.GroupNorm(num_groups=8)(x)
         x = nn.relu(x)
-        
+
         # Fourth conv block
         x = nn.Conv(
             features=16,
             kernel_size=(3, 3),
             strides=(2, 2),
             padding=((3, 3), (3, 3)),
-            use_bias=False
+            use_bias=False,
         )(x)
         x = nn.GroupNorm(num_groups=8)(x)
         x = nn.relu(x)
-        
+
         if return_spatial:
             return x
 
         # Flatten for concatenation
         x = x.reshape((x.shape[0], -1))
 
-        if fork :
+        if fork:
             return x
-        else : 
+        else:
             x = nn.Dense(128)(x)
             x = nn.relu(x)
             x = nn.Dense(64)(x)
@@ -489,12 +569,16 @@ class TransformerFusion(nn.Module):
         num_heads: attention heads (d_model must be divisible by this)
         num_self_attn_layers: self-attention layers applied after cross-attention
     """
+
     d_model: int = 128
     num_heads: int = 4
     num_self_attn_layers: int = 2
 
     @nn.compact
-    def __call__(self, galaxy_map, psf_map, output_keys: tuple = ("g1", "g2"), deterministic: bool = True):
+    def __call__(
+        self, galaxy_map, psf_map, output_keys: tuple = ("g1", "g2"), deterministic: bool = True
+    ):
+        """Fuse galaxy and PSF feature maps and return the prediction."""
         batch = galaxy_map.shape[0]
         H_g, W_g = galaxy_map.shape[1], galaxy_map.shape[2]
         H_p, W_p = psf_map.shape[1], psf_map.shape[2]
@@ -508,10 +592,12 @@ class TransformerFusion(nn.Module):
         psf_tokens = psf_proj.reshape(batch, H_p * W_p, self.d_model)
 
         # Learned positional embeddings
-        gal_pos = self.param('gal_pos_embed', nn.initializers.normal(0.02),
-                             (1, H_g * W_g, self.d_model))
-        psf_pos = self.param('psf_pos_embed', nn.initializers.normal(0.02),
-                             (1, H_p * W_p, self.d_model))
+        gal_pos = self.param(
+            "gal_pos_embed", nn.initializers.normal(0.02), (1, H_g * W_g, self.d_model)
+        )
+        psf_pos = self.param(
+            "psf_pos_embed", nn.initializers.normal(0.02), (1, H_p * W_p, self.d_model)
+        )
         gal_tokens = gal_tokens + gal_pos
         psf_tokens = psf_tokens + psf_pos
 
@@ -539,14 +625,17 @@ class TransformerFusion(nn.Module):
 
 
 class ForkLike(nn.Module):
-    """
-    This class is meant to take two of the above models, train one on galaxy images and another on psf images, then concatenate the results and do the dense/fully connected layers.
+    """Combine two sub-models (galaxy and PSF branches) into one estimator.
+
+    Trains one sub-model on galaxy images and another on PSF images, then
+    concatenates their features and applies the dense/fully connected layers.
 
     This is to mimimic the forklens structure here https://github.com/zhangzzk/forklens/.
     """
+
     galaxy_model_type: str = "cnn"  # Default to EnhancedGalaxyNN
-    psf_model_type: str = "cnn"     # Default to EnhancedGalaxyNN
-    fusion: str = "concat"          # Options: "concat", "transformer"
+    psf_model_type: str = "cnn"  # Default to EnhancedGalaxyNN
+    fusion: str = "concat"  # Options: "concat", "transformer"
 
     def setup(self):
         """Initialize the sub-models during setup."""
@@ -556,7 +645,7 @@ class ForkLike(nn.Module):
             self.transformer_fusion = TransformerFusion()
 
     def _get_model(self, model_type):
-        """Helper function to get model instance from type string."""
+        """Return a model instance for the given type string."""
         if model_type == "mlp":
             return SimpleGalaxyNN()
         elif model_type == "cnn":
@@ -571,19 +660,34 @@ class ForkLike(nn.Module):
             raise ValueError(f"Invalid model type specified: {model_type}")
 
     @nn.compact
-    def __call__(self, galaxy_image, psf_image, output_keys: tuple = ("g1", "g2"), deterministic: bool = False, gap: bool = False):
+    def __call__(
+        self,
+        galaxy_image,
+        psf_image,
+        output_keys: tuple = ("g1", "g2"),
+        deterministic: bool = False,
+        gap: bool = False,
+    ):
+        """Run both branches, fuse their features, and return the prediction."""
         if self.fusion == "transformer":
-            galaxy_map = self.galaxy_model(galaxy_image, deterministic=deterministic, return_spatial=True)
-            psf_map    = self.psf_model(psf_image,       deterministic=deterministic, return_spatial=True)
-            return self.transformer_fusion(galaxy_map, psf_map, output_keys=output_keys, deterministic=deterministic)
-        
+            galaxy_map = self.galaxy_model(
+                galaxy_image, deterministic=deterministic, return_spatial=True
+            )
+            psf_map = self.psf_model(psf_image, deterministic=deterministic, return_spatial=True)
+            return self.transformer_fusion(
+                galaxy_map, psf_map, output_keys=output_keys, deterministic=deterministic
+            )
+
         # This model will learn from galaxy images
-        galaxy_features = self.galaxy_model(galaxy_image, deterministic=deterministic, fork=True, gap=gap)
-        
+        galaxy_features = self.galaxy_model(
+            galaxy_image, deterministic=deterministic, fork=True, gap=gap
+        )
+
         # This model will learn from psf images
         psf_features = self.psf_model(psf_image, deterministic=deterministic, fork=True, gap=gap)
-        
-        # Combines features from the two separate models above trained on different types of images to represent them in one feature layer
+
+        # Combines features from the two separate models above trained on different types of images
+        # to represent them in one feature layer
         combined_features = jnp.concatenate([galaxy_features, psf_features], axis=-1)
 
         # The fully connected layers

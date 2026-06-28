@@ -1,12 +1,13 @@
 """Smoke tests for galaxy-image simulation."""
+
 import pytest
 
 pytest.importorskip("galsim")
 pytest.importorskip("ngmix")
 
-import numpy as np
+import numpy as np  # noqa: E402
 
-from shearnet.core.dataset import generate_dataset
+from shearnet.core.dataset import generate_dataset  # noqa: E402
 
 
 def test_generate_dataset_shapes():

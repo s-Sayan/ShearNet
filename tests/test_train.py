@@ -1,21 +1,26 @@
 """Smoke tests for the training entry point, including optional PSF input."""
+
 import pytest
 
 pytest.importorskip("galsim")
 pytest.importorskip("jax")
 
-import jax.random as random
+import jax.random as random  # noqa: E402
 
-from shearnet.core.dataset import generate_dataset
-from shearnet.core.train import train_model
+from shearnet.core.dataset import generate_dataset  # noqa: E402
+from shearnet.core.train import train_model  # noqa: E402
 
 
 def test_single_branch_train_without_psf():
     """A single-branch model trains from galaxy images alone (no psf_images)."""
     images, labels = generate_dataset(16, psf_fwhm=0.25, npix=33, seed=0)
     state, train_losses, val_losses, _ = train_model(
-        images, labels, random.PRNGKey(0),
-        epochs=1, batch_size=8, nn="cnn",
+        images,
+        labels,
+        random.PRNGKey(0),
+        epochs=1,
+        batch_size=8,
+        nn="cnn",
     )
     assert state is not None
     assert len(train_losses) == 1

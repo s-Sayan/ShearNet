@@ -1,0 +1,11 @@
+[flake8]
+max-line-length = 100
+# E203 and W503 are not PEP 8 violations and conflict with black's formatting.
+extend-ignore = E203, W503
+exclude =
+    .git,
+    __pycache__,
+    build,
+    dist,
+    research,
+    notebooks

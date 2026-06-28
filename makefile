@@ -174,8 +174,15 @@ install-all:
 test:
 	@printf "\n"
 	@printf "$(BOLD)$(YELLOW)Running ShearNet tests...$(NC)\n"
-	@if conda env list | grep -q "shearnet"; then \
-		$(CONDA_ACTIVATE) && conda activate shearnet && \
+	@envs=$$(conda env list | awk '{print $$1}' | grep -E '^shearnet'); \
+	env=""; \
+	for cand in shearnet_all shearnet_gpu12 shearnet_gpu shearnet_dev shearnet; do \
+		if echo "$$envs" | grep -qx "$$cand"; then env=$$cand; break; fi; \
+	done; \
+	if [ -z "$$env" ]; then env=$$(echo "$$envs" | head -n1); fi; \
+	if [ -n "$$env" ]; then \
+		printf "$(GREEN)→ Using environment: $$env$(NC)\n"; \
+		$(CONDA_ACTIVATE) && conda activate $$env && \
 		pytest tests/ -v --color=yes; \
 	else \
 		printf "$(RED)Error: No ShearNet environment found!$(NC)\n"; \

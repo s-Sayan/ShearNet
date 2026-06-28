@@ -25,8 +25,8 @@ Usage
 """
 
 import os
-import numpy as np
 
+import numpy as np
 
 # ---------------------------------------------------------------------------
 # Core parameter names (used for printing only; sliced to n_params)
@@ -51,7 +51,7 @@ def fit_normalizer(labels: np.ndarray) -> dict:
         {"mean": np.ndarray (n_params,), "std": np.ndarray (n_params,)}
     """
     mean = labels.mean(axis=0)
-    std  = labels.std(axis=0)
+    std = labels.std(axis=0)
 
     # Guard against zero std (e.g., a constant parameter like fixed flux)
     std = np.where(std < 1e-8, 1.0, std)
@@ -135,6 +135,7 @@ def load_normalizer(path: str) -> dict:
 # ---------------------------------------------------------------------------
 # Internal helper
 # ---------------------------------------------------------------------------
+
 
 def _print_normalizer_stats(norm_params: dict) -> None:
     """Pretty-print per-parameter mean and std."""

@@ -66,4 +66,12 @@ shearnet-eval = "shearnet.cli.evaluate:main"
 include = ["shearnet*"]
 
 [tool.setuptools.package-data]
-shearnet = ["config/*.yaml"]
+shearnet = ["config/*.yaml", "py.typed"]
+
+[tool.black]
+line-length = 100
+target-version = ["py38"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
