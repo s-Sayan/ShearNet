@@ -46,7 +46,7 @@ def _load_cosmos_cat(seed=42, cat_path=None):
     if _cosmos_cat_cache is not None:
         return _cosmos_cat_cache
 
-    if os.path.exists(cat_path):
+    if cat_path is not None and os.path.exists(cat_path):
         with fits.open(cat_path) as hdul:
             _cosmos_cat_cache = hdul[1].data
         return _cosmos_cat_cache
