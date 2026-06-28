@@ -11,6 +11,9 @@ authors:
   - family-names: Saha
     given-names: Sayan
     email: sayan.iiserp@gmail.com
+  - family-names: Field
+    given-names: Adam
+    email: adfield@wpi.edu
 version: 0.1.0
 license: MIT
 repository-code: "https://github.com/s-Sayan/ShearNet"

@@ -1,7 +1,6 @@
 # Contributing to ShearNet
 
-Thanks for your interest in improving ShearNet! Contributions of all kinds —
-bug reports, documentation, and code — are welcome.
+Thanks for your interest in improving ShearNet! Contributions of all kinds (bug reports, documentation, and code) are welcome.
 
 ## Development setup
 

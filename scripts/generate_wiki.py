@@ -179,7 +179,20 @@ def main():
     with open(os.path.join(out_dir, "Home.md"), "w", encoding="utf-8") as f:
         f.write("".join(home))
 
-    print(f"Wrote {len(written)} module pages + Home.md + _Sidebar.md to {out_dir}/")
+    # --- _Footer.md (rendered at the bottom of every wiki page) ----------
+    footer = (
+        "---\n"
+        "_Auto-generated from the ShearNet docstrings with "
+        "[pydoc-markdown](https://niklasrosenstein.github.io/pydoc-markdown/) — "
+        "edit the docstrings in the source, not this wiki, then run "
+        "`python scripts/generate_wiki.py`._ · "
+        "[Repository](https://github.com/s-Sayan/ShearNet) · "
+        "[API Home](Home)\n"
+    )
+    with open(os.path.join(out_dir, "_Footer.md"), "w", encoding="utf-8") as f:
+        f.write(footer)
+
+    print(f"Wrote {len(written)} module pages + Home.md + _Sidebar.md + _Footer.md to {out_dir}/")
     for name in sorted(written):
         print(f"  {written[name]}.md  <-  {name}")
 
