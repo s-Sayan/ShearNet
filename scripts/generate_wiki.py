@@ -72,7 +72,7 @@ def load_modules():
     loader = PythonLoader(search_path=[REPO_ROOT], packages=[PACKAGE])
     loader.init(context)
     modules = list(loader.load())
-    
+
     # Skip junk picked up from the source tree, e.g. Jupyter's
     # ``.ipynb_checkpoints/<name>-checkpoint.py`` files. Any real module has a
     # dotted name whose every component is a valid Python identifier; the

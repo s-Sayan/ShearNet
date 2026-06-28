@@ -352,8 +352,9 @@ def main():
     train_galaxy_images, train_labels = generate_dataset(samples, psf_fwhm, exp=exp, seed=seed, npix=stamp_size, scale=pixel_size, 
     return_psf=process_psf, nse_sd=nse_sd, psf_file_or_dir=psfex_model_file, output_keys=output_keys, hlr_type=hlr_type, flux_type=flux_type, 
     cosmos_cat_fname=cosmos_cat_fname)
-    # Split into separate galaxy and PSF arrays
-    train_psf_images = train_galaxy_images # I know this is weird, but see ../core/train.py#L11 to see that i need it defined (as not null), but it is not used if process_psf is off
+    # Split off the PSF channel only when the two-branch model needs it;
+    # single-branch models leave train_psf_images as None.
+    train_psf_images = None
     if process_psf :
         train_galaxy_images, train_psf_images = split_combined_images(train_galaxy_images, has_psf=True, has_clean=False)
         print(f"Shape of train PSF images: {train_psf_images.shape}")
@@ -387,9 +388,9 @@ def main():
 
     state, train_loss, val_loss, val_loss_per_key = train_model(
                                     train_galaxy_images,
-                                    train_psf_images,
                                     train_labels,
                                     rng_key,
+                                    psf_images=train_psf_images,
                                     epochs=epochs,
                                     batch_size=batch_size,
                                     nn=nn,

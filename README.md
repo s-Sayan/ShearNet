@@ -26,19 +26,34 @@ conda activate shearnet      # or shearnet_gpu
 Run `make help` to see all installation targets (`install-dev`, `install-all`,
 `clean`, `uninstall`).
 
-### Manual install
+### Minimal install (pip)
+
+If you just want to try it and already manage your own environment:
 
 ```bash
-conda create -n shearnet python=3.11
-conda activate shearnet
 pip install -e .                  # or  pip install -e ".[gpu]"  for GPU
 pip install git+https://github.com/esheldon/ngmix.git
-python scripts/post_installation.py
 ```
 
-The post-installation step asks for a directory to store trained models and
-plots and writes it to your shell profile as the `SHEARNET_DATA_PATH`
-environment variable (see [Data & paths](#data--paths)).
+That's enough to run everything below. `SHEARNET_DATA_PATH` (where models and
+plots are written) is **optional** — it defaults to the current directory. To
+choose a location, set the env var or run the helper:
+
+```bash
+python scripts/post_installation.py            # prints how to set SHEARNET_DATA_PATH
+python scripts/post_installation.py --write-shell-config   # persist it to your shell profile
+```
+
+See [Data & paths](#data--paths) for details.
+
+### Verify your install
+
+A fast end-to-end smoke test (the same one CI runs) confirms everything works:
+
+```bash
+shearnet-train --config configs/dry_run.yaml
+shearnet-eval  --model_name dry_run
+```
 
 ---
 
@@ -152,8 +167,9 @@ Run without an argument (`python scripts/generate_wiki.py`) to write the pages t
 ## Data & paths
 
 - **`SHEARNET_DATA_PATH`** — where trained models (`model_checkpoint/`) and
-  plots (`plots/`) are written. Set automatically by
-  `scripts/post_installation.py`, or export it yourself.
+  plots (`plots/`) are written. **Optional**: defaults to the current directory.
+  Export it yourself, or run `python scripts/post_installation.py
+  --write-shell-config` to persist it to your shell profile.
 - **PSF data** — the empirical SuperBIT PSFs used by `--exp superbit` are
   bundled in `psf_data/`. Override the location with the `SHEARNET_PSF_DIR`
   environment variable if needed.
@@ -173,11 +189,11 @@ from shearnet.core.train import train_model
 # Simulate 10,000 galaxies with a Gaussian PSF (FWHM = 0.25 arcsec)
 images, labels = generate_dataset(10000, psf_fwhm=0.25)
 
-# Train a CNN. Single-branch models ignore the psf_images argument, but it must
-# still be supplied positionally — pass the galaxy images.
+# Train a CNN. Single-branch models take just the galaxy images; psf_images is
+# only needed for the two-branch "fork-like" architecture.
 rng_key = random.PRNGKey(42)
 state, train_losses, val_losses, val_losses_per_key = train_model(
-    images, images, labels, rng_key, epochs=50, nn="cnn",
+    images, labels, rng_key, epochs=50, nn="cnn",
 )
 ```
 
@@ -214,12 +230,11 @@ ShearNet/
 │   ├── cli/             #   shearnet-train / shearnet-eval entry points
 │   └── config/          #   layered YAML config handler + defaults
 ├── configs/             # Ready-made and example YAML configs
+├── tests/               # Unit / smoke test suite (pytest)
 ├── psf_data/            # Bundled empirical SuperBIT PSFs (for --exp superbit)
 ├── notebooks/           # example.ipynb — end-to-end usage walkthrough
-├── scripts/             # post-installation setup
-├── shear_bias/          # Research scripts for shear-bias / PSF-leakage studies
-├── unit_tests/,         # Experiment configs kept as a research record
-│   unit_test_variations/
+├── scripts/             # post-installation + wiki generation
+├── research/            # Experiment record: shear_bias, unit_tests, etc. (not needed to use ShearNet)
 ├── makefile             # Installation targets
 └── pyproject.toml       # Package metadata and dependencies
 ```

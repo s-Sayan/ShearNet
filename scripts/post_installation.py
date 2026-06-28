@@ -1,52 +1,79 @@
+"""Post-installation helper for ShearNet.
+
+Ensures the directory where ShearNet stores trained models and plots exists, and
+tells the user how to point ShearNet at a different location via the
+``SHEARNET_DATA_PATH`` environment variable.
+
+By default this script does NOT modify your shell configuration files. Pass
+``--write-shell-config`` to append the export line to your shell profile
+(idempotently). ShearNet works without any of this — when ``SHEARNET_DATA_PATH``
+is unset it simply uses the current working directory.
+
+Usage:
+    python scripts/post_installation.py [--data-path PATH] [--write-shell-config]
+"""
+
+import argparse
 import os
 
+
+def resolve_data_path(explicit=None):
+    """Return the chosen data path: ``--data-path`` > env var > current directory."""
+    if explicit:
+        return os.path.abspath(explicit)
+    return os.environ.get("SHEARNET_DATA_PATH", os.path.abspath("."))
+
+
+def shell_rc_file():
+    """Best-effort path to the user's shell startup file."""
+    shell = os.getenv("SHELL", "/bin/bash")
+    home = os.path.expanduser("~")
+    if "zsh" in shell:
+        return os.path.join(home, ".zshrc")
+    if "bash" in shell:
+        bashrc = os.path.join(home, ".bashrc")
+        return bashrc if os.path.exists(bashrc) else os.path.join(home, ".bash_profile")
+    return os.path.join(home, ".profile")
+
+
+def write_shell_config(data_path):
+    """Append the SHEARNET_DATA_PATH export to the shell profile, if not already present."""
+    rc_file = shell_rc_file()
+    export_line = f'export SHEARNET_DATA_PATH="{data_path}"'
+    if os.path.exists(rc_file):
+        with open(rc_file, "r") as f:
+            if export_line in f.read():
+                print(f"SHEARNET_DATA_PATH already set in {rc_file}; leaving it unchanged.")
+                return
+    with open(rc_file, "a") as f:
+        f.write(f"\n{export_line}\n")
+    print(f"Added SHEARNET_DATA_PATH to {rc_file}.")
+    print(f"Run 'source {rc_file}' or restart your terminal to apply it.")
+
+
 def main():
-    # Check if SHEARNET_DATA_PATH already exists
-    existing_path = os.environ.get('SHEARNET_DATA_PATH')
-    
-    if existing_path:
-        print(f"SHEARNET_DATA_PATH is already set to: {existing_path}")
-        response = input("Do you want to change it? [y/N]: ").strip().lower()
-        
-        if response not in ['y', 'yes']:
-            print(f"Keeping existing SHEARNET_DATA_PATH: {existing_path}")
-            return
-    
-    # Resolve the absolute path of the current directory
-    default_path = os.path.abspath('.')
-    save_path = input(f"Enter the directory to save trained models and plots (default: {default_path}): ").strip()
-    
-    # Use the default path if the user doesn't provide input
-    if not save_path:
-        save_path = default_path
-    
-    # Ensure the directory exists
-    os.makedirs(save_path, exist_ok=True)
+    parser = argparse.ArgumentParser(description="ShearNet post-installation setup.")
+    parser.add_argument("--data-path", default=None,
+                        help="Directory for trained models and plots "
+                             "(default: $SHEARNET_DATA_PATH or the current directory).")
+    parser.add_argument("--write-shell-config", action="store_true",
+                        help="Persist SHEARNET_DATA_PATH by appending an export line "
+                             "to your shell profile (off by default).")
+    args = parser.parse_args()
 
-    # Determine the shell configuration file
-    shell = os.getenv('SHELL', '/bin/bash')
-    home_dir = os.path.expanduser('~')
-    if 'zsh' in shell:
-        rc_file = os.path.join(home_dir, '.zshrc')
-    elif 'bash' in shell:
-        # Prefer .bashrc if it exists, otherwise use .bash_profile
-        if os.path.exists(os.path.join(home_dir, '.bashrc')):
-            rc_file = os.path.join(home_dir, '.bashrc')
-        else:
-            rc_file = os.path.join(home_dir, '.bash_profile')
+    data_path = resolve_data_path(args.data_path)
+    os.makedirs(data_path, exist_ok=True)
+
+    print(f"ShearNet will store models and plots under: {data_path}")
+    if args.write_shell_config:
+        write_shell_config(data_path)
     else:
-        rc_file = os.path.join(home_dir, '.profile')  # Fallback for other shells
+        print("To use a different location, set the SHEARNET_DATA_PATH environment "
+              "variable, e.g.:")
+        print(f'    export SHEARNET_DATA_PATH="{data_path}"')
+        print("Add that line to your shell profile to make it permanent, or re-run "
+              "this script with --write-shell-config to do it automatically.")
 
-    # Add the environment variable to the shell configuration file
-    env_variable = f'\nexport SHEARNET_DATA_PATH="{save_path}"\n'
-    with open(rc_file, 'a') as f:
-        f.write(env_variable)
-
-    # Set the environment variable for the current session
-    os.environ['SHEARNET_DATA_PATH'] = save_path
-
-    print(f"Environment variable SHEARNET_DATA_PATH set to {save_path}")
-    print(f"Added to {rc_file}. Please restart your terminal or run 'source {rc_file}' to apply changes.")
 
 if __name__ == "__main__":
     main()

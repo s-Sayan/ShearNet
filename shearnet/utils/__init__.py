@@ -1,4 +1,4 @@
-"""Utility functions for evaluation, plotting, and metrics."""
+"""Utility functions for evaluation, plotting, metrics, and devices."""
 
 from .plot_helpers import (
     plot_residuals,
@@ -21,14 +21,6 @@ from .simutils import (
 
 from .device import get_device
 
-from .notebook_output_system import (
-    log_print,
-    save_plot,
-    log_array_stats,
-    experiment_section,
-    get_output_manager,
-)
-
 __all__ = [
     # Plotting
     "plot_residuals",
@@ -40,8 +32,6 @@ __all__ = [
     # Metrics and evaluation
     "eval_model",
     "eval_ngmix",
-    "eval_mcal",
-    "loss_fn_eval",
     "loss_fn_ngmix",
     "loss_fn_mcal",
 
@@ -50,11 +40,4 @@ __all__ = [
 
     # Device utilities
     "get_device",
-
-    # Notebook / output helpers
-    "log_print",
-    "save_plot",
-    "log_array_stats",
-    "experiment_section",
-    "get_output_manager",
 ]

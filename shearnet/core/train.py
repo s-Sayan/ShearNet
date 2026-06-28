@@ -89,7 +89,8 @@ def fork_eval_step_per_key(state, galaxy_images, psf_images, labels, output_keys
     """Validation loss plus per-output-key MSE for the ``fork-like`` model."""
     return fork_loss_fn_per_key(state, state.params, galaxy_images, psf_images, labels, output_keys, gap, weights)
 
-def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
+
+def train_model(galaxy_images, labels, rng_key, psf_images=None, epochs=10,
                   batch_size=32, nn="simple", galaxy_type='cnn',
                   psf_type='cnn', save_path=None, model_name="my_model",
                   val_split=0.2, eval_interval=1, patience=5, lr=1e-3,
@@ -104,10 +105,10 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
 
     Args:
         galaxy_images: Galaxy stamps, shape ``(N, npix, npix)``.
-        psf_images: PSF stamps, shape ``(N, npix, npix)``. Only used by the
-            ``fork-like`` architecture, but always required by the signature.
         labels: Targets, shape ``(N, len(output_keys))``.
         rng_key: A ``jax.random.PRNGKey`` for parameter init and shuffling.
+        psf_images: PSF stamps, shape ``(N, npix, npix)``. Required only for the
+            ``fork-like`` architecture; ignored (and optional) otherwise.
         epochs: Maximum number of training epochs.
         batch_size: Mini-batch size.
         nn: Architecture name — one of ``'mlp'``, ``'cnn'``, ``'resnet'``,
@@ -130,10 +131,18 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
         is the final ``TrainState`` and the remaining items are per-epoch loss
         histories.
     """
+    # The two-branch 'fork-like' model needs PSF stamps; single-branch models
+    # ignore them, so psf_images is optional for everything else.
+    if nn == 'fork-like' and psf_images is None:
+        raise ValueError("nn='fork-like' requires psf_images, but none were given.")
+
     # Split into train and validation sets
     split_idx = int(len(galaxy_images) * (1 - val_split))
     train_galaxy_images, val_galaxy_images = galaxy_images[:split_idx], galaxy_images[split_idx:]
-    train_psf_images, val_psf_images = psf_images[:split_idx], psf_images[split_idx:]
+    if psf_images is not None:
+        train_psf_images, val_psf_images = psf_images[:split_idx], psf_images[split_idx:]
+    else:
+        train_psf_images = val_psf_images = None
     train_labels, val_labels = labels[:split_idx], labels[split_idx:]
 
     n_out = len(output_keys)
@@ -158,7 +167,12 @@ def train_model(galaxy_images, psf_images, labels, rng_key, epochs=10,
     else:
         raise ValueError(f"Invalid model type specified: {nn}")
     
-    params = model.init(rng_key, jnp.ones_like(galaxy_images[0]), jnp.ones_like(psf_images[0]), output_keys=output_keys, gap=gap)
+    if nn == 'fork-like':
+        params = model.init(rng_key, jnp.ones_like(galaxy_images[0]),
+                            jnp.ones_like(psf_images[0]), output_keys=output_keys, gap=gap)
+    else:
+        params = model.init(rng_key, jnp.ones_like(galaxy_images[0]),
+                            output_keys=output_keys, gap=gap)
     
     total_steps = epochs * (len(train_galaxy_images) // batch_size)
     warmup_steps = int(0.05 * total_steps)

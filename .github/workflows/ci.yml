@@ -37,6 +37,13 @@ jobs:
         env:
           SHEARNET_DATA_PATH: ${{ runner.temp }}/shearnet_data
 
+      - name: Run unit tests
+        run: |
+          pip install pytest
+          pytest tests/ -v
+        env:
+          SHEARNET_DATA_PATH: ${{ runner.temp }}/shearnet_data
+
       - name: Run training (dry run or short config)
         run: |
           shearnet-train --config configs/dry_run.yaml

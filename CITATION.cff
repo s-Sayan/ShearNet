@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use ShearNet in your research, please cite it as below."
+title: "ShearNet: Neural network-based galaxy shear estimation with JAX"
+abstract: >-
+  A JAX-based neural network library for galaxy shear estimation. ShearNet
+  simulates galaxy images with GalSim, trains neural networks to recover their
+  shear and other parameters, and benchmarks them against traditional moment-
+  and likelihood-based methods (NGmix metacalibration).
+type: software
+authors:
+  - family-names: Saha
+    given-names: Sayan
+    email: sayan.iiserp@gmail.com
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/s-Sayan/ShearNet"
+keywords:
+  - astronomy
+  - machine-learning
+  - galaxy
+  - shear-estimation
+  - jax
