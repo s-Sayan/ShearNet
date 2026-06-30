@@ -233,7 +233,7 @@ def train_model(
     train_losses, val_losses, val_losses_per_key = [], [], []
     best_val_loss = float("inf")
     patience_counter = 0
-    
+
     # Resolve the (named or callable) loss, then build loss-aware JIT steps that
     # close over the loss, gap, output_keys and weights. The fork (two-branch)
     # and single-branch paths share one epoch loop below; they differ only in

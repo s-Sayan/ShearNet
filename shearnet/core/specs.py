@@ -15,6 +15,7 @@ from typing import Optional, Tuple
 from .dataset import generate_dataset
 from .train import train_model
 
+
 @dataclass
 class DatasetSpec:
     """Settings for :func:`shearnet.core.dataset.generate_dataset`.
@@ -68,6 +69,7 @@ class DatasetSpec:
         simulation from one object instead of a dozen keyword arguments.
         """
         return generate_dataset(**self.as_kwargs())
+
 
 @dataclass
 class TrainConfig:

@@ -423,7 +423,6 @@ def _prepare_training_data(config):
     spec = DatasetSpec.from_config(config)
     val_split = config.get("training.val_split")
 
-
     galaxy_images, labels = spec.build()
     # Split off the PSF channel only when the two-branch model needs it;
     # single-branch models leave psf_images as None.
@@ -466,6 +465,7 @@ def _save_run_artifacts(config, model_dir, norm_params):
 
     normalizer_path = os.path.join(model_dir, "label_normalizer.npz")
     save_normalizer(norm_params, normalizer_path)
+
 
 def _save_losses(loss_path, train_loss, val_loss, val_loss_per_key, output_keys):
     """Save the per-epoch loss histories to ``loss_path`` (no-op if ``None``)."""
