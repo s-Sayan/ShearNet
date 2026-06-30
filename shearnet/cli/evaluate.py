@@ -17,15 +17,12 @@ from flax.training import checkpoints, train_state
 
 from ..config.config_handler import Config
 from ..core.dataset import generate_dataset, split_combined_images
-from ..core.models import (
-    EnhancedGalaxyNN,
-    ForkLensPSFNet,
-    ForkLike,
-    GalaxyResNet,
-    ResearchBackedGalaxyResNet,
-    SimpleGalaxyNN,
-)
+from ..core.models import build_model
 from ..utils.normalization import inverse_transform_labels, load_normalizer
+
+from ..logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 BOLD = "\033[1m"
 CYAN = "\033[96m"
@@ -76,10 +73,10 @@ def load_config(args):
     if args.config:
         config = Config(args.config)
     elif os.path.exists(model_config_path):
-        print(f"\n{BOLD}Loading training config from: {model_config_path}{END}")
+        logger.info(f"\n{BOLD}Loading training config from: {model_config_path}{END}")
         config = Config(model_config_path)
     else:
-        print(f"\nNo saved config found at {model_config_path}, using defaults.")
+        logger.info(f"\nNo saved config found at {model_config_path}, using defaults.")
         config = Config()
 
     seed = (
@@ -97,7 +94,8 @@ def load_config(args):
         "model_name": args.model_name,
         "seed": seed,
         "test_samples": test_samples,
-        "psf_sigma": config.get("dataset.psf_sigma") or config.get("dataset.psf_fwhm", 0.25),
+        # Config normalizes the legacy 'psf_sigma' key onto 'psf_fwhm' at load.
+        "psf_fwhm": config.get("dataset.psf_fwhm", 0.25),
         "nse_sd": config.get("dataset.nse_sd", 1e-5),
         "exp": config.get("dataset.exp", "ideal"),
         "stamp_size": config.get("dataset.stamp_size", 53),
@@ -126,10 +124,10 @@ def load_config(args):
 
 def generate_test_data(config):
     """Simulate the test set, returning ``(gal_images, psf_images, labels, obs)``."""
-    print(f"\n{BOLD}Generating {config['test_samples']} test galaxies...{END}")
+    logger.info(f"\n{BOLD}Generating {config['test_samples']} test galaxies...{END}")
     images, labels, obs = generate_dataset(
         config["test_samples"],
-        config["psf_sigma"],
+        config["psf_fwhm"],
         exp=config["exp"],
         seed=config["seed"],
         nse_sd=config["nse_sd"],
@@ -152,8 +150,8 @@ def generate_test_data(config):
         gal_images = images
         psf_images = None
 
-    print(f"  Galaxy images: {gal_images.shape}")
-    print(f"  Labels:        {labels.shape}")
+    logger.info(f"  Galaxy images: {gal_images.shape}")
+    logger.info(f"  Labels:        {labels.shape}")
     return gal_images, psf_images, labels, obs
 
 
@@ -163,28 +161,16 @@ def load_model(config, gal_images, psf_images):
     Returns:
         flax.training.train_state.TrainState: State with the restored parameters.
     """
-    print(f"\n{BOLD}Loading model '{config['model_name']}'...{END}")
+    logger.info(f"\n{BOLD}Loading model '{config['model_name']}'...{END}")
     rng_key = random.PRNGKey(config["seed"])
     nn = config["nn"]
 
-    if nn == "mlp":
-        model = SimpleGalaxyNN()
-    elif nn == "cnn":
-        model = EnhancedGalaxyNN()
-    elif nn == "resnet":
-        model = GalaxyResNet()
-    elif nn == "research_backed":
-        model = ResearchBackedGalaxyResNet()
-    elif nn == "forklens_psfnet":
-        model = ForkLensPSFNet()
-    elif nn == "fork-like":
-        model = ForkLike(
-            galaxy_model_type=config["galaxy_type"],
-            psf_model_type=config["psf_type"],
-            fusion=config.get("fusion", "concat"),
-        )
-    else:
-        raise ValueError(f"Unknown model type: {nn}")
+    model = build_model(
+        nn,
+        galaxy_type=config["galaxy_type"],
+        psf_type=config["psf_type"],
+        fusion=config.get("fusion", "concat"),
+    )
 
     output_keys = tuple(config["output_keys"])
     if config["process_psf"]:
@@ -218,9 +204,9 @@ def load_model(config, gal_images, psf_images):
             f"No checkpoint found in {load_path} starting with '{config['model_name']}'"
         )
     model_dir = os.path.join(load_path, sorted(matching)[-1])
-    print(f"  Loading checkpoint: {model_dir}")
+    logger.info(f"  Loading checkpoint: {model_dir}")
     state = checkpoints.restore_checkpoint(ckpt_dir=model_dir, target=state)
-    print(f"  {GREEN}✓ Loaded{END}")
+    logger.info(f"  {GREEN}✓ Loaded{END}")
     return state
 
 
@@ -233,7 +219,7 @@ def run_shearnet(state, gal_images, psf_images, labels, config, batch_size=128):
     Returns:
         tuple: ``(preds, mse, bias, elapsed_seconds)``.
     """
-    print(f"\n{BOLD}Running ShearNet predictions...{END}")
+    logger.info(f"\n{BOLD}Running ShearNet predictions...{END}")
     start = time.time()
 
     normalizer_path = os.path.join(
@@ -271,9 +257,9 @@ def run_shearnet(state, gal_images, psf_images, labels, config, batch_size=128):
     mse = float(np.mean((preds[:, :n_out] - labels[:, :n_out]) ** 2))
     bias = float(np.mean(preds[:, :n_out] - labels[:, :n_out]))
 
-    print(f"  MSE  (g1,g2): {YELLOW}{mse:.6e}{END}")
-    print(f"  Bias (g1,g2): {YELLOW}{bias:+.6e}{END}")
-    print(f"  Time:         {CYAN}{elapsed:.2f}s{END}")
+    logger.info(f"  MSE  (g1,g2): {YELLOW}{mse:.6e}{END}")
+    logger.info(f"  Bias (g1,g2): {YELLOW}{bias:+.6e}{END}")
+    logger.info(f"  Time:         {CYAN}{elapsed:.2f}s{END}")
 
     return preds, mse, bias, elapsed
 
@@ -286,7 +272,7 @@ def run_ngmix(obs, labels, config):
     """
     from ..methods.ngmix import _get_priors, mp_fit_one, ngmix_pred
 
-    print(f"\n{BOLD}Running NGmix metacalibration...{END}")
+    logger.info(f"\n{BOLD}Running NGmix metacalibration...{END}")
     start = time.time()
 
     prior = _get_priors(config["seed"])
@@ -305,15 +291,15 @@ def run_ngmix(obs, labels, config):
     valid = ~np.any(np.isnan(preds[:, :2]), axis=1)
     n_nan = np.sum(~valid)
     if n_nan:
-        print(f"  Filtered {n_nan} NaN predictions.")
+        logger.info(f"  Filtered {n_nan} NaN predictions.")
 
     mse = float(np.mean((preds[valid, :2] - labels[valid, :2]) ** 2))
     bias = float(np.mean(preds[valid, :2] - labels[valid, :2]))
 
-    print(f"  MSE  (g1,g2): {YELLOW}{mse:.6e}{END}")
-    print(f"  Bias (g1,g2): {YELLOW}{bias:+.6e}{END}")
-    print(f"  Time:         {CYAN}{elapsed:.2f}s{END}")
-    print("  Speedup vs ShearNet: measured separately above")
+    logger.info(f"  MSE  (g1,g2): {YELLOW}{mse:.6e}{END}")
+    logger.info(f"  Bias (g1,g2): {YELLOW}{bias:+.6e}{END}")
+    logger.info(f"  Time:         {CYAN}{elapsed:.2f}s{END}")
+    logger.info("  Speedup vs ShearNet: measured separately above")
 
     return preds, mse, bias, elapsed
 
@@ -322,24 +308,24 @@ def print_summary(
     config, sn_mse, sn_bias, sn_time, ngmix_mse=None, ngmix_bias=None, ngmix_time=None
 ):
     """Print the final evaluation summary, including the NGmix speedup if run."""
-    print(f"\n{BOLD}{'='*60}")
-    print("EVALUATION SUMMARY")
-    print(f"{'='*60}{END}")
-    print(f"  Model:        {config['model_name']}")
-    print(f"  Architecture: {config['nn']}")
-    print(f"  Test samples: {config['test_samples']}")
-    print(f"  Seed:         {config['seed']}")
-    print(f"\n  {BOLD}ShearNet:{END}")
-    print(f"    MSE:  {sn_mse:.6e}")
-    print(f"    Bias: {sn_bias:+.6e}")
-    print(f"    Time: {sn_time:.2f}s")
+    logger.info(f"\n{BOLD}{'='*60}")
+    logger.info("EVALUATION SUMMARY")
+    logger.info(f"{'='*60}{END}")
+    logger.info(f"  Model:        {config['model_name']}")
+    logger.info(f"  Architecture: {config['nn']}")
+    logger.info(f"  Test samples: {config['test_samples']}")
+    logger.info(f"  Seed:         {config['seed']}")
+    logger.info(f"\n  {BOLD}ShearNet:{END}")
+    logger.info(f"    MSE:  {sn_mse:.6e}")
+    logger.info(f"    Bias: {sn_bias:+.6e}")
+    logger.info(f"    Time: {sn_time:.2f}s")
     if ngmix_mse is not None:
-        print(f"\n  {BOLD}NGmix:{END}")
-        print(f"    MSE:  {ngmix_mse:.6e}")
-        print(f"    Bias: {ngmix_bias:+.6e}")
-        print(f"    Time: {ngmix_time:.2f}s")
-        print(f"    Speedup: {ngmix_time / sn_time:.1f}x")
-    print(f"\n{GREEN}✓ Done{END}\n")
+        logger.info(f"\n  {BOLD}NGmix:{END}")
+        logger.info(f"    MSE:  {ngmix_mse:.6e}")
+        logger.info(f"    Bias: {ngmix_bias:+.6e}")
+        logger.info(f"    Time: {ngmix_time:.2f}s")
+        logger.info(f"    Speedup: {ngmix_time / sn_time:.1f}x")
+    logger.info(f"\n{GREEN}✓ Done{END}\n")
 
 
 def main():

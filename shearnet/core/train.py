@@ -7,14 +7,11 @@ import jax.numpy as jnp
 import optax
 from flax.training import checkpoints, train_state
 
-from .models import (
-    EnhancedGalaxyNN,
-    ForkLensPSFNet,
-    ForkLike,
-    GalaxyResNet,
-    ResearchBackedGalaxyResNet,
-    SimpleGalaxyNN,
-)
+from .models import build_model
+
+from ..logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 def save_checkpoint(state, step, checkpoint_dir, model_name, overwrite=True):
@@ -22,43 +19,38 @@ def save_checkpoint(state, step, checkpoint_dir, model_name, overwrite=True):
     checkpoints.save_checkpoint(
         ckpt_dir=checkpoint_dir, target=state, step=step, prefix=model_name, overwrite=overwrite
     )
-    print(f"Checkpoint saved at step {step}.")
+    logger.info(f"Checkpoint saved at step {step}.")
 
 
-def loss_fn(state, params, images, labels, gap, weights):
-    """Weighted mean-squared-error loss for single-branch models."""
-    preds = state.apply_fn(params, images, gap=gap)
+def _weighted_mse(preds, labels, weights, return_per_key):
+    """Weighted mean-squared error, optionally also the per-output-key MSE."""
     sq_err = (preds - labels) ** 2
     loss = (sq_err * weights[None, :]).mean()
+    if return_per_key:
+        return loss, sq_err.mean(axis=0)
     return loss
 
 
-def fork_loss_fn(state, params, galaxy_images, psf_images, labels, output_keys, gap, weights):
-    """Weighted MSE loss for the two-branch ``fork-like`` model."""
-    preds = state.apply_fn(params, galaxy_images, psf_images, output_keys, gap=gap)
-    sq_err = (preds - labels) ** 2
-    loss = (sq_err * weights[None, :]).mean()
-    return loss
+def loss_fn(state, params, images, labels, gap, weights, return_per_key=False):
+    """Weighted MSE loss for single-branch models.
 
-
-def loss_fn_per_key(state, params, images, labels, gap, weights):
-    """Like :func:`loss_fn` but also returns the per-output-key MSE."""
+    With ``return_per_key=True`` also returns the per-output-key MSE (a static
+    flag at the call sites, so it does not affect JIT tracing).
+    """
     preds = state.apply_fn(params, images, gap=gap)
-    sq_err = (preds - labels) ** 2
-    loss = (sq_err * weights[None, :]).mean()
-    per_key = sq_err.mean(axis=0)
-    return loss, per_key
+    return _weighted_mse(preds, labels, weights, return_per_key)
 
 
-def fork_loss_fn_per_key(
-    state, params, galaxy_images, psf_images, labels, output_keys, gap, weights
+def fork_loss_fn(
+    state, params, galaxy_images, psf_images, labels, output_keys, gap, weights,
+    return_per_key=False,
 ):
-    """Like :func:`fork_loss_fn` but also returns the per-output-key MSE."""
+    """Weighted MSE loss for the two-branch ``fork-like`` model.
+
+    With ``return_per_key=True`` also returns the per-output-key MSE.
+    """
     preds = state.apply_fn(params, galaxy_images, psf_images, output_keys, gap=gap)
-    sq_err = (preds - labels) ** 2
-    loss = (sq_err * weights[None, :]).mean()
-    per_key = sq_err.mean(axis=0)
-    return loss, per_key
+    return _weighted_mse(preds, labels, weights, return_per_key)
 
 
 @functools.partial(jax.jit, static_argnums=(3,))
@@ -100,14 +92,22 @@ def fork_eval_step(state, galaxy_images, psf_images, labels, output_keys, gap, w
 @functools.partial(jax.jit, static_argnums=(3,))
 def eval_step_per_key(state, images, labels, gap, weights):
     """Return validation loss plus per-output-key MSE for single-branch models."""
-    return loss_fn_per_key(state, state.params, images, labels, gap, weights)
+    return loss_fn(state, state.params, images, labels, gap, weights, return_per_key=True)
 
 
 @functools.partial(jax.jit, static_argnums=(4, 5))
 def fork_eval_step_per_key(state, galaxy_images, psf_images, labels, output_keys, gap, weights):
     """Return validation loss plus per-output-key MSE for the ``fork-like`` model."""
-    return fork_loss_fn_per_key(
-        state, state.params, galaxy_images, psf_images, labels, output_keys, gap, weights
+    return fork_loss_fn(
+        state,
+        state.params,
+        galaxy_images,
+        psf_images,
+        labels,
+        output_keys,
+        gap,
+        weights,
+        return_per_key=True,
     )
 
 
@@ -191,20 +191,7 @@ def train_model(
             len(weights) == n_out
         ), f"loss_weights length {len(weights)} != output_keys length {n_out}"
 
-    if nn == "mlp":
-        model = SimpleGalaxyNN()
-    elif nn == "cnn":
-        model = EnhancedGalaxyNN()
-    elif nn == "resnet":
-        model = GalaxyResNet()
-    elif nn == "research_backed":
-        model = ResearchBackedGalaxyResNet()
-    elif nn == "forklens_psfnet":
-        model = ForkLensPSFNet()
-    elif nn == "fork-like":
-        model = ForkLike(galaxy_model_type=galaxy_type, psf_model_type=psf_type, fusion=fusion)
-    else:
-        raise ValueError(f"Invalid model type specified: {nn}")
+    model = build_model(nn, galaxy_type=galaxy_type, psf_type=psf_type, fusion=fusion)
 
     if nn == "fork-like":
         params = model.init(
@@ -235,146 +222,99 @@ def train_model(
     best_val_loss = float("inf")
     patience_counter = 0
 
-    if nn == "fork-like":
-        for epoch in range(epochs):
-            print(f"Epoch {epoch + 1}/{epochs}")
+    # The fork (two-branch) and single-branch paths share one epoch loop; they
+    # differ only in which JIT step they call and whether PSF stamps / per-key
+    # validation losses are involved.
+    is_fork = nn == "fork-like"
 
-            # Shuffle training data
-            rng_key, subkey = jax.random.split(rng_key)
-            perm = jax.random.permutation(subkey, len(train_galaxy_images))
-            shuffled_train_galaxy_images = train_galaxy_images[perm]
-            shuffled_train_psf_images = train_psf_images[perm]
-            shuffled_train_labels = train_labels[perm]
+    def _train_batch(state, gal, psf, lab):
+        if is_fork:
+            return fork_train_step(state, gal, psf, lab, output_keys, gap=gap, weights=weights)
+        return train_step(state, gal, lab, gap, weights=weights)
 
-            # Training phase
-            train_loss, total_samples = 0, 0
-            for i in range(0, len(train_galaxy_images), batch_size):
-                batch_galaxy_images = shuffled_train_galaxy_images[i : i + batch_size]
-                batch_psf_images = shuffled_train_psf_images[i : i + batch_size]
-                batch_labels = shuffled_train_labels[i : i + batch_size]
+    def _eval_batch(state, gal, psf, lab):
+        """Return ``(loss, per_key_or_None)`` for one validation batch."""
+        if is_fork:
+            return fork_eval_step_per_key(
+                state, gal, psf, lab, output_keys, gap=gap, weights=weights
+            )
+        return eval_step(state, gal, lab, gap, weights=weights), None
+
+    for epoch in range(epochs):
+        logger.info(f"Epoch {epoch + 1}/{epochs}")
+
+        # Shuffle training data (identical RNG consumption for both paths)
+        rng_key, subkey = jax.random.split(rng_key)
+        perm = jax.random.permutation(subkey, len(train_galaxy_images))
+        shuffled_train_galaxy_images = train_galaxy_images[perm]
+        shuffled_train_labels = train_labels[perm]
+        shuffled_train_psf_images = train_psf_images[perm] if is_fork else None
+
+        # Training phase
+        train_loss, total_samples = 0, 0
+        for i in range(0, len(train_galaxy_images), batch_size):
+            sl = slice(i, i + batch_size)
+            batch_galaxy_images = shuffled_train_galaxy_images[sl]
+            batch_psf_images = shuffled_train_psf_images[sl] if is_fork else None
+            batch_labels = shuffled_train_labels[sl]
+            batch_size_actual = len(batch_galaxy_images)
+            state, loss = _train_batch(state, batch_galaxy_images, batch_psf_images, batch_labels)
+            train_loss += loss * batch_size_actual
+            total_samples += batch_size_actual
+        train_loss /= total_samples
+        train_losses.append(train_loss)
+
+        # Validation phase
+        if (epoch + 1) % eval_interval == 0:
+            val_loss, total_samples = 0, 0
+            val_per_key_sum = jnp.zeros(n_out)
+            for i in range(0, len(val_galaxy_images), batch_size):
+                sl = slice(i, i + batch_size)
+                batch_galaxy_images = val_galaxy_images[sl]
+                batch_psf_images = val_psf_images[sl] if is_fork else None
+                batch_labels = val_labels[sl]
                 batch_size_actual = len(batch_galaxy_images)
-                state, loss = fork_train_step(
-                    state,
-                    batch_galaxy_images,
-                    batch_psf_images,
-                    batch_labels,
-                    output_keys,
-                    gap=gap,
-                    weights=weights,
+                loss, per_key = _eval_batch(
+                    state, batch_galaxy_images, batch_psf_images, batch_labels
                 )
-                train_loss += loss * batch_size_actual
-                total_samples += batch_size_actual
-            train_loss /= total_samples
-            train_losses.append(train_loss)
-
-            # Validation phase
-            if (epoch + 1) % eval_interval == 0:
-                val_loss, total_samples = 0, 0
-                val_per_key_sum = jnp.zeros(n_out)
-                for i in range(0, len(val_galaxy_images), batch_size):
-                    batch_galaxy_images = val_galaxy_images[i : i + batch_size]
-                    batch_psf_images = val_psf_images[i : i + batch_size]
-                    batch_labels = val_labels[i : i + batch_size]
-                    batch_size_actual = len(batch_galaxy_images)
-                    loss, per_key = fork_eval_step_per_key(
-                        state,
-                        batch_galaxy_images,
-                        batch_psf_images,
-                        batch_labels,
-                        output_keys,
-                        gap=gap,
-                        weights=weights,
-                    )
-                    val_loss += loss * batch_size_actual
+                val_loss += loss * batch_size_actual
+                if per_key is not None:
                     val_per_key_sum += per_key * batch_size_actual
-                    total_samples += batch_size_actual
-                val_loss /= total_samples
+                total_samples += batch_size_actual
+            val_loss /= total_samples
+            val_losses.append(val_loss)
+            logger.info(f"Validation Loss: {val_loss:.4e}")
+
+            # Per-key validation MSE is only tracked for the fork-like model.
+            if is_fork:
                 val_per_key = val_per_key_sum / total_samples
-                val_losses.append(val_loss)
                 val_losses_per_key.append(val_per_key)
-                print(f"Validation Loss: {val_loss:.4e}")
                 per_key_str = ", ".join(
                     f"{k}={float(v):.4e}" for k, v in zip(output_keys, val_per_key)
                 )
-                print(f"  Per-key validation MSE: {per_key_str}")
+                logger.info(f"  Per-key validation MSE: {per_key_str}")
 
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    patience_counter = 0
-                    print(f"New best validation loss: {val_loss:.4e}")
-                    if save_path:
-                        save_checkpoint(
-                            state,
-                            step=epoch + 1,
-                            checkpoint_dir=save_path,
-                            model_name=model_name,
-                            overwrite=True,
-                        )
-                else:
-                    patience_counter += 1
-                    print(
-                        "No improvement in validation loss. "
-                        f"Patience: {patience_counter}/{patience}"
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+                logger.info(f"New best validation loss: {val_loss:.4e}")
+                if save_path:
+                    save_checkpoint(
+                        state,
+                        step=epoch + 1,
+                        checkpoint_dir=save_path,
+                        model_name=model_name,
+                        overwrite=True,
                     )
+            else:
+                patience_counter += 1
+                logger.info(
+                    "No improvement in validation loss. "
+                    f"Patience: {patience_counter}/{patience}"
+                )
 
-                if patience_counter >= patience:
-                    print("Early stopping triggered.")
-                    break
-
-    else:
-        for epoch in range(epochs):
-            print(f"Epoch {epoch + 1}/{epochs}")
-            # Shuffle training data
-            rng_key, subkey = jax.random.split(rng_key)
-            perm = jax.random.permutation(subkey, len(train_galaxy_images))
-            shuffled_train_galaxy_images = train_galaxy_images[perm]
-            shuffled_train_labels = train_labels[perm]
-
-            train_loss, total_samples = 0, 0
-            for i in range(0, len(train_galaxy_images), batch_size):
-                batch_images = shuffled_train_galaxy_images[i : i + batch_size]
-                batch_labels = shuffled_train_labels[i : i + batch_size]
-                batch_size_actual = len(batch_images)
-                state, loss = train_step(state, batch_images, batch_labels, gap, weights=weights)
-                train_loss += loss * batch_size_actual
-                total_samples += batch_size_actual
-            train_loss /= total_samples
-            train_losses.append(train_loss)
-
-            if (epoch + 1) % eval_interval == 0:
-                val_loss, total_samples = 0, 0
-                for i in range(0, len(val_galaxy_images), batch_size):
-                    batch_images = val_galaxy_images[i : i + batch_size]
-                    batch_labels = val_labels[i : i + batch_size]
-                    batch_size_actual = len(batch_images)
-                    loss = eval_step(state, batch_images, batch_labels, gap, weights=weights)
-                    val_loss += loss * batch_size_actual
-                    total_samples += batch_size_actual
-                val_loss /= total_samples
-                val_losses.append(val_loss)
-                print(f"Validation Loss: {val_loss:.4e}")
-
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    patience_counter = 0
-                    if save_path:
-                        save_checkpoint(
-                            state,
-                            step=epoch + 1,
-                            checkpoint_dir=save_path,
-                            model_name=model_name,
-                            overwrite=True,
-                        )
-                    print(f"New best validation loss: {val_loss:.4e}")
-                else:
-                    patience_counter += 1
-                    print(
-                        "No improvement in validation loss. "
-                        f"Patience: {patience_counter}/{patience}"
-                    )
-
-                if patience_counter >= patience:
-                    print("Early stopping triggered.")
-                    break
+            if patience_counter >= patience:
+                logger.info("Early stopping triggered.")
+                break
 
     return state, train_losses, val_losses, val_losses_per_key

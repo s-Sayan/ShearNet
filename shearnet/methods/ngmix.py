@@ -5,6 +5,10 @@ from multiprocessing import Pool, cpu_count
 import ngmix
 import numpy as np
 
+from ..logging_utils import get_logger
+
+logger = get_logger(__name__)
+
 
 # Function to remove NaN values and count them
 def clean_and_report_nans(data_list, name):
@@ -13,7 +17,7 @@ def clean_and_report_nans(data_list, name):
     nan_count = np.isnan(clean_list).sum()
 
     if nan_count > 0:
-        print(f"Removed {nan_count} NaN values from {name}.")
+        logger.info(f"Removed {nan_count} NaN values from {name}.")
 
     return clean_list[~np.isnan(clean_list)]  # Return array without NaNs
 
@@ -361,7 +365,7 @@ def mp_fit_one(
     )
 
     num_cores = cpu_count()
-    print(
+    logger.info(
         f"Starting NGmix ML fitting: num_gal: {len(obslist)} | psf_model: {psf_model} | "
         f"gal_model: {gal_model} | num_cores: {num_cores}"
     )
@@ -476,7 +480,7 @@ def mp_fit_one_single(
     )
 
     num_cores = cpu_count()
-    print(f"Using {num_cores} cores out of {cpu_count()} available.")
+    logger.info(f"Using {num_cores} cores out of {cpu_count()} available.")
 
     data_list = []
     resdict_list = []
@@ -503,10 +507,10 @@ def get_memory_usage(obj):
     }
 
     for attr, size in memory_usage.items():
-        print(f"{attr}: {size:.6f} MB")
+        logger.info(f"{attr}: {size:.6f} MB")
 
     total_memory = sum(memory_usage.values())
-    print(f"\nTotal memory used by instance: {total_memory:.6f} MB")
+    logger.info(f"\nTotal memory used by instance: {total_memory:.6f} MB")
 
 
 def response_calculation(data_list, mcal_shear):

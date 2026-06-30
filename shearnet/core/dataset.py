@@ -11,8 +11,12 @@ import numpy as np
 from astropy.io import fits
 from tqdm import tqdm
 
-from ..utils.metrics import get_admoms_ngmix_fit
 from ..utils.simutils import create_wcs_from_params
+from .moments import get_admoms_ngmix_fit
+
+from ..logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 SHEARNET_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
@@ -51,7 +55,7 @@ def _load_cosmos_cat(seed=42, cat_path=None):
             _cosmos_cat_cache = hdul[1].data
         return _cosmos_cat_cache
 
-    print(
+    logger.info(
         "WARNING: cosmos_catalog_train.fits not found. "
         "Using synthetic random catalog for g1/g2/hlr/flux."
     )

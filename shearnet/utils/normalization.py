@@ -28,6 +28,10 @@ import os
 
 import numpy as np
 
+from ..logging_utils import get_logger
+
+logger = get_logger(__name__)
+
 # ---------------------------------------------------------------------------
 # Core parameter names (used for printing only; sliced to n_params)
 # ---------------------------------------------------------------------------
@@ -109,7 +113,7 @@ def save_normalizer(norm_params: dict, path: str) -> None:
     """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     np.savez(path, mean=norm_params["mean"], std=norm_params["std"])
-    print(f"Label normalizer saved to: {path}")
+    logger.info(f"Label normalizer saved to: {path}")
 
 
 def load_normalizer(path: str) -> dict:
@@ -127,7 +131,7 @@ def load_normalizer(path: str) -> dict:
     """
     data = np.load(path)
     norm_params = {"mean": data["mean"], "std": data["std"]}
-    print(f"Label normalizer loaded from: {path}")
+    logger.info(f"Label normalizer loaded from: {path}")
     _print_normalizer_stats(norm_params)
     return norm_params
 
@@ -141,6 +145,6 @@ def _print_normalizer_stats(norm_params: dict) -> None:
     """Pretty-print per-parameter mean and std."""
     n = len(norm_params["mean"])
     names = _PARAM_NAMES[:n]
-    print("  Label normalization statistics:")
+    logger.info("  Label normalization statistics:")
     for name, mu, sigma in zip(names, norm_params["mean"], norm_params["std"]):
-        print(f"    {name:>6}: mean = {mu:+.6e},  std = {sigma:.6e}")
+        logger.info(f"    {name:>6}: mean = {mu:+.6e},  std = {sigma:.6e}")

@@ -12,6 +12,7 @@ import shearnet.core.models
 
 from ..config.config_handler import Config
 from ..core.dataset import generate_dataset, split_combined_images
+from ..core.specs import DatasetSpec, TrainConfig
 from ..core.train import train_model
 from ..utils.device import get_device
 from ..utils.normalization import (
@@ -19,7 +20,11 @@ from ..utils.normalization import (
     save_normalizer,
     transform_labels,
 )
-from ..utils.plot_helpers import plot_learning_curve
+from ..plotting import plot_learning_curve
+
+from ..logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 # Suppress noisy absl logging emitted by JAX (importing the package also does
 # this, before JAX is imported, so import-time messages are already silenced).
@@ -234,214 +239,272 @@ def _unit_tests_config(config):
     return config
 
 
-def main():
-    """Run the model-training command-line interface."""
-    # Parse arguments
-    parser = create_parser()
-    args = parser.parse_args()
+# Argparse fallback defaults, used only when no ``--config`` file is given.
+# These mirror ``config/default_config.yaml`` for every shared key (the
+# ``test_cli_defaults_match_yaml`` test guards against drift); ``plot`` is the
+# one intentional exception — the bare CLI does not plot unless asked.
+_CLI_DEFAULTS = {
+    "epochs": 10,
+    "seed": 42,
+    "batch_size": 32,
+    "samples": 10000,
+    "patience": 10,
+    "psf_fwhm": 0.25,
+    "nse_sd": 1e-5,
+    "exp": "ideal",
+    "nn": "cnn",
+    "learning_rate": 1e-3,
+    "weight_decay": 1e-4,
+    "model_name": "my_model",
+    "plot": False,
+    "val_split": 0.2,
+    "eval_interval": 1,
+    "stamp_size": 53,
+    "pixel_size": 0.141,
+    "process_psf": False,
+    "galaxy_type": "research_backed",
+    "psf_type": "forklens_psf",
+    "fusion": "concat",
+    "apply_psf_shear": False,
+    "psf_shear_range": 0.05,
+    "gap": False,
+    "output_keys": ("g1", "g2"),
+}
 
-    # Define defaults for when not using config
-    DEFAULTS = {
-        "epochs": 10,
-        "seed": 42,
-        "batch_size": 32,
-        "samples": 10000,
-        "patience": 10,
-        "psf_fwhm": 0.25,
-        "nse_sd": 1e-5,
-        "exp": "ideal",
-        "nn": "cnn",
-        "learning_rate": 1e-3,
-        "weight_decay": 1e-4,
-        "model_name": "my_model",
-        "plot": False,
-        "val_split": 0.2,
-        "eval_interval": 1,
-        "stamp_size": 53,
-        "pixel_size": 0.141,
-        "process_psf": False,
-        "galaxy_type": "research_backed",
-        "psf_type": "forklens_psf",
-        "fusion": "concat",
-        "apply_psf_shear": False,
-        "psf_shear_range": 0.05,
-        "gap": False,
-        "output_keys": ("g1", "g2"),
-    }
-    config = None
 
-    if args.config:
-        # Load configuration
-        config = Config(args.config)
-        config = _unit_tests_config(config)
+def _config_from_args(args):
+    """Build a :class:`Config` from argparse values when no ``--config`` is given.
 
-        # Update config with command-line overrides (only non-None values)
-        config.update_from_args(args)
+    Resolves every value as ``args.<x> if not None else _CLI_DEFAULTS[<x>]`` and
+    writes it into a default-seeded ``Config`` (the original no-config behavior).
+    """
+    d = _CLI_DEFAULTS
+    config = Config()  # Start with package defaults
+    config._set_nested(
+        "dataset.samples", args.samples if args.samples is not None else d["samples"]
+    )
+    config._set_nested(
+        "dataset.psf_fwhm", args.psf_fwhm if args.psf_fwhm is not None else d["psf_fwhm"]
+    )
+    config._set_nested("dataset.nse_sd", args.nse_sd if args.nse_sd is not None else d["nse_sd"])
+    config._set_nested("dataset.exp", args.exp if args.exp is not None else d["exp"])
+    config._set_nested("dataset.seed", args.seed if args.seed is not None else d["seed"])
+    config._set_nested(
+        "dataset.stamp_size", args.stamp_size if args.stamp_size is not None else d["stamp_size"]
+    )
+    config._set_nested(
+        "dataset.pixel_size", args.pixel_size if args.pixel_size is not None else d["pixel_size"]
+    )
+    config._set_nested("model.type", args.nn if args.nn is not None else d["nn"])
+    config._set_nested("training.epochs", args.epochs if args.epochs is not None else d["epochs"])
+    config._set_nested(
+        "training.batch_size", args.batch_size if args.batch_size is not None else d["batch_size"]
+    )
+    config._set_nested(
+        "training.learning_rate",
+        args.learning_rate if args.learning_rate is not None else d["learning_rate"],
+    )
+    config._set_nested(
+        "training.weight_decay",
+        args.weight_decay if args.weight_decay is not None else d["weight_decay"],
+    )
+    config._set_nested(
+        "training.patience", args.patience if args.patience is not None else d["patience"]
+    )
+    config._set_nested(
+        "training.val_split", args.val_split if args.val_split is not None else d["val_split"]
+    )
+    config._set_nested(
+        "training.eval_interval",
+        args.eval_interval if args.eval_interval is not None else d["eval_interval"],
+    )
+    config._set_nested(
+        "output.model_name", args.model_name if args.model_name is not None else d["model_name"]
+    )
+    config._set_nested("output.save_path", args.save_path)
+    config._set_nested("output.plot_path", args.plot_path)
+    config._set_nested("plotting.plot", args.plot)
+    config._set_nested(
+        "model.process_psf",
+        args.process_psf if args.process_psf is not None else d["process_psf"],
+    )
+    config._set_nested(
+        "model.galaxy.type", args.galaxy_type if args.galaxy_type is not None else d["galaxy_type"]
+    )
+    config._set_nested(
+        "model.psf.type", args.psf_type if args.psf_type is not None else d["psf_type"]
+    )
+    config._set_nested("model.fusion", args.fusion if args.fusion is not None else d["fusion"])
+    config._set_nested(
+        "dataset.apply_psf_shear",
+        args.apply_psf_shear if args.apply_psf_shear is not None else d["apply_psf_shear"],
+    )
+    config._set_nested(
+        "dataset.psf_shear_range",
+        args.psf_shear_range if args.psf_shear_range is not None else d["psf_shear_range"],
+    )
+    config._set_nested(
+        "dataset.psfex_model_file",
+        args.psfex_model_file if args.psfex_model_file is not None else d.get("psfex_model_file"),
+    )
+    config._set_nested(
+        "model.output_keys", args.output_keys if args.output_keys is not None else d["output_keys"]
+    )
+    config._set_nested(
+        "dataset.hlr_type", args.hlr_type if args.hlr_type is not None else d["hlr_type"]
+    )
+    config._set_nested(
+        "dataset.flux_type", args.flux_type if args.flux_type is not None else d["flux_type"]
+    )
+    config._set_nested("model.gap", args.gap if args.gap is not None else d["gap"])
+    config._set_nested(
+        "training.loss_weights", args.loss_weights if args.loss_weights is not None else None
+    )
+    config._set_nested("catalog.cosmos_cat_fname", None)
+    return config
 
-        # Print configuration
-        print("\nUsing config file:", args.config)
-        if any(getattr(args, k) is not None for k in DEFAULTS.keys()):
-            print("With command-line overrides")
 
-        # Get values from config (after overrides applied)
-        samples = config.get("dataset.samples")
-        # Accept both 'psf_fwhm' (canonical) and the legacy 'psf_sigma' key.
-        psf_fwhm = config.get("dataset.psf_fwhm")
-        if psf_fwhm is None:
-            psf_fwhm = config.get("dataset.psf_sigma")
-        nse_sd = config.get("dataset.nse_sd")
-        exp = config.get("dataset.exp")
-        seed = config.get("dataset.seed")
-        stamp_size = config.get("dataset.stamp_size")
-        pixel_size = config.get("dataset.pixel_size")
-        epochs = config.get("training.epochs")
-        batch_size = config.get("training.batch_size")
-        process_psf = config.get("model.process_psf")
-        nn = config.get("model.type")
-        patience = config.get("training.patience")
-        lr = config.get("training.learning_rate")
-        weight_decay = config.get("training.weight_decay")
-        plot_flag = config.get("plotting.plot")
-        model_name = config.get("output.model_name")
-        val_split = config.get("training.val_split")
-        eval_interval = config.get("training.eval_interval")
-        galaxy_type = config.get("model.galaxy.type")
-        psf_type = config.get("model.psf.type")
-        fusion = config.get("model.fusion", "concat")
-        psfex_model_file = config.get("dataset.psfex_model_file")
-        output_keys = config.get("model.output_keys")
-        hlr_type = config.get("dataset.hlr_type")
-        flux_type = config.get("dataset.flux_type")
-        gap = config.get("model.gap")
-        loss_weights = config.get("training.loss_weights")
+def _apply_psf_model_fixup(config):
+    """Reconcile ``process_psf`` with the chosen architecture, in place.
 
-        apply_psf_shear = config.get("dataset.apply_psf_shear")
-        psf_shear_range = config.get("dataset.psf_shear_range")
-
-        cosmos_cat_fname = config.get("catalog.cosmos_cat_fname")
-
-    else:
-        # Use argparse values with defaults (original behavior)
-        samples = args.samples if args.samples is not None else DEFAULTS["samples"]
-        psf_fwhm = args.psf_fwhm if args.psf_fwhm is not None else DEFAULTS["psf_fwhm"]
-        nse_sd = args.nse_sd if args.nse_sd is not None else DEFAULTS["nse_sd"]
-        exp = args.exp if args.exp is not None else DEFAULTS["exp"]
-        seed = args.seed if args.seed is not None else DEFAULTS["seed"]
-        epochs = args.epochs if args.epochs is not None else DEFAULTS["epochs"]
-        batch_size = args.batch_size if args.batch_size is not None else DEFAULTS["batch_size"]
-        nn = args.nn if args.nn is not None else DEFAULTS["nn"]
-        patience = args.patience if args.patience is not None else DEFAULTS["patience"]
-        lr = args.learning_rate if args.learning_rate is not None else DEFAULTS["learning_rate"]
-        weight_decay = (
-            args.weight_decay if args.weight_decay is not None else DEFAULTS["weight_decay"]
-        )
-        plot_flag = args.plot
-        model_name = args.model_name if args.model_name is not None else DEFAULTS["model_name"]
-        val_split = args.val_split if args.val_split is not None else DEFAULTS["val_split"]
-        eval_interval = (
-            args.eval_interval if args.eval_interval is not None else DEFAULTS["eval_interval"]
-        )
-        stamp_size = args.stamp_size if args.stamp_size is not None else DEFAULTS["stamp_size"]
-        pixel_size = args.pixel_size if args.pixel_size is not None else DEFAULTS["pixel_size"]
-        psfex_model_file = (
-            args.psfex_model_file
-            if args.psfex_model_file is not None
-            else DEFAULTS.get("psfex_model_file")
-        )
-        output_keys = args.output_keys if args.output_keys is not None else DEFAULTS["output_keys"]
-        hlr_type = args.hlr_type if args.hlr_type is not None else DEFAULTS["hlr_type"]
-        flux_type = args.flux_type if args.flux_type is not None else DEFAULTS["flux_type"]
-        gap = args.gap if args.gap is not None else DEFAULTS["gap"]
-
-        process_psf = args.process_psf if args.process_psf is not None else DEFAULTS["process_psf"]
-
-        galaxy_type = args.galaxy_type if args.galaxy_type is not None else DEFAULTS["galaxy_type"]
-        psf_type = args.psf_type if args.psf_type is not None else DEFAULTS["psf_type"]
-        fusion = args.fusion if args.fusion is not None else DEFAULTS["fusion"]
-
-        apply_psf_shear = (
-            args.apply_psf_shear
-            if args.apply_psf_shear is not None
-            else DEFAULTS["apply_psf_shear"]
-        )
-        psf_shear_range = (
-            args.psf_shear_range
-            if args.psf_shear_range is not None
-            else DEFAULTS["psf_shear_range"]
-        )
-
-        loss_weights = args.loss_weights if args.loss_weights is not None else None
-
-        cosmos_cat_fname = None
-
-        # Always create a config object with the actual values being used
-        config = Config()  # Start with defaults
-        # Update with actual values being used
-        config._set_nested("dataset.samples", samples)
-        config._set_nested("dataset.psf_fwhm", psf_fwhm)
-        config._set_nested("dataset.nse_sd", nse_sd)
-        config._set_nested("dataset.exp", exp)
-        config._set_nested("dataset.seed", seed)
-        config._set_nested("dataset.stamp_size", stamp_size)
-        config._set_nested("dataset.pixel_size", pixel_size)
-        config._set_nested("model.type", nn)
-        config._set_nested("training.epochs", epochs)
-        config._set_nested("training.batch_size", batch_size)
-        config._set_nested("training.learning_rate", lr)
-        config._set_nested("training.weight_decay", weight_decay)
-        config._set_nested("training.patience", patience)
-        config._set_nested("training.val_split", val_split)
-        config._set_nested("training.eval_interval", eval_interval)
-        config._set_nested("output.model_name", model_name)
-        config._set_nested("output.save_path", args.save_path)
-        config._set_nested("output.plot_path", args.plot_path)
-        config._set_nested("plotting.plot", plot_flag)
-        config._set_nested("model.process_psf", process_psf)
-        config._set_nested("model.galaxy.type", galaxy_type)
-        config._set_nested("model.psf.type", psf_type)
-        config._set_nested("model.fusion", fusion)
-        config._set_nested("dataset.apply_psf_shear", apply_psf_shear)
-        config._set_nested("dataset.psf_shear_range", psf_shear_range)
-        config._set_nested("dataset.psfex_model_file", psfex_model_file)
-        config._set_nested("model.output_keys", output_keys)
-        config._set_nested("dataset.hlr_type", hlr_type)
-        config._set_nested("dataset.flux_type", flux_type)
-        config._set_nested("model.gap", gap)
-        config._set_nested("training.loss_weights", loss_weights)
-
-        config._set_nested("catalog.cosmos_cat_fname", cosmos_cat_fname)
-
-    # Validate process_psf and model compatibility
+    ``process_psf`` requires the two-branch ``fork-like`` model; without it the
+    ``fork-like`` model is unsupported. Mismatches are corrected (with a warning)
+    exactly as the CLI did previously.
+    """
+    process_psf = config.get("model.process_psf")
+    nn = config.get("model.type")
     if process_psf:
         if nn != "fork-like":
-            print("\nWARNING: When --process-psf is enabled, it requires the fork-like model.")
-            print("Setting default fork-like model...")
-
+            logger.info(
+                "\nWARNING: When --process-psf is enabled, it requires the fork-like model."
+            )
+            logger.info("Setting default fork-like model...")
             nn = "fork-like"
-            galaxy_type = DEFAULTS["galaxy_type"]
-            psf_type = DEFAULTS["psf_type"]
-
-            # Update the config with the corrected model
+            galaxy_type = _CLI_DEFAULTS["galaxy_type"]
+            psf_type = _CLI_DEFAULTS["psf_type"]
             config._set_nested("model.type", nn)
             config._set_nested("model.galaxy.type", galaxy_type)
             config._set_nested("model.psf.type", psf_type)
-            print(
+            logger.info(
                 f"Model type changed to: '{nn}' with galaxy: '{galaxy_type}', psf: '{psf_type}'\n"
             )
     else:
         if nn == "fork-like":
-            print("\nWARNING: When --process-psf is disabled, fork-like model is not supported.")
-            print("Setting default model...")
-
-            nn = DEFAULTS["nn"]
-
-            # Update the config with the corrected model
+            logger.info(
+                "\nWARNING: When --process-psf is disabled, fork-like model is not supported."
+            )
+            logger.info("Setting default model...")
+            nn = _CLI_DEFAULTS["nn"]
             config._set_nested("model.type", nn)
-            print(f"Model type changed to: '{nn}'\n")
+            logger.info(f"Model type changed to: '{nn}'\n")
 
-    output_keys = tuple(output_keys)
 
+def build_train_config(args):
+    """Resolve a fully-populated :class:`Config` from parsed CLI ``args``.
+
+    Handles both modes — loading ``--config`` (with optional CLI overrides and
+    the unit-tests schema adapter) or, when no config file is given, falling back
+    to ``_config_from_args`` — and applies the ``process_psf`` / ``fork-like``
+    compatibility fixup. Performs no simulation or training, so it is unit-testable
+    without the heavy GalSim/ngmix dependencies.
+    """
+    if args.config:
+        config = Config(args.config)
+        config = _unit_tests_config(config)
+        config.update_from_args(args)
+        logger.info(f"\nUsing config file: {args.config}")
+        if any(getattr(args, k) is not None for k in _CLI_DEFAULTS.keys()):
+            logger.info("With command-line overrides")
+    else:
+        config = _config_from_args(args)
+
+    _apply_psf_model_fixup(config)
+    return config
+
+
+def _prepare_training_data(config):
+    """Simulate the training set and z-score normalize its labels.
+
+    Reads the dataset/model settings from ``config``, generates the stamps,
+    splits off the PSF channel for the two-branch model, and fits the label
+    normalizer on the training portion only.
+
+    Returns:
+        ``(galaxy_images, psf_images, labels, norm_params)`` where ``psf_images``
+        is ``None`` for single-branch models and ``labels`` is already normalized.
+    """
+    spec = DatasetSpec.from_config(config)
+    val_split = config.get("training.val_split")
+
+    galaxy_images, labels = generate_dataset(**spec.as_kwargs())
+    # Split off the PSF channel only when the two-branch model needs it;
+    # single-branch models leave psf_images as None.
+    psf_images = None
+    if spec.return_psf:
+        galaxy_images, psf_images = split_combined_images(
+            galaxy_images, has_psf=True, has_clean=False
+        )
+        logger.info(f"Shape of train PSF images: {psf_images.shape}")
+    logger.info(f"Shape of train images: {galaxy_images.shape}")
+    logger.info(f"Shape of train labels: {labels.shape}")
+
+    # Fit the normalizer on the training portion only, then transform all labels.
+    split_idx = int(len(labels) * (1 - val_split))
+    norm_params = fit_normalizer(labels[:split_idx])
+    labels = transform_labels(labels, norm_params)
+    return galaxy_images, psf_images, labels, norm_params
+
+
+def _save_run_artifacts(config, model_dir, norm_params):
+    """Persist the resolved config, label normalizer, and a model-source snapshot."""
+    os.makedirs(model_dir, exist_ok=True)
+
+    config_path = os.path.join(model_dir, "training_config.yaml")
+    config.save(config_path)
+    logger.info(f"\nTraining configuration saved to: {config_path}")
+
+    normalizer_path = os.path.join(model_dir, "label_normalizer.npz")
+    save_normalizer(norm_params, normalizer_path)
+
+    try:
+        models_source = shearnet.core.models.__file__
+        architecture_dest = os.path.join(model_dir, "architecture.py")
+        shutil.copy2(models_source, architecture_dest)
+        logger.info(f"Model architecture saved to: {architecture_dest}")
+    except Exception as e:
+        logger.info(f"WARNING: Could not copy model architecture file: {e}")
+
+
+def _save_losses(loss_path, train_loss, val_loss, val_loss_per_key, output_keys):
+    """Save the per-epoch loss histories to ``loss_path`` (no-op if ``None``)."""
+    logger.info("Saving training and validation loss...")
+    if loss_path is None:
+        return
+    val_loss_per_key_arr = (
+        jnp.stack(val_loss_per_key) if val_loss_per_key else jnp.zeros((0, len(output_keys)))
+    )
+    jnp.savez(
+        loss_path,
+        train_loss=train_loss,
+        val_loss=val_loss,
+        val_loss_per_key=val_loss_per_key_arr,
+        output_keys=output_keys,
+    )
+
+
+def main():
+    """Run the model-training command-line interface."""
+    parser = create_parser()
+    args = parser.parse_args()
+
+    config = build_train_config(args)
     config.print_config()
+
+    # Training/model settings used directly by main(); dataset settings are read
+    # inside _prepare_training_data.
+    output_keys = tuple(config.get("model.output_keys"))
+    model_name = config.get("output.model_name")
+    plot_flag = config.get("plotting.plot")
 
     save_path = os.path.abspath(args.save_path) if args.save_path else None
     plot_path = os.path.abspath(args.plot_path) if args.plot_path else None
@@ -451,103 +514,33 @@ def main():
 
     get_device()
 
-    train_galaxy_images, train_labels = generate_dataset(
-        samples,
-        psf_fwhm,
-        exp=exp,
-        seed=seed,
-        npix=stamp_size,
-        scale=pixel_size,
-        return_psf=process_psf,
-        nse_sd=nse_sd,
-        psf_file_or_dir=psfex_model_file,
-        output_keys=output_keys,
-        hlr_type=hlr_type,
-        flux_type=flux_type,
-        cosmos_cat_fname=cosmos_cat_fname,
+    train_galaxy_images, train_psf_images, train_labels, norm_params = _prepare_training_data(
+        config
     )
-    # Split off the PSF channel only when the two-branch model needs it;
-    # single-branch models leave train_psf_images as None.
-    train_psf_images = None
-    if process_psf:
-        train_galaxy_images, train_psf_images = split_combined_images(
-            train_galaxy_images, has_psf=True, has_clean=False
-        )
-        print(f"Shape of train PSF images: {train_psf_images.shape}")
-    print(f"Shape of train images: {train_galaxy_images.shape}")
-    print(f"Shape of train labels: {train_labels.shape}")
 
-    rng_key = random.PRNGKey(seed)
-
-    # --- normalization ---
-    split_idx = int(len(train_labels) * (1 - val_split))
-    norm_params = fit_normalizer(train_labels[:split_idx])
-    train_labels = transform_labels(train_labels, norm_params)
-    # --- end normalization ---
+    rng_key = random.PRNGKey(config.get("dataset.seed"))
 
     model_dir = os.path.join(plot_path, model_name)
-    os.makedirs(model_dir, exist_ok=True)
-    config_path = os.path.join(model_dir, "training_config.yaml")
-    config.save(config_path)
-    print(f"\nTraining configuration saved to: {config_path}")
+    _save_run_artifacts(config, model_dir, norm_params)
 
-    normalizer_path = os.path.join(model_dir, "label_normalizer.npz")
-    save_normalizer(norm_params, normalizer_path)
-
-    try:
-        models_source = shearnet.core.models.__file__
-        architecture_dest = os.path.join(model_dir, "architecture.py")
-        shutil.copy2(models_source, architecture_dest)
-        print(f"Model architecture saved to: {architecture_dest}")
-    except Exception as e:
-        print(f"WARNING: Could not copy model architecture file: {e}")
-
+    train_cfg = TrainConfig.from_config(config, save_path=save_path)
     state, train_loss, val_loss, val_loss_per_key = train_model(
         train_galaxy_images,
         train_labels,
         rng_key,
         psf_images=train_psf_images,
-        epochs=epochs,
-        batch_size=batch_size,
-        nn=nn,
-        galaxy_type=galaxy_type,
-        psf_type=psf_type,
-        fusion=fusion,
-        save_path=save_path,
-        model_name=model_name,
-        val_split=val_split,  # validation split fraction
-        eval_interval=eval_interval,
-        patience=patience,  # for early stopping
-        lr=lr,
-        weight_decay=weight_decay,  # optimizer details
-        output_keys=output_keys,
-        gap=gap,
-        weights=loss_weights,
+        **train_cfg.as_kwargs(),
     )
 
     if plot_flag:
-        print("Plotting learning curve...")
+        logger.info("Plotting learning curve...")
         plot_save_path = (
             os.path.join(plot_path, model_name, "learning_curve.png") if plot_path else None
         )
         plot_learning_curve(val_loss, train_loss, plot_save_path)
 
-    print("Saving training and validation loss...")
     loss_path = os.path.join(plot_path, model_name, f"{model_name}_loss.npz") if plot_path else None
-    val_loss_per_key_arr = (
-        jnp.stack(val_loss_per_key) if val_loss_per_key else jnp.zeros((0, len(output_keys)))
-    )
-    (
-        jnp.savez(
-            loss_path,
-            train_loss=train_loss,
-            val_loss=val_loss,
-            val_loss_per_key=val_loss_per_key_arr,
-            output_keys=output_keys,
-        )
-        if loss_path
-        else None
-    )
+    _save_losses(loss_path, train_loss, val_loss, val_loss_per_key, output_keys)
 
 
 if __name__ == "__main__":

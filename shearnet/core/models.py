@@ -645,19 +645,8 @@ class ForkLike(nn.Module):
             self.transformer_fusion = TransformerFusion()
 
     def _get_model(self, model_type):
-        """Return a model instance for the given type string."""
-        if model_type == "mlp":
-            return SimpleGalaxyNN()
-        elif model_type == "cnn":
-            return EnhancedGalaxyNN()
-        elif model_type == "resnet":
-            return GalaxyResNet()
-        elif model_type == "research_backed":
-            return ResearchBackedGalaxyResNet()
-        elif model_type == "forklens_psf":
-            return ForkLensPSFNet()
-        else:
-            raise ValueError(f"Invalid model type specified: {model_type}")
+        """Return a model instance for the given branch type string."""
+        return build_branch_model(model_type)
 
     @nn.compact
     def __call__(
@@ -698,3 +687,58 @@ class ForkLike(nn.Module):
         # Final predictions
         x = nn.Dense(len(output_keys))(x)
         return x
+
+
+# ---------------------------------------------------------------------------
+# Model registries and factories
+#
+# Single source of truth for the architecture-name -> class mapping, replacing
+# the ``if/elif`` chains that previously lived in ``core.train``, ``cli.evaluate``
+# and ``ForkLike._get_model``. Adding a new architecture now means editing one
+# dict here.
+# ---------------------------------------------------------------------------
+
+# Top-level single-branch architectures selectable via ``nn=`` (everything
+# except the two-branch ``fork-like`` model, which is built separately because
+# it takes extra branch/fusion arguments).
+SINGLE_BRANCH_MODELS = {
+    "mlp": SimpleGalaxyNN,
+    "cnn": EnhancedGalaxyNN,
+    "resnet": GalaxyResNet,
+    "research_backed": ResearchBackedGalaxyResNet,
+    "forklens_psfnet": ForkLensPSFNet,
+}
+
+# Sub-models usable as a galaxy/PSF branch inside :class:`ForkLike`. Note the
+# ``forklens_psf`` key differs from the top-level ``forklens_psfnet`` above and
+# is kept distinct to preserve existing config semantics.
+BRANCH_MODELS = {
+    "mlp": SimpleGalaxyNN,
+    "cnn": EnhancedGalaxyNN,
+    "resnet": GalaxyResNet,
+    "research_backed": ResearchBackedGalaxyResNet,
+    "forklens_psf": ForkLensPSFNet,
+}
+
+
+def build_branch_model(model_type):
+    """Instantiate a :class:`ForkLike` branch sub-model from its type string."""
+    try:
+        return BRANCH_MODELS[model_type]()
+    except KeyError:
+        raise ValueError(f"Invalid model type specified: {model_type}")
+
+
+def build_model(nn, galaxy_type="cnn", psf_type="cnn", fusion="concat"):
+    """Instantiate a top-level architecture from its ``nn`` name.
+
+    The two-branch ``fork-like`` model is constructed with the given branch and
+    fusion settings; every other name maps to a single-branch architecture in
+    :data:`SINGLE_BRANCH_MODELS`.
+    """
+    if nn == "fork-like":
+        return ForkLike(galaxy_model_type=galaxy_type, psf_model_type=psf_type, fusion=fusion)
+    try:
+        return SINGLE_BRANCH_MODELS[nn]()
+    except KeyError:
+        raise ValueError(f"Invalid model type specified: {nn}")

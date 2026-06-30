@@ -7,7 +7,7 @@ from .metrics import (
     loss_fn_mcal,
     loss_fn_ngmix,
 )
-from .plot_helpers import (
+from ..plotting import (
     animate_model_epochs,
     plot_residuals,
     plot_true_vs_predicted,

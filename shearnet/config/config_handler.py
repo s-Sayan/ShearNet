@@ -7,6 +7,10 @@ from typing import Any, Dict, Optional
 
 import yaml
 
+from ..logging_utils import get_logger
+
+logger = get_logger(__name__)
+
 
 class Config:
     """Layered configuration for the ShearNet CLIs.
@@ -36,10 +40,29 @@ class Config:
         if config_path is not None:
             with open(config_path, "r") as f:
                 custom_config = yaml.safe_load(f)
-            # Deep merge custom config into default
-            self._deep_merge(config, custom_config)
+            if custom_config:
+                # Normalize deprecated key names before merging, so the rest of
+                # the code only ever sees the canonical keys.
+                self._migrate_legacy_keys(custom_config)
+                # Deep merge custom config into default
+                self._deep_merge(config, custom_config)
 
         return config
+
+    def _migrate_legacy_keys(self, custom: Dict[str, Any]) -> None:
+        """Rename deprecated keys in a user config dict to their canonical names.
+
+        Maps the legacy ``dataset.psf_sigma`` onto the canonical
+        ``dataset.psf_fwhm`` (unless the user also set ``psf_fwhm`` explicitly,
+        in which case the canonical value wins). This is done on the user dict
+        before merging, so a config written with ``psf_sigma`` behaves exactly
+        as if it had used ``psf_fwhm`` -- previously ``psf_sigma`` was honored by
+        evaluation but silently ignored by training.
+        """
+        dataset = custom.get("dataset")
+        if isinstance(dataset, dict) and "psf_sigma" in dataset:
+            sigma = dataset.pop("psf_sigma")
+            dataset.setdefault("psf_fwhm", sigma)
 
     def _deep_merge(self, base: Dict, update: Dict) -> None:
         """Deep merge update dict into base dict."""
@@ -130,7 +153,9 @@ class Config:
             for key in keys:
                 current = current[key]
             return current
-        except KeyError:
+        except (KeyError, TypeError):
+            # KeyError: a key is missing. TypeError: an intermediate value is
+            # None or a scalar (not subscriptable), e.g. descending past a leaf.
             return default
 
     def save(self, path: str) -> None:
@@ -141,29 +166,29 @@ class Config:
 
     def print_config(self) -> None:
         """Print current configuration."""
-        print("\n" + "=" * 50)
-        print("Training Configuration")
-        print("=" * 50)
+        logger.info("\n" + "=" * 50)
+        logger.info("Training Configuration")
+        logger.info("=" * 50)
 
         for section in ["dataset", "model", "training", "output", "plotting"]:
             if section in self.config:
-                print(f"\n{section}:")
+                logger.info(f"\n{section}:")
                 for key, value in self.config[section].items():
-                    print(f"  {key}: {value}")
-        print("=" * 50 + "\n")
+                    logger.info(f"  {key}: {value}")
+        logger.info("=" * 50 + "\n")
 
     def print_eval_config(self) -> None:
         """Print only evaluation-relevant configuration."""
-        print("\n" + "=" * 50)
-        print("Evaluation Configuration")
-        print("=" * 50)
+        logger.info("\n" + "=" * 50)
+        logger.info("Evaluation Configuration")
+        logger.info("=" * 50)
 
         # Only print relevant sections for evaluation
         sections_to_print = ["evaluation", "model", "plotting", "comparison"]
 
         for section in sections_to_print:
             if section in self.config:
-                print(f"\n{section}:")
+                logger.info(f"\n{section}:")
                 for key, value in self.config[section].items():
-                    print(f"  {key}: {value}")
-        print("=" * 50 + "\n")
+                    logger.info(f"  {key}: {value}")
+        logger.info("=" * 50 + "\n")
