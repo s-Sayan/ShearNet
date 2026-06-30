@@ -1,7 +1,7 @@
 """Utility functions for evaluation, plotting, metrics, and devices."""
 
 from .device import get_device
-from .metrics import (
+from ..metrics import (
     eval_model,
     eval_ngmix,
     loss_fn_mcal,

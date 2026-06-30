@@ -43,3 +43,22 @@ def test_train_config_from_config(tmp_path, monkeypatch):
     assert tc.lr == 1e-3  # training.learning_rate
     assert tc.save_path == "/tmp/ckpt"
     assert tc.output_keys == ("g1", "g2")
+
+
+def test_dataset_spec_build():
+    spec = DatasetSpec(samples=8, psf_fwhm=0.25, npix=21, seed=0)
+    images, labels = spec.build()
+    assert images.shape == (8, 21, 21)
+    assert labels.shape == (8, 2)
+
+
+def test_train_config_run():
+    import jax.random as random
+    import numpy as np
+
+    imgs = np.random.rand(16, 21, 21).astype("float32")
+    labels = (np.random.rand(16, 2).astype("float32") - 0.5) * 0.1
+    tc = TrainConfig(epochs=1, batch_size=8, nn="cnn")
+    state, train_loss, val_loss, _ = tc.run(imgs, labels, random.PRNGKey(0))
+    assert state is not None
+    assert len(train_loss) == 1

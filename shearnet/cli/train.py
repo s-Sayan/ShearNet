@@ -1,19 +1,19 @@
 """Command-line interface for training ShearNet models."""
 
 import argparse
+import hashlib
 import logging
 import os
-import shutil
 
 import jax.numpy as jnp
 import jax.random as random
 
 import shearnet.core.models
 
-from ..config.config_handler import Config
-from ..core.dataset import generate_dataset, split_combined_images
+from .. import __version__
+from ..config.config_handler import Config, load_default_config
+from ..core.dataset import split_combined_images
 from ..core.specs import DatasetSpec, TrainConfig
-from ..core.train import train_model
 from ..utils.device import get_device
 from ..utils.normalization import (
     fit_normalizer,
@@ -194,82 +194,67 @@ Examples:
         default=None,
         help="Per-output loss weights, one per output_key in order",
     )
+    parser.add_argument(
+        "--loss",
+        type=str,
+        default=None,
+        help="Training loss: a registry name (mse, mae, huber, ...) [default: mse]",
+    )
 
     return parser
 
 
-def _unit_tests_config(config):
-    """Map a unit-tests-style config onto the legacy keys read below.
-
-    Handles the meta/paths/image/psf/galaxy/train blocks; a no-op for
-    legacy/default-schema configs.
-    """
-    if config.get("meta") is None and config.get("train") is None:
-        return config
-    mapping = {
-        "train.samples": "dataset.samples",
-        "train.seed": "dataset.seed",
-        "image.noise_sd": "dataset.nse_sd",
-        "image.stamp_size": "dataset.stamp_size",
-        "image.pixel_scale": "dataset.pixel_size",
-        "psf.gaussian_fwhm": "dataset.psf_fwhm",
-        "psf.mode": "dataset.exp",
-        "galaxy.hlr_type": "dataset.hlr_type",
-        "galaxy.flux_type": "dataset.flux_type",
-        "paths.psfex_model_file": "dataset.psfex_model_file",
-        "model.architecture": "model.type",
-        "model.galaxy_branch": "model.galaxy.type",
-        "model.psf_branch": "model.psf.type",
-        "train.epochs": "training.epochs",
-        "train.batch_size": "training.batch_size",
-        "train.learning_rate": "training.learning_rate",
-        "train.weight_decay": "training.weight_decay",
-        "train.patience": "training.patience",
-        "train.val_split": "training.val_split",
-        "train.eval_interval": "training.eval_interval",
-        "train.loss_weights": "training.loss_weights",
-        "meta.model_name": "output.model_name",
-        "train.plot": "plotting.plot",
-        "paths.train_catalog": "catalog.cosmos_cat_fname",
-    }
-    for src, dst in mapping.items():
-        val = config.get(src)
-        if val is not None:
-            config._set_nested(dst, val)
-    return config
-
-
-# Argparse fallback defaults, used only when no ``--config`` file is given.
-# These mirror ``config/default_config.yaml`` for every shared key (the
-# ``test_cli_defaults_match_yaml`` test guards against drift); ``plot`` is the
-# one intentional exception — the bare CLI does not plot unless asked.
-_CLI_DEFAULTS = {
-    "epochs": 10,
-    "seed": 42,
-    "batch_size": 32,
-    "samples": 10000,
-    "patience": 10,
-    "psf_fwhm": 0.25,
-    "nse_sd": 1e-5,
-    "exp": "ideal",
-    "nn": "cnn",
-    "learning_rate": 1e-3,
-    "weight_decay": 1e-4,
-    "model_name": "my_model",
-    "plot": False,
-    "val_split": 0.2,
-    "eval_interval": 1,
-    "stamp_size": 53,
-    "pixel_size": 0.141,
-    "process_psf": False,
-    "galaxy_type": "research_backed",
-    "psf_type": "forklens_psf",
-    "fusion": "concat",
-    "apply_psf_shear": False,
-    "psf_shear_range": 0.05,
-    "gap": False,
-    "output_keys": ("g1", "g2"),
+# Argparse fallback defaults (used only when no ``--config`` file is given) are
+# derived from ``config/default_config.yaml`` so there is a single source of
+# truth. ``_ARG_TO_PATH`` maps each argparse name to its dotted config path.
+_ARG_TO_PATH = {
+    "epochs": "training.epochs",
+    "seed": "dataset.seed",
+    "batch_size": "training.batch_size",
+    "samples": "dataset.samples",
+    "patience": "training.patience",
+    "psf_fwhm": "dataset.psf_fwhm",
+    "nse_sd": "dataset.nse_sd",
+    "exp": "dataset.exp",
+    "nn": "model.type",
+    "learning_rate": "training.learning_rate",
+    "weight_decay": "training.weight_decay",
+    "model_name": "output.model_name",
+    "val_split": "training.val_split",
+    "eval_interval": "training.eval_interval",
+    "stamp_size": "dataset.stamp_size",
+    "pixel_size": "dataset.pixel_size",
+    "process_psf": "model.process_psf",
+    "galaxy_type": "model.galaxy.type",
+    "psf_type": "model.psf.type",
+    "fusion": "model.fusion",
+    "apply_psf_shear": "dataset.apply_psf_shear",
+    "psf_shear_range": "dataset.psf_shear_range",
+    "gap": "model.gap",
+    "output_keys": "model.output_keys",
+    "loss": "training.loss",
 }
+
+
+def _build_cli_defaults():
+    """Derive the argparse fallback defaults from ``default_config.yaml``."""
+    data = load_default_config()
+
+    def _get(path):
+        cur = data
+        for key in path.split("."):
+            cur = cur[key]
+        return cur
+
+    defaults = {arg: _get(path) for arg, path in _ARG_TO_PATH.items()}
+    defaults["output_keys"] = tuple(defaults["output_keys"])  # YAML list -> tuple
+    # ``plot`` intentionally differs from the YAML default: the bare CLI does not
+    # plot unless explicitly asked with --plot.
+    defaults["plot"] = False
+    return defaults
+
+
+_CLI_DEFAULTS = _build_cli_defaults()
 
 
 def _config_from_args(args):
@@ -360,6 +345,7 @@ def _config_from_args(args):
     config._set_nested(
         "training.loss_weights", args.loss_weights if args.loss_weights is not None else None
     )
+    config._set_nested("training.loss", args.loss if args.loss is not None else d["loss"])
     config._set_nested("catalog.cosmos_cat_fname", None)
     return config
 
@@ -375,7 +361,8 @@ def _apply_psf_model_fixup(config):
     nn = config.get("model.type")
     if process_psf:
         if nn != "fork-like":
-            logger.info(
+
+            logger.warning(
                 "\nWARNING: When --process-psf is enabled, it requires the fork-like model."
             )
             logger.info("Setting default fork-like model...")
@@ -390,7 +377,8 @@ def _apply_psf_model_fixup(config):
             )
     else:
         if nn == "fork-like":
-            logger.info(
+
+            logger.warning(
                 "\nWARNING: When --process-psf is disabled, fork-like model is not supported."
             )
             logger.info("Setting default model...")
@@ -409,8 +397,7 @@ def build_train_config(args):
     without the heavy GalSim/ngmix dependencies.
     """
     if args.config:
-        config = Config(args.config)
-        config = _unit_tests_config(config)
+        config = Config(args.config)  # schema normalization happens in Config
         config.update_from_args(args)
         logger.info(f"\nUsing config file: {args.config}")
         if any(getattr(args, k) is not None for k in _CLI_DEFAULTS.keys()):
@@ -436,7 +423,8 @@ def _prepare_training_data(config):
     spec = DatasetSpec.from_config(config)
     val_split = config.get("training.val_split")
 
-    galaxy_images, labels = generate_dataset(**spec.as_kwargs())
+
+    galaxy_images, labels = spec.build()
     # Split off the PSF channel only when the two-branch model needs it;
     # single-branch models leave psf_images as None.
     psf_images = None
@@ -456,8 +444,21 @@ def _prepare_training_data(config):
 
 
 def _save_run_artifacts(config, model_dir, norm_params):
-    """Persist the resolved config, label normalizer, and a model-source snapshot."""
+    """Persist the resolved config (with provenance) and the label normalizer.
+
+    Provenance — the ShearNet version and a sha256 of the model-source file — is
+    recorded into the saved config instead of copying ``models.py`` to
+    ``architecture.py``, so a run can be tied back to the exact architecture code
+    without snapshotting the source.
+    """
     os.makedirs(model_dir, exist_ok=True)
+
+    config._set_nested("provenance.shearnet_version", __version__)
+    try:
+        with open(shearnet.core.models.__file__, "rb") as f:
+            config._set_nested("provenance.models_sha256", hashlib.sha256(f.read()).hexdigest())
+    except OSError as e:
+        logger.warning(f"WARNING: could not hash model source for provenance: {e}")
 
     config_path = os.path.join(model_dir, "training_config.yaml")
     config.save(config_path)
@@ -465,15 +466,6 @@ def _save_run_artifacts(config, model_dir, norm_params):
 
     normalizer_path = os.path.join(model_dir, "label_normalizer.npz")
     save_normalizer(norm_params, normalizer_path)
-
-    try:
-        models_source = shearnet.core.models.__file__
-        architecture_dest = os.path.join(model_dir, "architecture.py")
-        shutil.copy2(models_source, architecture_dest)
-        logger.info(f"Model architecture saved to: {architecture_dest}")
-    except Exception as e:
-        logger.info(f"WARNING: Could not copy model architecture file: {e}")
-
 
 def _save_losses(loss_path, train_loss, val_loss, val_loss_per_key, output_keys):
     """Save the per-epoch loss histories to ``loss_path`` (no-op if ``None``)."""
@@ -524,12 +516,9 @@ def main():
     _save_run_artifacts(config, model_dir, norm_params)
 
     train_cfg = TrainConfig.from_config(config, save_path=save_path)
-    state, train_loss, val_loss, val_loss_per_key = train_model(
-        train_galaxy_images,
-        train_labels,
-        rng_key,
-        psf_images=train_psf_images,
-        **train_cfg.as_kwargs(),
+
+    state, train_loss, val_loss, val_loss_per_key = train_cfg.run(
+        train_galaxy_images, train_labels, rng_key, psf_images=train_psf_images
     )
 
     if plot_flag:

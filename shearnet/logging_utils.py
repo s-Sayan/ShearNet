@@ -20,9 +20,34 @@ Applications can adjust verbosity, e.g.::
 """
 
 import logging
+import os
 import sys
 
 _LOGGER_NAME = "shearnet"
+
+
+def supports_color(stream=None) -> bool:
+    """Whether ANSI color codes should be emitted to ``stream``.
+
+    Honors the ``NO_COLOR`` / ``FORCE_COLOR`` conventions, otherwise enables
+    color only when the stream is an interactive terminal.
+    """
+    stream = stream if stream is not None else sys.stdout
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    return hasattr(stream, "isatty") and stream.isatty()
+
+
+def ansi(code: str, stream=None) -> str:
+    """Return the ANSI ``code`` if the stream supports color, else ``""``.
+
+    Lets modules define color constants (``BOLD = ansi("\\033[1m")``) that simply
+    vanish when output is piped or redirected, instead of writing escape codes
+    into log files.
+    """
+    return code if supports_color(stream) else ""
 
 
 def configure_logging(level=logging.INFO, stream=None, force=False):

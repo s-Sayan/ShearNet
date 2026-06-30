@@ -12,6 +12,11 @@ import logging
 logging.getLogger("absl").setLevel(logging.ERROR)
 
 from .core.dataset import generate_dataset  # noqa: E402
+from .core.losses import (  # noqa: E402
+    LOSS_REGISTRY,
+    register_loss,
+    resolve_loss,
+)
 from .core.models import (  # noqa: E402
     EnhancedGalaxyNN,
     GalaxyResNet,
@@ -29,5 +34,8 @@ __all__ = [
     "EnhancedGalaxyNN",
     "GalaxyResNet",
     "train_model",
+    "register_loss",
+    "resolve_loss",
+    "LOSS_REGISTRY",
     "__version__",
 ]

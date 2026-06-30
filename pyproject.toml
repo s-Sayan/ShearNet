@@ -64,6 +64,7 @@ shearnet-eval = "shearnet.cli.evaluate:main"
 
 [tool.setuptools.packages.find]
 include = ["shearnet*"]
+exclude = ["research*", "tests*", "notebooks*"]
 
 [tool.setuptools.package-data]
 shearnet = ["config/*.yaml", "py.typed"]

@@ -1,10 +1,10 @@
 """Adaptive-moment measurement primitives for ShearNet.
 
-Lives in ``core`` (rather than ``utils.metrics``) so that ``core.dataset`` can
-measure PSF moments without importing the heavier ``utils.metrics`` module,
-which would otherwise create a ``core -> utils -> methods -> core`` cycle.
-``utils.metrics`` re-exports :func:`get_admoms_ngmix_fit` for backward
-compatibility.
+Lives in ``core`` (rather than the metrics module) so that ``core.dataset`` can
+measure PSF moments without importing the heavier metrics module, which would
+otherwise create a dependency cycle. :mod:`shearnet.metrics` (and the
+``shearnet.utils.metrics`` shim) re-export :func:`get_admoms_ngmix_fit` for
+backward compatibility.
 """
 
 import galsim

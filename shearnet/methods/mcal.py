@@ -2,6 +2,8 @@
 
 import numpy as np
 
+from ..core.dataset import sim_func
+
 
 def measure_moments(im):
     """Measure second-order moments for a GalSim image object or a NumPy array.
@@ -81,8 +83,6 @@ def calculate_responsivity(psf_sigma, seed, h=0.01):
     Returns:
         tuple: ``(R1, R2)`` responsivities for g1 and g2.
     """
-    from ..core.dataset import sim_func
-
     obj_im_p = sim_func(h, 0, seed=seed, psf_fwhm=psf_sigma)
     obj_im_m = sim_func(-h, 0, seed=seed, psf_fwhm=psf_sigma)
     e1p, _ = measure_e1e2(im=obj_im_p.image)

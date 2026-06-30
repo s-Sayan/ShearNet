@@ -2,7 +2,9 @@
 
 import os
 import sys
+from dataclasses import dataclass
 from glob import glob
+from typing import List, Optional
 
 import galsim
 import galsim.des
@@ -11,12 +13,27 @@ import numpy as np
 from astropy.io import fits
 from tqdm import tqdm
 
-from ..utils.simutils import create_wcs_from_params
 from .moments import get_admoms_ngmix_fit
+from .wcs import create_wcs_from_params
 
 from ..logging_utils import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class DatasetResult:
+    """Structured result of :func:`generate_dataset`.
+
+    A stable, self-describing alternative to the tuple return whose arity
+    otherwise changes with ``return_obs``. ``obs`` is populated only when the
+    dataset was generated with ``return_obs=True``.
+    """
+
+    images: np.ndarray
+    labels: np.ndarray
+    obs: Optional[List["ngmix.Observation"]] = None
+
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 SHEARNET_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
@@ -55,7 +72,7 @@ def _load_cosmos_cat(seed=42, cat_path=None):
             _cosmos_cat_cache = hdul[1].data
         return _cosmos_cat_cache
 
-    logger.info(
+    logger.warning(
         "WARNING: cosmos_catalog_train.fits not found. "
         "Using synthetic random catalog for g1/g2/hlr/flux."
     )
@@ -99,6 +116,7 @@ def generate_dataset(
     hlr_type="constant",
     flux_type="constant",
     cosmos_cat_fname=None,
+    as_result=False,
 ):
     """Simulate a dataset of galaxy postage stamps with known shear labels.
 
@@ -131,12 +149,16 @@ def generate_dataset(
         flux_type: ``'constant'`` or ``'catalog'`` flux.
         cosmos_cat_fname: Path to the COSMOS catalog FITS file; a synthetic
             random catalog is used as a fallback (e.g. in CI) when absent.
+        as_result: Return a :class:`DatasetResult` (stable shape regardless of
+            ``return_obs``) instead of a tuple.
 
     Returns:
-        ``(images, labels)`` as numpy arrays, or ``(images, labels, obs)`` when
-        ``return_obs=True``. ``images`` is ``(samples, npix, npix)`` for a single
-        channel, or has a trailing channel axis when ``return_psf``/``return_clean``
-        are set. ``labels`` has shape ``(samples, len(output_keys))``.
+        By default ``(images, labels)`` as numpy arrays, or ``(images, labels,
+        obs)`` when ``return_obs=True``. With ``as_result=True`` a
+        :class:`DatasetResult` is returned instead. ``images`` is
+        ``(samples, npix, npix)`` for a single channel, or has a trailing channel
+        axis when ``return_psf``/``return_clean`` are set. ``labels`` has shape
+        ``(samples, len(output_keys))``.
     """
     images = []
     labels = []
@@ -240,10 +262,17 @@ def generate_dataset(
 
         obs.append(obj_obs)
 
-    if return_obs:
-        return np.array(images), np.array(labels), obs
+    images_arr = np.array(images)
+    labels_arr = np.array(labels)
 
-    return np.array(images), np.array(labels)
+    if as_result:
+        # Opt-in structured return with a stable shape regardless of return_obs.
+        return DatasetResult(images_arr, labels_arr, obs if return_obs else None)
+
+    if return_obs:
+        return images_arr, labels_arr, obs
+
+    return images_arr, labels_arr
 
 
 def split_combined_images(combined_images, has_psf=False, has_clean=False):

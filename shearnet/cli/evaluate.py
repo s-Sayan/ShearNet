@@ -18,17 +18,18 @@ from flax.training import checkpoints, train_state
 from ..config.config_handler import Config
 from ..core.dataset import generate_dataset, split_combined_images
 from ..core.models import build_model
+from ..methods.ngmix import _get_priors, mp_fit_one, ngmix_pred
 from ..utils.normalization import inverse_transform_labels, load_normalizer
 
-from ..logging_utils import get_logger
+from ..logging_utils import ansi, get_logger
 
 logger = get_logger(__name__)
 
-BOLD = "\033[1m"
-CYAN = "\033[96m"
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-END = "\033[0m"
+BOLD = ansi("\033[1m")
+CYAN = ansi("\033[96m")
+GREEN = ansi("\033[92m")
+YELLOW = ansi("\033[93m")
+END = ansi("\033[0m")
 
 
 def create_parser():
@@ -270,7 +271,6 @@ def run_ngmix(obs, labels, config):
     Returns:
         tuple: ``(preds, mse, bias, elapsed_seconds)`` over the non-NaN fits.
     """
-    from ..methods.ngmix import _get_priors, mp_fit_one, ngmix_pred
 
     logger.info(f"\n{BOLD}Running NGmix metacalibration...{END}")
     start = time.time()

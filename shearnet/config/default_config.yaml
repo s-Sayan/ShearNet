@@ -35,7 +35,8 @@ training:
   patience: 10
   val_split: 0.2
   eval_interval: 1
-  
+  loss: "mse"  # registry name: mse, mae, huber (or one added via register_loss)
+
 # Evaluation configuration
 evaluation:
   test_samples: 1000

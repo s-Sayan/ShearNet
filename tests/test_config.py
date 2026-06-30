@@ -55,6 +55,33 @@ def test_explicit_psf_fwhm_wins_over_legacy(tmp_path, monkeypatch):
     assert cfg.get("dataset.psf_sigma") is None
 
 
+def test_unit_tests_schema_normalized(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHEARNET_DATA_PATH", str(tmp_path))
+    cfg_file = tmp_path / "uts.yaml"
+    cfg_file.write_text(
+        "meta:\n"
+        "  model_name: foo\n"
+        "train:\n"
+        "  epochs: 5\n"
+        "  batch_size: 16\n"
+        "image:\n"
+        "  stamp_size: 41\n"
+        "psf:\n"
+        "  gaussian_fwhm: 0.3\n"
+        "  mode: ideal\n"
+        "model:\n"
+        "  architecture: cnn\n"
+    )
+    cfg = Config(str(cfg_file))
+    assert cfg.get("output.model_name") == "foo"
+    assert cfg.get("training.epochs") == 5
+    assert cfg.get("training.batch_size") == 16
+    assert cfg.get("dataset.stamp_size") == 41
+    assert cfg.get("dataset.psf_fwhm") == 0.3
+    assert cfg.get("dataset.exp") == "ideal"
+    assert cfg.get("model.type") == "cnn"
+
+
 def test_get_missing_returns_default(tmp_path, monkeypatch):
     monkeypatch.setenv("SHEARNET_DATA_PATH", str(tmp_path))
     cfg = Config()

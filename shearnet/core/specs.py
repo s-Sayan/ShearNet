@@ -12,6 +12,8 @@ expands a spec back into the keyword arguments they already accept.
 from dataclasses import asdict, dataclass, field
 from typing import Optional, Tuple
 
+from .dataset import generate_dataset
+from .train import train_model
 
 @dataclass
 class DatasetSpec:
@@ -59,6 +61,13 @@ class DatasetSpec:
         """Return the spec as keyword arguments for ``generate_dataset``."""
         return asdict(self)
 
+    def build(self):
+        """Generate the dataset described by this spec.
+
+        Equivalent to ``generate_dataset(**spec.as_kwargs())``; lets callers drive
+        simulation from one object instead of a dozen keyword arguments.
+        """
+        return generate_dataset(**self.as_kwargs())
 
 @dataclass
 class TrainConfig:
@@ -85,6 +94,7 @@ class TrainConfig:
     output_keys: Tuple[str, ...] = ("g1", "g2")
     gap: bool = False
     weights: Optional[list] = field(default=None)
+    loss: str = "mse"
 
     @classmethod
     def from_config(cls, config, save_path=None) -> "TrainConfig":
@@ -106,8 +116,20 @@ class TrainConfig:
             output_keys=tuple(config.get("model.output_keys")),
             gap=config.get("model.gap"),
             weights=config.get("training.loss_weights"),
+            loss=config.get("training.loss", "mse"),
         )
 
     def as_kwargs(self) -> dict:
         """Return the config as keyword arguments for ``train_model``."""
         return asdict(self)
+
+    def run(self, galaxy_images, labels, rng_key, psf_images=None):
+        """Train a model with this configuration.
+
+        Equivalent to ``train_model(galaxy_images, labels, rng_key,
+        psf_images=psf_images, **cfg.as_kwargs())``; groups the ~16
+        hyperparameters into one object at the call site.
+        """
+        return train_model(
+            galaxy_images, labels, rng_key, psf_images=psf_images, **self.as_kwargs()
+        )

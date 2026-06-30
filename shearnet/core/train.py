@@ -7,11 +7,17 @@ import jax.numpy as jnp
 import optax
 from flax.training import checkpoints, train_state
 
+from .losses import resolve_loss
 from .models import build_model
 
 from ..logging_utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def _per_key_mse(preds, labels):
+    """Per-output-key MSE, used as a diagnostic breakdown during validation."""
+    return ((preds - labels) ** 2).mean(axis=0)
 
 
 def save_checkpoint(state, step, checkpoint_dir, model_name, overwrite=True):
@@ -132,6 +138,7 @@ def train_model(
     gap=False,
     weights=None,
     fusion="concat",
+    loss="mse",
 ):
     """Train a ShearNet model with validation and early stopping.
 
@@ -162,6 +169,11 @@ def train_model(
         gap: Use global-average-pooling in the model head where supported.
         weights: Optional per-key loss weights (defaults to all ones).
         fusion: ``fork-like`` fusion strategy, ``'concat'`` or ``'transformer'``.
+        loss: Training objective — a registry name (``'mse'`` default, ``'mae'``,
+            ``'huber'``, or any name added via
+            :func:`shearnet.core.losses.register_loss`) or a JAX callable
+            ``(preds, labels, weights) -> scalar``. The per-key validation
+            breakdown is always reported as MSE regardless of this objective.
 
     Returns:
         ``(state, train_losses, val_losses, val_losses_per_key)`` where ``state``
@@ -221,24 +233,57 @@ def train_model(
     train_losses, val_losses, val_losses_per_key = [], [], []
     best_val_loss = float("inf")
     patience_counter = 0
-
-    # The fork (two-branch) and single-branch paths share one epoch loop; they
-    # differ only in which JIT step they call and whether PSF stamps / per-key
-    # validation losses are involved.
+    
+    # Resolve the (named or callable) loss, then build loss-aware JIT steps that
+    # close over the loss, gap, output_keys and weights. The fork (two-branch)
+    # and single-branch paths share one epoch loop below; they differ only in
+    # which step they call and whether PSF stamps / per-key losses are involved.
     is_fork = nn == "fork-like"
+    loss_callable = resolve_loss(loss)
 
-    def _train_batch(state, gal, psf, lab):
-        if is_fork:
-            return fork_train_step(state, gal, psf, lab, output_keys, gap=gap, weights=weights)
-        return train_step(state, gal, lab, gap, weights=weights)
+    if is_fork:
 
-    def _eval_batch(state, gal, psf, lab):
-        """Return ``(loss, per_key_or_None)`` for one validation batch."""
-        if is_fork:
-            return fork_eval_step_per_key(
-                state, gal, psf, lab, output_keys, gap=gap, weights=weights
-            )
-        return eval_step(state, gal, lab, gap, weights=weights), None
+        @jax.jit
+        def _train_one(state, gal, psf, lab):
+            def _objective(params):
+                preds = state.apply_fn(params, gal, psf, output_keys, gap=gap)
+                return loss_callable(preds, lab, weights)
+
+            loss_val, grads = jax.value_and_grad(_objective)(state.params)
+            return state.apply_gradients(grads=grads), loss_val
+
+        @jax.jit
+        def _eval_one(state, gal, psf, lab):
+            preds = state.apply_fn(state.params, gal, psf, output_keys, gap=gap)
+            return loss_callable(preds, lab, weights), _per_key_mse(preds, lab)
+
+        def _train_batch(state, gal, psf, lab):
+            return _train_one(state, gal, psf, lab)
+
+        def _eval_batch(state, gal, psf, lab):
+            return _eval_one(state, gal, psf, lab)
+
+    else:
+
+        @jax.jit
+        def _train_one(state, gal, lab):
+            def _objective(params):
+                preds = state.apply_fn(params, gal, gap=gap)
+                return loss_callable(preds, lab, weights)
+
+            loss_val, grads = jax.value_and_grad(_objective)(state.params)
+            return state.apply_gradients(grads=grads), loss_val
+
+        @jax.jit
+        def _eval_one(state, gal, lab):
+            preds = state.apply_fn(state.params, gal, gap=gap)
+            return loss_callable(preds, lab, weights), _per_key_mse(preds, lab)
+
+        def _train_batch(state, gal, psf, lab):
+            return _train_one(state, gal, lab)
+
+        def _eval_batch(state, gal, psf, lab):
+            return _eval_one(state, gal, lab)
 
     for epoch in range(epochs):
         logger.info(f"Epoch {epoch + 1}/{epochs}")
