@@ -422,13 +422,13 @@ def sim_func(
         raise ValueError("For now only supported experiments are 'ideal' or 'superbit'")
 
     # Draw images
-    obj_im = obj.drawImage(nx=npix, ny=npix, scale=scale).array
-    psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
+    obj_im = obj.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
+    psf_im = psf.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
 
-    e1_positive_im = obj_e1_positive.drawImage(nx=npix, ny=npix, scale=scale).array
-    e1_negative_im = obj_e1_negative.drawImage(nx=npix, ny=npix, scale=scale).array
-    e2_positive_im = obj_e2_positive.drawImage(nx=npix, ny=npix, scale=scale).array
-    e2_negative_im = obj_e2_negative.drawImage(nx=npix, ny=npix, scale=scale).array
+    e1_positive_im = obj_e1_positive.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
+    e1_negative_im = obj_e1_negative.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
+    e2_positive_im = obj_e2_positive.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
+    e2_negative_im = obj_e2_negative.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
 
     # Add noise
     nse = rng.normal(size=obj_im.shape, scale=nse_sd)
@@ -474,7 +474,7 @@ def sim_func(
         sheared_im = sheared_gal.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
     except galsim.errors.GalSimFFTSizeError:
         # Only use slow real_space rendering if FFT fails
-        sheared_im = sheared_gal.drawImage(nx=npix, ny=npix, scale=scale, method="real_space").array
+        sheared_im = sheared_gal.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale, method="real_space").array
 
     obj_obs.update_meta_data(
         {

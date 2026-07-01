@@ -360,10 +360,11 @@ def _apply_psf_model_fixup(config):
     process_psf = config.get("model.process_psf")
     nn = config.get("model.type")
     if process_psf:
-        if nn != "fork-like":
+        if not shearnet.core.models.is_fork_model(nn):
 
             logger.warning(
-                "\nWARNING: When --process-psf is enabled, it requires the fork-like model."
+                "\nWARNING: When --process-psf is enabled, it requires a fork-like model "
+                "('fork-like' or 'd4-fork-like')."
             )
             logger.info("Setting default fork-like model...")
             nn = "fork-like"
@@ -376,10 +377,10 @@ def _apply_psf_model_fixup(config):
                 f"Model type changed to: '{nn}' with galaxy: '{galaxy_type}', psf: '{psf_type}'\n"
             )
     else:
-        if nn == "fork-like":
+        if shearnet.core.models.is_fork_model(nn):
 
             logger.warning(
-                "\nWARNING: When --process-psf is disabled, fork-like model is not supported."
+                "\nWARNING: When --process-psf is disabled, fork-like models are not supported."
             )
             logger.info("Setting default model...")
             nn = _CLI_DEFAULTS["nn"]

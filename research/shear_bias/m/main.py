@@ -192,10 +192,10 @@ def make_data(rng, noise, shear_true):
     objp_psf = galsim.Convolve(psf, objp, gsparams=gsp)
     objm_psf = galsim.Convolve(psf, objm, gsparams=gsp)
 
-    psf_im = psf.drawImage(nx=npix_psf, ny=npix_psf, scale=scale).array
-    im_0 = obj0_psf.drawImage(nx=npix, ny=npix, scale=scale).array
-    im_p = objp_psf.drawImage(nx=npix, ny=npix, scale=scale).array
-    im_m = objm_psf.drawImage(nx=npix, ny=npix, scale=scale).array
+    psf_im = psf.withGSParams(gsp).drawImage(nx=npix_psf, ny=npix_psf, scale=scale).array
+    im_0 = obj0_psf.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
+    im_p = objp_psf.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
+    im_m = objm_psf.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
 
     psf_im += rng.normal(scale=psf_noise, size=psf_im.shape)
     im_noise = rng.normal(scale=noise, size=im_0.shape)

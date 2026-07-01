@@ -32,7 +32,7 @@ def test_builtin_losses_are_scalars_and_nonnegative():
 
 def test_resolve_loss_by_name_and_callable():
     assert resolve_loss("mse") is mse_loss
-    custom = lambda p, l, w: jnp.abs(p - l).sum()  # noqa: E731
+    custom = lambda p, lab, w: jnp.abs(p - lab).sum()  # noqa: E731
     assert resolve_loss(custom) is custom
 
 
@@ -47,8 +47,8 @@ def test_resolve_loss_bad_type_raises():
 
 
 def test_register_loss_then_resolve():
-    def log_cosh(p, l, w):
-        return (jnp.log(jnp.cosh(p - l)) * w[None, :]).mean()
+    def log_cosh(p, lab, w):
+        return (jnp.log(jnp.cosh(p - lab)) * w[None, :]).mean()
 
     register_loss("log_cosh_test", log_cosh)
     assert "log_cosh_test" in LOSS_REGISTRY

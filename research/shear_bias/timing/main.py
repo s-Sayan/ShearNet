@@ -237,8 +237,8 @@ def make_data(rng):
     obj0 = galsim.Exponential(half_light_radius=gal_hlr, flux=gal_flux).shear(q=q, beta=phi)
     obj0 = obj0.shift(dx=dx, dy=dy)
 
-    psf_im = psf.drawImage(nx=PSF_NPIX, ny=PSF_NPIX, scale=scale).array
-    im_0   = galsim.Convolve(psf, obj0, gsparams=gsp).drawImage(nx=NPIX, ny=NPIX, scale=scale).array
+    psf_im = psf.withGSParams(gsp).drawImage(nx=PSF_NPIX, ny=PSF_NPIX, scale=scale).array
+    im_0   = galsim.Convolve(psf, obj0, gsparams=gsp).withGSParams(gsp).drawImage(nx=NPIX, ny=NPIX, scale=scale).array
     im_0  += rng.normal(scale=NOISE, size=im_0.shape)
 
     cen     = (np.array(im_0.shape)   - 1.0) / 2.0

@@ -17,12 +17,12 @@ from shearnet.metrics import (  # noqa: E402
 def test_remove_nan_preds_drops_nan_rows():
     preds = np.array([[1.0, 2.0], [np.nan, 1.0], [3.0, 4.0]])
     labels = np.array([[0.0, 0.0], [9.0, 9.0], [1.0, 1.0]])
-    p, l = remove_nan_preds(preds, labels)
+    p, lab = remove_nan_preds(preds, labels)
     assert p.shape == (2, 2)
-    assert l.shape == (2, 2)
+    assert lab.shape == (2, 2)
     assert not np.isnan(p).any()
     # the surviving labels are the non-NaN rows
-    assert np.allclose(l, np.array([[0.0, 0.0], [1.0, 1.0]]))
+    assert np.allclose(lab, np.array([[0.0, 0.0], [1.0, 1.0]]))
 
 
 def test_remove_nan_preds_multi_drops_union_of_nans():

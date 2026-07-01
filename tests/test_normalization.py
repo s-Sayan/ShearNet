@@ -1,7 +1,6 @@
 """Round-trip and persistence tests for label normalization (numpy only)."""
 
 import numpy as np
-import pytest
 
 from shearnet.utils.normalization import (
     fit_normalizer,

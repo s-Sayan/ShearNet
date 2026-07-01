@@ -8,7 +8,7 @@ import optax
 from flax.training import checkpoints, train_state
 
 from .losses import resolve_loss
-from .models import build_model
+from .models import build_model, is_fork_model
 
 from ..logging_utils import get_logger
 
@@ -156,8 +156,11 @@ def train_model(
         epochs: Maximum number of training epochs.
         batch_size: Mini-batch size.
         nn: Architecture name — one of ``'mlp'``, ``'cnn'``, ``'resnet'``,
-            ``'research_backed'``, ``'forklens_psfnet'``, or ``'fork-like'``.
-        galaxy_type, psf_type: Sub-model types for the two ``fork-like`` branches.
+            ``'research_backed'``, ``'forklens_psfnet'``, ``'fork-like'``, or
+            ``'d4-fork-like'`` (the D4-equivariant two-branch model). The two
+            fork models require ``psf_images``.
+        galaxy_type, psf_type: Sub-model types for the two ``fork-like`` branches
+            (ignored by ``'d4-fork-like'``, which uses its own smooth backbones).
         save_path: Directory to write the best checkpoint to (no save if ``None``).
         model_name: Checkpoint filename prefix.
         val_split: Fraction of the data held out for validation.
@@ -182,8 +185,8 @@ def train_model(
     """
     # The two-branch 'fork-like' model needs PSF stamps; single-branch models
     # ignore them, so psf_images is optional for everything else.
-    if nn == "fork-like" and psf_images is None:
-        raise ValueError("nn='fork-like' requires psf_images, but none were given.")
+    if is_fork_model(nn) and psf_images is None:
+        raise ValueError(f"nn='{nn}' requires psf_images, but none were given.")
 
     # Split into train and validation sets
     split_idx = int(len(galaxy_images) * (1 - val_split))
@@ -205,7 +208,7 @@ def train_model(
 
     model = build_model(nn, galaxy_type=galaxy_type, psf_type=psf_type, fusion=fusion)
 
-    if nn == "fork-like":
+    if is_fork_model(nn):
         params = model.init(
             rng_key,
             jnp.ones_like(galaxy_images[0]),
@@ -238,7 +241,7 @@ def train_model(
     # close over the loss, gap, output_keys and weights. The fork (two-branch)
     # and single-branch paths share one epoch loop below; they differ only in
     # which step they call and whether PSF stamps / per-key losses are involved.
-    is_fork = nn == "fork-like"
+    is_fork = is_fork_model(nn)
     loss_callable = resolve_loss(loss)
 
     if is_fork:

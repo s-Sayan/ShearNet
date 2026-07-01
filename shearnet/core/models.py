@@ -690,6 +690,275 @@ class ForkLike(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# D4-equivariant fork-like model
+#
+# Implements the D4CNN construction of Lin et al. (2026), "D4CNN x AnaCal:
+# Physics-Informed Machine Learning for Accurate and Precise Weak Lensing Shear
+# Estimation" (arXiv:2603.19046), adapted to ShearNet's two-branch (galaxy +
+# PSF) ``fork-like`` layout with an optional transformer fusion.
+#
+# The idea: galaxy ellipticity is a spin-2 quantity, so under the D4 group
+# (90-degree rotations + mirrors) the two shape components must transform as
+#     e1 -> w1(g) e1,   e2 -> w2(g) e2,   with w1, w2 in {+1, -1}.
+# Rather than hoping the network learns this, we hard-code it. For each of the
+# eight group elements g_i we push the (jointly transformed) galaxy+PSF pair
+# through an arbitrary backbone F, map the resulting feature map *back* to the
+# reference frame with g_i^{-1}, and take a sign-weighted average
+#     Psi_c = (1/8) sum_i w_c(g_i) g_i^{-1} F(g_i . input),   c in {1, 2}.
+# This Reynolds (group-averaging) operator is exactly spin-2 equivariant for an
+# *arbitrary* F, so the transformer fusion (with absolute positional embeddings)
+# can sit inside it without breaking the symmetry. A D4-symmetric Gaussian
+# window + global-average-pool collapses each Psi_c to a channel vector whose
+# only D4 transformation is the overall sign w_c(g); a bias-free, tanh ("odd")
+# MLP then preserves that sign, yielding outputs that transform as e1, e2.
+# ---------------------------------------------------------------------------
+
+
+def _d4_apply(x, i):
+    """Apply the ``i``-th D4 group element to a batched image ``x``.
+
+    ``x`` has shape ``(batch, H, W[, C])`` and the group acts on the spatial
+    axes ``(1, 2)``. Element ``i`` is decomposed as ``R90**r . P**m`` with
+    ``r = i % 4`` (number of 90-degree rotations) and ``m = i // 4`` (mirror
+    flag), giving the eight elements ``i = 0..7``.
+    """
+    r, m = i % 4, i // 4
+    if m:
+        x = jnp.flip(x, axis=1)
+    if r:
+        x = jnp.rot90(x, r, axes=(1, 2))
+    return x
+
+
+def _d4_inverse_apply(x, i):
+    """Apply the inverse of the ``i``-th D4 element (undoes :func:`_d4_apply`)."""
+    r, m = i % 4, i // 4
+    if r:
+        x = jnp.rot90(x, -r, axes=(1, 2))
+    if m:
+        x = jnp.flip(x, axis=1)
+    return x
+
+
+# Sign of the spin-2 representation for each group element i = 0..7.
+#   w1(g) = (-1)**r            (e1 = |e| cos 2theta is even under mirror)
+#   w2(g) = (-1)**(r + m)      (e2 = |e| sin 2theta flips under mirror)
+# These reproduce Eqs. (25)-(26) of Lin et al. (2026):
+#   Psi_1 signs: +, -, +, -, +, -, +, -
+#   Psi_2 signs: +, -, +, -, -, +, -, +
+_D4_W1 = jnp.array([(-1.0) ** (i % 4) for i in range(8)])
+_D4_W2 = jnp.array([(-1.0) ** ((i % 4) + (i // 4)) for i in range(8)])
+
+
+def _d4_gaussian_window(size, sigma_frac=0.25):
+    """A centred, D4-symmetric Gaussian window of shape ``(size, size)``.
+
+    The window depends only on the squared radius from the centre, so it is
+    invariant under the D4 group; multiplying a feature map by it before global
+    average pooling therefore keeps the pooled feature D4-invariant (up to the
+    overall spin-2 sign) while down-weighting the noisy stamp edges, following
+    the Gaussian-kernel step of Lin et al. (2026, Sec. 2.3.1).
+    """
+    center = (size - 1) / 2.0
+    coord = jnp.arange(size) - center
+    yy, xx = jnp.meshgrid(coord, coord, indexing="ij")
+    sigma = sigma_frac * size
+    win = jnp.exp(-(xx**2 + yy**2) / (2.0 * sigma**2))
+    return win / jnp.sum(win)
+
+
+class _D4SmoothCNN(nn.Module):
+    """Smooth convolutional backbone for a D4 branch (galaxy or PSF).
+
+    Uses GeLU activations, average pooling and layer normalisation only -- no
+    ReLU or max-pooling -- so the mapping is continuously differentiable, a
+    prerequisite for the analytic (gradient-based) shear calibration discussed
+    in Lin et al. (2026, Sec. 2.1.2). Returns a square spatial feature map so
+    the D4 orbit alignment (which uses ``rot90``) is well defined.
+    """
+
+    features: tuple = (16, 32)
+    kernel_size: tuple = (3, 3)
+
+    @nn.compact
+    def __call__(self, x):
+        """Map ``(batch, H, W)`` to a spatial feature map ``(batch, H', W', C)``."""
+        if x.ndim == 2:
+            x = jnp.expand_dims(x, axis=0)
+        x = jnp.expand_dims(x, axis=-1)
+        for feat in self.features:
+            x = nn.Conv(feat, self.kernel_size, padding="SAME")(x)
+            x = nn.LayerNorm()(x)
+            x = nn.gelu(x)
+            x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
+        return x
+
+
+class _D4SpatialTransformerFusion(nn.Module):
+    """Transformer fusion that returns a *spatial* galaxy-frame feature map.
+
+    Like :class:`TransformerFusion` (galaxy tokens cross-attend to PSF tokens,
+    then self-attend), but instead of pooling to a prediction it reshapes the
+    refined galaxy tokens back to ``(batch, H_g, W_g, d_model)``. Keeping the
+    output spatial lets the enclosing :class:`D4ForkLike` undo the orbit
+    transformation and build the equivariant features. All activations are the
+    smooth GeLU.
+    """
+
+    d_model: int = 64
+    num_heads: int = 4
+    num_self_attn_layers: int = 1
+
+    @nn.compact
+    def __call__(self, galaxy_map, psf_map, deterministic: bool = True):
+        """Fuse the two maps and return a galaxy-frame spatial feature map."""
+        batch, H_g, W_g = galaxy_map.shape[0], galaxy_map.shape[1], galaxy_map.shape[2]
+        H_p, W_p = psf_map.shape[1], psf_map.shape[2]
+
+        gal_proj = nn.Conv(self.d_model, (1, 1), use_bias=False)(galaxy_map)
+        psf_proj = nn.Conv(self.d_model, (1, 1), use_bias=False)(psf_map)
+
+        gal_tokens = gal_proj.reshape(batch, H_g * W_g, self.d_model)
+        psf_tokens = psf_proj.reshape(batch, H_p * W_p, self.d_model)
+
+        gal_pos = self.param(
+            "gal_pos_embed", nn.initializers.normal(0.02), (1, H_g * W_g, self.d_model)
+        )
+        psf_pos = self.param(
+            "psf_pos_embed", nn.initializers.normal(0.02), (1, H_p * W_p, self.d_model)
+        )
+        gal_tokens = gal_tokens + gal_pos
+        psf_tokens = psf_tokens + psf_pos
+
+        gal_norm = nn.LayerNorm()(gal_tokens)
+        psf_norm = nn.LayerNorm()(psf_tokens)
+        cross_out = nn.MultiHeadDotProductAttention(num_heads=self.num_heads)(gal_norm, psf_norm)
+        gal_tokens = gal_tokens + cross_out
+
+        for _ in range(self.num_self_attn_layers):
+            gal_norm = nn.LayerNorm()(gal_tokens)
+            self_out = nn.MultiHeadDotProductAttention(num_heads=self.num_heads)(gal_norm, gal_norm)
+            gal_tokens = gal_tokens + self_out
+
+        # Back to a galaxy-frame spatial map for orbit alignment.
+        return gal_tokens.reshape(batch, H_g, W_g, self.d_model)
+
+
+class D4ForkLike(nn.Module):
+    """D4-equivariant two-branch shear estimator (``nn='d4-fork-like'``).
+
+    Combines ShearNet's fork-like galaxy/PSF split with the hard-coded D4
+    symmetry of Lin et al. (2026). The galaxy and PSF stamps are transformed
+    together over the eight-element D4 orbit; a shared smooth backbone + fusion
+    produces one feature map per orbit element; these are aligned back to the
+    reference frame and combined with the spin-2 sign weights to form the
+    equivariant feature maps Psi_1, Psi_2. A D4-symmetric Gaussian window and
+    global-average-pool reduce them to channel vectors, and bias-free tanh
+    ("odd") MLPs map those to the shape components ``(g1, g2)``.
+
+    By construction the first two outputs transform *exactly* as a spin-2
+    vector under 90-degree rotations and mirrors (up to float32 round-off).
+    Any additional ``output_keys`` beyond the first two are treated as
+    D4-invariant scalars and regressed from the invariant orbit average.
+
+    Attributes:
+        fusion: ``'transformer'`` (galaxy cross-attends to PSF, the intended
+            configuration) or ``'concat'`` (PSF summarised as a global context
+            vector broadcast onto the galaxy map).
+        galaxy_features / psf_features: channel widths of the smooth backbones.
+        d_model / num_heads: transformer-fusion width and attention heads.
+    """
+
+    fusion: str = "transformer"
+    galaxy_features: tuple = (16, 32)
+    psf_features: tuple = (16, 32)
+    d_model: int = 64
+    num_heads: int = 4
+
+    def _fuse(self, galaxy_map, psf_map, deterministic):
+        """Fuse galaxy/PSF maps into a single galaxy-frame spatial map."""
+        if self.fusion == "transformer":
+            return _D4SpatialTransformerFusion(d_model=self.d_model, num_heads=self.num_heads)(
+                galaxy_map, psf_map, deterministic=deterministic
+            )
+        # 'concat': summarise the PSF as a global descriptor and broadcast it
+        # onto every galaxy spatial location, keeping the galaxy spatial frame.
+        psf_global = jnp.mean(psf_map, axis=(1, 2), keepdims=True)
+        psf_global = jnp.broadcast_to(
+            psf_global, galaxy_map.shape[:3] + (psf_map.shape[-1],)
+        )
+        return jnp.concatenate([galaxy_map, psf_global], axis=-1)
+
+    @nn.compact
+    def __call__(
+        self,
+        galaxy_image,
+        psf_image,
+        output_keys: tuple = ("g1", "g2"),
+        deterministic: bool = False,
+        gap: bool = False,
+    ):
+        """Run the D4 orbit, build equivariant features, and return predictions."""
+        if galaxy_image.ndim == 2:
+            galaxy_image = jnp.expand_dims(galaxy_image, axis=0)
+        if psf_image.ndim == 2:
+            psf_image = jnp.expand_dims(psf_image, axis=0)
+        batch = galaxy_image.shape[0]
+
+        galaxy_backbone = _D4SmoothCNN(features=self.galaxy_features)
+        psf_backbone = _D4SmoothCNN(features=self.psf_features)
+
+        # Build the D4 orbit of the (galaxy, PSF) pair and stack it into the
+        # batch axis so the shared backbone/fusion runs once over all 8 copies.
+        gal_orbit = jnp.concatenate([_d4_apply(galaxy_image, i) for i in range(8)], axis=0)
+        psf_orbit = jnp.concatenate([_d4_apply(psf_image, i) for i in range(8)], axis=0)
+
+        gal_maps = galaxy_backbone(gal_orbit)
+        psf_maps = psf_backbone(psf_orbit)
+        fused = self._fuse(gal_maps, psf_maps, deterministic)  # (8*batch, H, W, C)
+
+        H, W, C = fused.shape[1], fused.shape[2], fused.shape[3]
+        fused = fused.reshape(8, batch, H, W, C)
+
+        # Align each orbit member back to the reference frame with g_i^{-1}.
+        aligned = jnp.stack([_d4_inverse_apply(fused[i], i) for i in range(8)], axis=0)
+
+        # Sign-weighted (Reynolds) averages -> equivariant feature maps.
+        psi1 = jnp.mean(_D4_W1[:, None, None, None, None] * aligned, axis=0)
+        psi2 = jnp.mean(_D4_W2[:, None, None, None, None] * aligned, axis=0)
+
+        # D4-symmetric Gaussian window + global average pool -> channel vectors.
+        window = _d4_gaussian_window(H)[None, :, :, None]
+        s1 = jnp.sum(psi1 * window, axis=(1, 2))
+        s2 = jnp.sum(psi2 * window, axis=(1, 2))
+
+        # Bias-free tanh ("odd") MLPs preserve the spin-2 sign of the features.
+        def odd_mlp(z, name):
+            z = nn.Dense(128, use_bias=False, name=f"{name}_dense0")(z)
+            z = nn.tanh(z)
+            z = nn.Dense(1, use_bias=False, name=f"{name}_dense1")(z)
+            return z[:, 0]
+
+        n_out = len(output_keys)
+        columns = []
+        if n_out >= 1:
+            columns.append(odd_mlp(s1, "odd_e1"))
+        if n_out >= 2:
+            columns.append(odd_mlp(s2, "odd_e2"))
+
+        # Extra outputs (e.g. hlr, flux) are D4-invariant scalars: regress them
+        # from the sign-free (invariant) orbit average via a plain MLP.
+        if n_out > 2:
+            psi_inv = jnp.mean(aligned, axis=0)
+            s_inv = jnp.sum(psi_inv * window, axis=(1, 2))
+            h = nn.gelu(nn.Dense(128)(s_inv))
+            extra = nn.Dense(n_out - 2)(h)
+            columns.extend(extra[:, k] for k in range(n_out - 2))
+
+        return jnp.stack(columns, axis=-1)
+
+
+# ---------------------------------------------------------------------------
 # Model registries and factories
 #
 # Single source of truth for the architecture-name -> class mapping, replacing
@@ -729,15 +998,32 @@ def build_branch_model(model_type):
         raise ValueError(f"Invalid model type specified: {model_type}")
 
 
+# Two-branch architectures that take a (galaxy, PSF) image pair rather than a
+# single stamp. Used by the training/evaluation code to decide whether to feed
+# PSF images through the model.
+FORK_MODELS = frozenset({"fork-like", "d4-fork-like"})
+
+
+def is_fork_model(nn):
+    """Return ``True`` if architecture ``nn`` takes a (galaxy, PSF) pair."""
+    return nn in FORK_MODELS
+
+
 def build_model(nn, galaxy_type="cnn", psf_type="cnn", fusion="concat"):
     """Instantiate a top-level architecture from its ``nn`` name.
 
-    The two-branch ``fork-like`` model is constructed with the given branch and
-    fusion settings; every other name maps to a single-branch architecture in
-    :data:`SINGLE_BRANCH_MODELS`.
+    The two-branch ``fork-like`` and ``d4-fork-like`` models are constructed
+    with the given branch/fusion settings; every other name maps to a
+    single-branch architecture in :data:`SINGLE_BRANCH_MODELS`.
+
+    ``d4-fork-like`` is the D4-equivariant variant (Lin et al. 2026): it ignores
+    ``galaxy_type``/``psf_type`` (it uses its own smooth backbones) and honours
+    ``fusion`` (``'transformer'`` or ``'concat'``).
     """
     if nn == "fork-like":
         return ForkLike(galaxy_model_type=galaxy_type, psf_model_type=psf_type, fusion=fusion)
+    if nn == "d4-fork-like":
+        return D4ForkLike(fusion=fusion)
     try:
         return SINGLE_BRANCH_MODELS[nn]()
     except KeyError:

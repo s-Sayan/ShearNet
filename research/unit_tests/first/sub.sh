@@ -4,7 +4,7 @@ set -euo pipefail
 
 # --- self-locate -------------------------------------------------
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$ROOT/../.." && pwd)"
+REPO="$(cd "$ROOT/../../.." && pwd)"
 CONFIG="$ROOT/config.yaml"
 
 # --- submit helper -----------------------------------------------

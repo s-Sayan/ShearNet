@@ -85,8 +85,8 @@ def make_data(rng, noise):
     obj0 = obj0.shift(dx=dx, dy=dy)
     obj0_psf = galsim.Convolve(psf, obj0, gsparams=galsim.GSParams(maximum_fft_size=32768))
 
-    psf_im = psf.drawImage(nx=npix_psf, ny=npix_psf, scale=scale).array
-    im_0   = obj0_psf.drawImage(nx=npix, ny=npix, scale=scale).array
+    psf_im = psf.withGSParams(gsp).drawImage(nx=npix_psf, ny=npix_psf, scale=scale).array
+    im_0   = obj0_psf.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
     im_0  += rng.normal(scale=noise, size=im_0.shape)
     
     cen = (np.array(im_0.shape)-1.0)/2.0

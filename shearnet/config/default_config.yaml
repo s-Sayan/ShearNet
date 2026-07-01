@@ -16,15 +16,16 @@ dataset:
 # Model configuration  
 model:
   process_psf: False
-  type: "cnn"  # Options: mlp, cnn, resnet, forklens_psf, 
-               #          research_backed, and fork-like
+  type: "cnn"  # Options: mlp, cnn, resnet, forklens_psf,
+               #          research_backed, fork-like, and d4-fork-like
+               #          (D4-equivariant two-branch model, Lin et al. 2026)
   galaxy:
     type: "research_backed"
   psf:
     type: "forklens_psf"
   output_keys: ['g1', 'g2']
   gap: False
-  fusion: "concat"  # Options: concat, transformer (fork-like only)
+  fusion: "concat"  # Options: concat, transformer (fork-like / d4-fork-like only)
   
 # Training configuration
 training:
