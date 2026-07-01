@@ -135,7 +135,8 @@ def generate_dataset(
         exp: Experiment / PSF mode, ``'ideal'`` or ``'superbit'``.
         nse_sd: Standard deviation of the additive Gaussian noise.
         seed: Base random seed for reproducibility.
-        return_clean: Also stack the noise-free galaxy image as an extra channel.
+        return_clean: Deprecated/unsupported; raises ``NotImplementedError`` if
+            set (the noise-free clean image was removed from ``sim_func``).
         return_psf: Also stack the PSF image as an extra channel.
         return_obs: Additionally return the list of ngmix ``Observation`` objects.
         apply_psf_shear: Apply a random shear to the PSF (``exp='ideal'`` only).
@@ -226,19 +227,16 @@ def generate_dataset(
 
         galaxy_images = obj_obs.image
         psf_images = obj_obs.psf.image
-        clean_images = obj_obs.meta["clean_image"]
 
-        if return_psf and return_clean:
-            # Create (height, width, 3) array: [galaxy, psf, clean]
-            combined_images = np.stack([galaxy_images, psf_images, clean_images], axis=-1)
-            images.append(combined_images)
-        elif return_psf:
+        if return_clean:
+            raise NotImplementedError(
+                "return_clean is no longer supported: the noise-free clean image was "
+                "removed from sim_func (it was unused and could trigger oversized FFTs "
+                "for compact galaxies)."
+            )
+        if return_psf:
             # Create (height, width, 2) array: [galaxy, psf]
             combined_images = np.stack([galaxy_images, psf_images], axis=-1)
-            images.append(combined_images)
-        elif return_clean:
-            # Create (height, width, 2) array: [galaxy, clean]
-            combined_images = np.stack([galaxy_images, clean_images], axis=-1)
             images.append(combined_images)
         else:
             # Just galaxy images
@@ -319,6 +317,18 @@ def split_combined_images(combined_images, has_psf=False, has_clean=False):
         raise ValueError(f"Unexpected number of channels: {combined_images.shape[-1]}")
 
 
+def _safe_draw(obj, npix, scale):
+    """Draw ``obj`` onto an ``(npix, npix)`` array.
+
+    Attempt a normal (FFT) draw and fall back to slower real-space rendering if
+    the FFT is too large, which can happen for very compact objects.
+    """
+    try:
+        return obj.drawImage(nx=npix, ny=npix, scale=scale).array
+    except galsim.errors.GalSimFFTSizeError:
+        return obj.drawImage(nx=npix, ny=npix, scale=scale, method="real_space").array
+
+
 def sim_func(
     g1,
     g2,
@@ -342,8 +352,8 @@ def sim_func(
 
     Builds a sheared, randomly-shifted galaxy, convolves it with the chosen PSF,
     draws the noisy image, fits the PSF adaptive moments, and packages everything
-    into an ngmix ``Observation``. The metadata also stores the clean image and
-    the +/- e1/e2 sheared counterparts used for metacalibration-style responses.
+    into an ngmix ``Observation``. The metadata also stores the +/- e1/e2 sheared
+    counterparts used for metacalibration-style responses.
 
     Args:
         g1, g2: Intrinsic shear of the galaxy.
@@ -364,7 +374,7 @@ def sim_func(
 
     Returns:
         ngmix.Observation: The noisy galaxy observation, with its ``psf`` set and
-        ``meta`` populated with ``snr``, ``clean_image`` and the metacal images.
+        ``meta`` populated with ``snr`` and the metacal images.
     """
     rng = np.random.RandomState(seed=seed)
 
@@ -422,13 +432,13 @@ def sim_func(
         raise ValueError("For now only supported experiments are 'ideal' or 'superbit'")
 
     # Draw images
-    obj_im = obj.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
-    psf_im = psf.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
+    obj_im = _safe_draw(obj.withGSParams(gsp), npix, scale)
+    psf_im = _safe_draw(psf.withGSParams(gsp), npix, scale)
 
-    e1_positive_im = obj_e1_positive.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
-    e1_negative_im = obj_e1_negative.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
-    e2_positive_im = obj_e2_positive.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
-    e2_negative_im = obj_e2_negative.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
+    e1_positive_im = _safe_draw(obj_e1_positive.withGSParams(gsp), npix, scale)
+    e1_negative_im = _safe_draw(obj_e1_negative.withGSParams(gsp), npix, scale)
+    e2_positive_im = _safe_draw(obj_e2_positive.withGSParams(gsp), npix, scale)
+    e2_negative_im = _safe_draw(obj_e2_negative.withGSParams(gsp), npix, scale)
 
     # Add noise
     nse = rng.normal(size=obj_im.shape, scale=nse_sd)
@@ -469,17 +479,9 @@ def sim_func(
     # Calculate SNR using ngmix built-in method
     snr = obj_obs.get_s2n()
 
-    # Store the clean image as an attribute
-    try:
-        sheared_im = sheared_gal.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale).array
-    except galsim.errors.GalSimFFTSizeError:
-        # Only use slow real_space rendering if FFT fails
-        sheared_im = sheared_gal.withGSParams(gsp).drawImage(nx=npix, ny=npix, scale=scale, method="real_space").array
-
     obj_obs.update_meta_data(
         {
             "snr": snr,
-            "clean_image": sheared_im,
             "e1_positive": e1_positive_im,
             "e1_negative": e1_negative_im,
             "e2_positive": e2_positive_im,
