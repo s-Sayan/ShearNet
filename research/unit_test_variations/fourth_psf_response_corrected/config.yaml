@@ -1,9 +1,9 @@
 meta:
-  model_name: second_validation_test
-  description: "superbit PSF; g1/g2 from catalog; constant hlr, flux, noise"
+  model_name: fourth_validation_test
+  description: "superbit PSF; g1, g2, hlr, flux from catalog; constant noise"
 
 paths:
-  root: /home/adfield/ShearNet/unit_tests/second
+  root: /home/adfield/ShearNet/research/unit_test_variations/fourth_psf_response_corrected
   psfex_model_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
   train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
   eval_catalog:  /home/adfield/ShearNet/cosmos_catalog_eval.fits
@@ -22,8 +22,8 @@ psf:
   noise: 1.0e-6             # consumed by the bias test;
 
 galaxy:
-  hlr_type:  constant       # constant | catalog
-  flux_type: constant       # constant | catalog
+  hlr_type:  catalog        # constant | catalog
+  flux_type: catalog        # constant | catalog
   hlr:  0.5                 # value used when *_type is constant
   flux: 12258.97
 
@@ -32,8 +32,8 @@ model:
   process_psf: true
   galaxy_branch: research_backed
   psf_branch:    forklens_psf
-  fusion: concat                   # concat | transformer
-  output_keys: [g1, g2]
+  fusion: transformer                   # concat | transformer
+  output_keys: [g1, g2, hlr, flux]
   gap: true
 
 train:
@@ -42,11 +42,11 @@ train:
   epochs: 80
   batch_size: 128
   learning_rate: 1.0e-4
-  weight_decay:  1.0e-3
+  weight_decay:  1.5e-2
   patience: 20
   val_split: 0.2
   eval_interval: 1
-  loss_weights: [1.0, 1.0]   # one per output_key, in order
+  loss_weights: [1.0, 1.0, 1.0, 1.0]   # one per output_key, in order
   plot: true
 
 eval:
@@ -63,7 +63,7 @@ eval:
 
   leakage:                   # PSF leakage
     psf_model: em5
-    psf_response: false      # true -> apply metacal PSF-response (leakage) correction to g and g_sn
+    psf_response: true      # true -> apply metacal PSF-response (leakage) correction to g and g_sn
     reconv_psf: dilate       # metacal reconvolution PSF; must be 'dilate' for the *_psf shear terms
     metacal_step: 0.01       # metacal shear step; R11_psf = (g_1p_psf - g_1m_psf) / (2*step)
     output: benchmarking/psf_leakage/psf_leakage_results.fits

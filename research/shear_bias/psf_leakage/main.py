@@ -24,7 +24,9 @@ from helpers import (
     progress,
     make_struct,
     process_obs,
+    process_obs_response,
     shear_data_to_table,
+    leakage_response_to_table,
     get_init_guess,
     get_em_ngauss,
     get_coellip_ngauss
@@ -68,8 +70,23 @@ GAL_FLUX = _config["galaxy"]["flux"] if _config["galaxy"]["flux_type"] == "const
 NOBS = _config["eval"]["n_obs"]
 
 # ----- ngmix fit models -----
-PSF_MODEL = _config["eval"]["leakage"]["psf_model"]
+LEAKAGE_CFG = _config["eval"]["leakage"]
+PSF_MODEL = LEAKAGE_CFG["psf_model"]
 GAL_MODEL = _config["eval"]["gal_model"]
+
+# ----- PSF response (metacal leakage) correction -----
+# When enabled, the measured shear (ngmix and ShearNet) is corrected for PSF
+# leakage using the metacal PSF response, following
+#   ngmix/tests/test_metacal_galsim_psf_response.py :
+#       R11_psf = (g['1p_psf'] - g['1m_psf']) / (2*step)
+#       g_corrected = g['noshear'] - g_psf * R11_psf
+PSF_RESPONSE = LEAKAGE_CFG.get("psf_response", False)
+RECONV_PSF   = LEAKAGE_CFG.get("reconv_psf", "dilate")
+MCAL_STEP    = LEAKAGE_CFG.get("metacal_step", 0.01)
+# PSF-shear response terms ('*_psf') require the 'dilate' reconvolution PSF.
+MCAL_TYPES = (
+    ["noshear", "1p_psf", "1m_psf"] if RECONV_PSF == "dilate" else ["noshear"]
+)
 
 # ----- ShearNet -----
 INCLUDE_SN    = _config["eval"]["include_shearnet"]
@@ -83,7 +100,7 @@ with fits.open(COSMOS_CAT_FNAME) as hdul:
     cosmos_cat = hdul[1].data
 
 # ----- Output -----
-OUTPUT_FITS = os.path.join(_config["paths"]["root"], _config["eval"]["leakage"]["output"])
+OUTPUT_FITS = os.path.join(_config["paths"]["root"], LEAKAGE_CFG["output"])
 
 NTRY = 20
 LM_PARS = {"maxfev": 2000, "xtol": 5.0e-5, "ftol": 5.0e-5}
@@ -240,6 +257,62 @@ def process_single_object(args):
     return data, g_th, gal_im, psf_im, gal_hlr, gal_flux
 
 
+def process_single_object_response(args):
+    """
+    Metacal PSF-response variant of ``process_single_object``.
+
+    Runs a metacal bootstrap with the PSF-shear types ('1p_psf', '1m_psf') so
+    the per-object PSF response can be measured, and returns the sheared images
+    for each shear type so ShearNet can be evaluated on them in the main
+    process (its PSF response is measured the same way).
+    """
+    i, base_seed, noise = args
+
+    rng = np.random.RandomState(base_seed + i)
+
+    obs, g_th, gal_hlr, gal_flux = make_data(rng=rng, noise=noise)
+
+    prior = _get_priors(base_seed + i)
+
+    TGUESS, _ = get_init_guess(obs)
+
+    fitter = ngmix.fitting.Fitter(model=GAL_MODEL, prior=prior, fit_pars=LM_PARS)
+    guesser = ngmix.guessers.TPSFFluxAndPriorGuesser(
+        rng=rng, T=TGUESS, prior=prior
+    )
+
+    if 'em' in PSF_MODEL:
+        psf_ngauss = get_em_ngauss(PSF_MODEL)
+        psf_fitter = ngmix.em.EMFitter(maxiter=EM_PARS['maxiter'], tol=EM_PARS['tol'])
+        psf_guesser = ngmix.guessers.GMixPSFGuesser(rng=rng, ngauss=psf_ngauss)
+    elif 'coellip' in PSF_MODEL:
+        psf_ngauss = get_coellip_ngauss(PSF_MODEL)
+        psf_fitter = ngmix.fitting.CoellipFitter(ngauss=psf_ngauss, fit_pars=PSF_LM_PARS)
+        psf_guesser = ngmix.guessers.CoellipPSFGuesser(rng=rng, ngauss=psf_ngauss)
+    elif PSF_MODEL == 'gauss':
+        psf_fitter = ngmix.fitting.Fitter(model='gauss', fit_pars=PSF_LM_PARS)
+        psf_guesser = ngmix.guessers.SimplePSFGuesser(rng=rng)
+
+    psf_runner = ngmix.runners.PSFRunner(
+        fitter=psf_fitter, guesser=psf_guesser, ntry=NTRY
+    )
+    runner = ngmix.runners.Runner(
+        fitter=fitter, guesser=guesser, ntry=NTRY
+    )
+
+    boot = ngmix.metacal.MetacalBootstrapper(
+        runner=runner,
+        psf_runner=psf_runner,
+        rng=rng,
+        psf=RECONV_PSF,
+        step=MCAL_STEP,
+        types=MCAL_TYPES,
+    )
+
+    data, mcal_images = process_obs_response(obs, boot)
+    return data, g_th, mcal_images, gal_hlr, gal_flux
+
+
 args_list = [(i, SEED, NOISE) for i in range(NOBS)]
 
 data_list = []
@@ -249,10 +322,13 @@ img_buffer = []
 
 BATCH_SIZE = 500
 
+_ok = list(OUTPUT_KEYS)
+g_idx = [_ok.index("g1"), _ok.index("g2")]
+
+
 def _run_shearnet_batch(buf):
     if STATE is None:
         return
-    _ok = list(OUTPUT_KEYS)
     n = len(buf)
     base = len(data_list) - n
     gal = jnp.stack([r[2] for r in buf])
@@ -260,36 +336,85 @@ def _run_shearnet_batch(buf):
     preds = np.array(SN_PREDICT(STATE.params, gal, psf, OUTPUT_KEYS, GAP))
     if NORM_PARAMS is not None:
         preds = inverse_transform_labels(preds, NORM_PARAMS)
-    g_idx = [_ok.index("g1"), _ok.index("g2")]
     for k in range(n):
         data_list[base + k][0]["g_sn"] = preds[k][g_idx]
     g_sn_raw_list.append(preds[:, g_idx])
 
+
+def _run_shearnet_batch_response(buf):
+    """
+    Evaluate ShearNet on every metacal shear type (noshear, 1p_psf, 1m_psf)
+    so its per-object PSF response can be formed downstream. Predictions are
+    written back into the per-type struct records.
+    """
+    if STATE is None:
+        return
+    n = len(buf)
+    base = len(data_list) - n
+    stypes = list(buf[0][2].keys())  # mcal_images keys
+
+    for stype in stypes:
+        gal = jnp.stack([r[2][stype][0] for r in buf])
+        psf = jnp.stack([r[2][stype][1] for r in buf])
+        preds = np.array(SN_PREDICT(STATE.params, gal, psf, OUTPUT_KEYS, GAP))
+        if NORM_PARAMS is not None:
+            preds = inverse_transform_labels(preds, NORM_PARAMS)
+        for k in range(n):
+            idx = np.where(data_list[base + k]["shear_type"] == stype)[0][0]
+            data_list[base + k][idx]["g_sn"] = preds[k][g_idx]
+
+
 hlr_list_out, flux_list_out = [], []
 
+if PSF_RESPONSE:
+    print(
+        f"[psf_leakage] PSF-response correction ON "
+        f"(reconv_psf={RECONV_PSF}, metacal_step={MCAL_STEP}); "
+        f"'g' and 'g_sn' hold corrected values, 'g_raw'/'g_sn_raw' the uncorrected ones."
+    )
+    _worker = process_single_object_response
+    _batch = _run_shearnet_batch_response
+    # result layout: (data, g_th, mcal_images, gal_hlr, gal_flux)
+    _hlr_idx, _flux_idx = 3, 4
+else:
+    _worker = process_single_object
+    _batch = _run_shearnet_batch
+    # result layout: (data, g_th, gal_im, psf_im, gal_hlr, gal_flux)
+    _hlr_idx, _flux_idx = 4, 5
+
 with Pool(processes=nproc) as pool:
-    for result in pool.imap(process_single_object, args_list):
+    for result in pool.imap(_worker, args_list):
         data_list.append(result[0])
         gth_list.append(result[1])
-        hlr_list_out.append(result[4])
-        flux_list_out.append(result[5])
+        hlr_list_out.append(result[_hlr_idx])
+        flux_list_out.append(result[_flux_idx])
         img_buffer.append(result)
         if len(img_buffer) == BATCH_SIZE:
-            _run_shearnet_batch(img_buffer)
+            _batch(img_buffer)
             img_buffer.clear()
     if img_buffer:
-        _run_shearnet_batch(img_buffer)
+        _batch(img_buffer)
         img_buffer.clear()
 
-tab = shear_data_to_table(data_list)
-tab["g_th"] = np.asarray(gth_list)
-tab["gal_hlr_th"]  = np.array(hlr_list_out)
-tab["gal_flux_th"] = np.array(flux_list_out)
-
-if STATE is not None:
-    tab["g_sn"] = np.concatenate(g_sn_raw_list, axis=0)
+if PSF_RESPONSE:
+    tab = leakage_response_to_table(data_list, step=MCAL_STEP)
+    tab["g_th"] = np.asarray(gth_list)
+    tab["gal_hlr_th"]  = np.array(hlr_list_out)
+    tab["gal_flux_th"] = np.array(flux_list_out)
+    if STATE is None:
+        # no ShearNet: keep corrected/raw g_sn columns explicitly NaN
+        tab["g_sn"]     = np.full((len(tab), 2), np.nan)
+        tab["g_sn_raw"] = np.full((len(tab), 2), np.nan)
 else:
-    tab["g_sn"] = np.full((len(tab), 2), np.nan)
+    tab = shear_data_to_table(data_list)
+    tab["g_th"] = np.asarray(gth_list)
+    tab["gal_hlr_th"]  = np.array(hlr_list_out)
+    tab["gal_flux_th"] = np.array(flux_list_out)
+
+    if STATE is not None:
+        tab["g_sn"] = np.concatenate(g_sn_raw_list, axis=0)
+    else:
+        tab["g_sn"] = np.full((len(tab), 2), np.nan)
 
 fname = OUTPUT_FITS
 

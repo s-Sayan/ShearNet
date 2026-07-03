@@ -63,6 +63,9 @@ eval:
 
   leakage:                   # PSF leakage
     psf_model: em5
+    psf_response: false      # true -> apply metacal PSF-response (leakage) correction to g and g_sn
+    reconv_psf: dilate       # metacal reconvolution PSF; must be 'dilate' for the *_psf shear terms
+    metacal_step: 0.01       # metacal shear step; R11_psf = (g_1p_psf - g_1m_psf) / (2*step)
     output: benchmarking/psf_leakage/psf_leakage_results.fits
 
   timing:                    # ngmix vs ShearNet speed
