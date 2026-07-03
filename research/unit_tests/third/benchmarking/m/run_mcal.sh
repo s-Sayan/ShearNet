@@ -29,7 +29,7 @@ source "$REPO/setup_env.sh"
 # ================================
 start_time=$(date +%s)
 
-python "$REPO/shear_bias/m/main.py" -c "$CONFIG"
+python "$REPO/research/shear_bias/m/main.py" -c "$CONFIG"
 
 end_time=$(date +%s)
 runtime=$((end_time - start_time))
