@@ -187,6 +187,13 @@ def shear_data_to_table(data_list, mcal_shear=0.01):
         if "2p" in g_sn_store and "2m" in g_sn_store:
             row["r22_sn"] = (g_sn_store["2p"][1] - g_sn_store["2m"][1]) / dg
 
+        # metacal PSF response (only present when *_psf shear types were run)
+        if "1p_psf" in g_store and "1m_psf" in g_store:
+            row["r11_psf"] = (g_store["1p_psf"][0] - g_store["1m_psf"][0]) / dg
+
+        if "1p_psf" in g_sn_store and "1m_psf" in g_sn_store:
+            row["r11_psf_sn"] = (g_sn_store["1p_psf"][0] - g_sn_store["1m_psf"][0]) / dg
+
         rows.append(row)
 
     return Table(rows)

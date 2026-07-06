@@ -82,6 +82,18 @@ GALSIM_PSF = galsim.des.DES_PSFEx(_config["paths"]["psfex_model_file"], wcs=util
 PSF_MODEL = _config["eval"]["bias"]["psf_model"]
 GAL_MODEL = _config["eval"]["gal_model"]
 
+# ----- PSF response (metacal leakage) correction -----
+# When enabled, the measured shear (ngmix and ShearNet) is corrected for PSF
+# leakage using the metacal PSF response, following
+#   ngmix/tests/test_metacal_galsim_psf_response.py :
+#       R11_psf = (g['1p_psf'] - g['1m_psf']) / (2*step)
+#       g_corrected = g['noshear'] - g_psf * R11_psf
+# This mostly shifts the additive bias c (and slightly m), which is exactly
+# the PSF-leakage term the leakage benchmark isolates.
+PSF_RESPONSE = _config["eval"]["bias"].get("psf_response", False)
+RECONV_PSF   = _config["eval"]["bias"].get("reconv_psf", "dilate")
+MCAL_STEP    = _config["eval"]["bias"].get("metacal_step", 0.01)
+
 # ----- ShearNet -----
 INCLUDE_SN    = _config["eval"]["include_shearnet"]
 SN_MODEL_NAME = _config["meta"]["model_name"]
@@ -101,8 +113,12 @@ NTRY = 20
 LM_PARS = {"maxfev": 2000, "xtol": 5.0e-5, "ftol": 5.0e-5}
 PSF_LM_PARS = {"maxfev": 4000, "xtol": 5.0e-5, "ftol": 5.0e-5}
 EM_PARS={'tol': 1.0e-6, 'maxiter': 50000}
-MCAL_PARS = {"psf": "dilate", "mcal_shear": 0.01}
-TYPES = ["noshear", "1p", "1m"]
+MCAL_PARS = {"psf": RECONV_PSF, "mcal_shear": MCAL_STEP}
+# PSF-shear response terms ('*_psf') require the 'dilate' reconvolution PSF.
+if PSF_RESPONSE and RECONV_PSF == "dilate":
+    TYPES = ["noshear", "1p", "1m", "1p_psf", "1m_psf"]
+else:
+    TYPES = ["noshear", "1p", "1m"]
 
 # ========== Load up ShearNet state here =========
 import jax
@@ -374,8 +390,8 @@ with Pool(processes=nproc) as pool:
         _run_shearnet_batch(img_buffer)
         img_buffer.clear()
 
-tab_p = shear_data_to_table(data_list_p)
-tab_m = shear_data_to_table(data_list_m)
+tab_p = shear_data_to_table(data_list_p, mcal_shear=MCAL_STEP)
+tab_m = shear_data_to_table(data_list_m, mcal_shear=MCAL_STEP)
 
 tab_p["g_th"] = np.asarray(gth_list_p)
 tab_m["g_th"] = np.asarray(gth_list_m)
@@ -416,6 +432,32 @@ if STATE is not None:
 # always add columns
 tab_p["g_sn_raw"] = g_sn_raw_p
 tab_m["g_sn_raw"] = g_sn_raw_m
+
+# ---- PSF-response (metacal leakage) correction ----
+# Same correction as research/shear_bias/psf_leakage: subtract the
+# metacal PSF response (R11_psf) times the measured PSF ellipticity from the
+# noshear shear estimate, for both ngmix and ShearNet. The raw (uncorrected)
+# noshear estimates are retained as *_raw; the downstream jackknife then uses
+# the corrected g_noshear / g_sn_noshear columns, so m and c reflect the
+# PSF-leakage-corrected shear.
+if PSF_RESPONSE:
+    print(
+        f"[bias/m] PSF-response correction ON "
+        f"(reconv_psf={RECONV_PSF}, metacal_step={MCAL_STEP}); "
+        f"correcting g_noshear (and g_sn_noshear) by -gpsf * R11_psf, "
+        f"raw values kept as g_noshear_raw / g_sn_noshear_raw."
+    )
+    for _tab in (tab_p, tab_m):
+        _gpsf    = np.asarray(_tab["gpsf_noshear"], dtype=float)   # (N, 2)
+        _r11_psf = np.asarray(_tab["r11_psf"], dtype=float)        # (N,)
+        _g       = np.asarray(_tab["g_noshear"], dtype=float)      # (N, 2)
+        _tab["g_noshear_raw"] = _g.copy()
+        _tab["g_noshear"]     = _g - _gpsf * _r11_psf[:, None]
+        if STATE is not None:
+            _gsn        = np.asarray(_tab["g_sn_noshear"], dtype=float)
+            _r11_psf_sn = np.asarray(_tab["r11_psf_sn"], dtype=float)
+            _tab["g_sn_noshear_raw"] = _gsn.copy()
+            _tab["g_sn_noshear"]     = _gsn - _gpsf * _r11_psf_sn[:, None]
 
 fname = OUTPUT_FITS
 
