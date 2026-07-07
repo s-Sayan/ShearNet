@@ -34,8 +34,8 @@ shearnet-eval  --model_name dry_run
 
 - Match the surrounding code style; format with `black` and `isort`
   (installed by `make install-dev`).
-- Keep public functions documented with docstrings — the API wiki is generated
-  from them via `python scripts/generate_wiki.py`.
+- Keep public functions documented with docstrings — they are the API reference
+  (and the source for the planned Read the Docs site), so keep them accurate.
 
 ## Submitting changes
 

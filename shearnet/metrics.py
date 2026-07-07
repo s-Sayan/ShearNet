@@ -66,7 +66,7 @@ def loss_fn_ngmix(obs_list, labels, seed=1234, psf_model="gauss", gal_model="gau
 
     prior = _get_priors(seed)
     rng = np.random.RandomState(seed)
-    datalist = mp_fit_one(obs_list, prior, rng, psf_model=psf_model, gal_model=gal_model)
+    datalist, _ = mp_fit_one(obs_list, prior, rng, psf_model=psf_model, gal_model=gal_model)
     preds = ngmix_pred(datalist)
     pred_filtered, labels_filtered = remove_nan_preds(preds, labels)
     pred_filtered = pred_filtered[:, 0:2]
@@ -98,7 +98,8 @@ def eval_ngmix(
     start_time = time.time()
     prior = _get_priors(seed)
     rng = np.random.RandomState(seed)
-    datalist = mp_fit_one(test_obs, prior, rng, psf_model=psf_model, gal_model=gal_model)
+    # mp_fit_one returns (data_list, obsdict_list); we only need the data list.
+    datalist, _ = mp_fit_one(test_obs, prior, rng, psf_model=psf_model, gal_model=gal_model)
     preds = ngmix_pred(datalist)
     r11_list, r22_list, r12_list, r21_list, c1_list, c2_list, c1_psf_list, c2_psf_list = (
         response_calculation(datalist, mcal_shear=0.01)
@@ -542,7 +543,7 @@ def calculate_multiplicative_bias_ngmix(
     rng = np.random.RandomState(seed)
 
     def run_ngmix_with_response(observations, component_idx):
-        datalist = mp_fit_one(observations, prior, rng, psf_model=psf_model, gal_model=gal_model)
+        datalist, _ = mp_fit_one(observations, prior, rng, psf_model=psf_model, gal_model=gal_model)
         preds = ngmix_pred(datalist)
         r11_list, r22_list, r12_list, r21_list, _, _, _, _ = response_calculation(
             datalist, mcal_shear=h

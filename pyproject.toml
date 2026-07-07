@@ -52,7 +52,6 @@ dev = [
     "isort>=5.0",
     "ipython>=8.0",
     "jupyter>=1.0",
-    "pydoc-markdown>=4.8",  # generate the API wiki via scripts/generate_wiki.py
 ]
 [project.urls]
 Homepage = "https://github.com/s-Sayan/ShearNet"

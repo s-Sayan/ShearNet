@@ -81,6 +81,17 @@ def _load_cosmos_cat(seed=42, cat_path=None):
     g_1 = rng.normal(0.0, 0.26, n)
     g_2 = rng.normal(0.0, 0.26, n)
 
+    # Resample the rare tail where the shear magnitude reaches the unphysical
+    # |g| >= 1 that GalSim rejects (~0.1% of a sigma=0.26 2D Gaussian). Without
+    # this, training on the synthetic fallback crashes once the sample count is
+    # large enough to hit one (e.g. the default 10000 samples).
+    _max_mag = 0.9
+    bad = np.hypot(g_1, g_2) >= _max_mag
+    while np.any(bad):
+        g_1[bad] = rng.normal(0.0, 0.26, int(bad.sum()))
+        g_2[bad] = rng.normal(0.0, 0.26, int(bad.sum()))
+        bad = np.hypot(g_1, g_2) >= _max_mag
+
     class _SyntheticCat:
         def __init__(self):
             self.G1 = g_1

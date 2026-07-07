@@ -84,6 +84,23 @@ shearnet-eval  --model_name dry_run
 
 ---
 
+## Notebooks
+
+Prefer to explore interactively? The [`notebooks/`](notebooks/README.md) folder
+has a curated, runnable set that covers the main workflows:
+
+| Notebook | Purpose |
+|---|---|
+| `01_quickstart.ipynb` | Simulate → train → evaluate → plot, end to end. |
+| `02_model_comparison.ipynb` | Compare several trained models (curves, tables, residuals, NGmix). |
+| `03_catalog_builder.ipynb` | Build train/eval FITS catalogs from COSMOS / detection data. |
+| `04_psf_diagnostics.ipynb` | Inspect PSFs and measure a model's PSF leakage. |
+
+They run on simulated data out of the box — no external files needed. See
+[`notebooks/README.md`](notebooks/README.md) for details.
+
+---
+
 ## Command-line interface
 
 ### `shearnet-train`
@@ -97,7 +114,7 @@ Common options:
 | Option | Description |
 |---|---|
 | `--config` | Path to a YAML config (CLI flags override individual values) |
-| `--nn` | Architecture: `mlp`, `cnn`, `resnet`, `research_backed`, `forklens_psf`, `fork-like` |
+| `--nn` | Architecture: `mlp`, `cnn`, `resnet`, `research_backed`, `forklens_psfnet`, `fork-like`, `d4-fork-like` |
 | `--samples` | Number of training galaxies to simulate |
 | `--psf_fwhm` | Gaussian PSF FWHM in arcsec (for `--exp ideal`) |
 | `--exp` | Simulation mode: `ideal` (analytic PSF) or `superbit` (empirical PSFEx PSF) |
@@ -139,30 +156,21 @@ configs (e.g. `configs/shearnet/forklike/...`, `configs/shearnet/old_cnn/...`).
 
 ## Documentation
 
-The full API reference (generated from the in-code docstrings) is published in the project wiki:
+Every public module, model, and function in the `shearnet` package is documented
+with in-code docstrings — read them from Python with `help(...)`:
 
-**[ShearNet Wiki - API Reference](https://github.com/s-Sayan/ShearNet/wiki)**
-
-It documents every public module, model, and function in the `shearnet` package, grouped into Core, CLI, Configuration, Methods, and Utilities.
-
-### Rebuilding the wiki
-
-The wiki pages are produced with [pydoc-markdown](https://niklasrosenstein.github.io/pydoc-markdown/) via `scripts/generate_wiki.py`. After editing docstrings, regenerate and publish:
-
-```bash
-pip install -e ".[dev]"                          # installs pydoc-markdown
-
-# Write the pages straight into your wiki clone (a separate ShearNet.wiki repo)
-python scripts/generate_wiki.py ~/ShearNet.wiki
-
-cd ~/ShearNet.wiki
-
-git add -A
-git commit -m "Regenerate API reference"
-git push                                          # wiki default branch is 'master'
+```python
+import shearnet
+help(shearnet.generate_dataset)
+help(shearnet.train_model)
 ```
 
-Run without an argument (`python scripts/generate_wiki.py`) to write the pages to a local `wiki/` folder instead.
+For hands-on walkthroughs of the main workflows, see the
+[notebooks](notebooks/README.md) (quickstart, model comparison, catalog building,
+PSF diagnostics).
+
+> A browsable, hosted API reference (Read the Docs, built from these docstrings)
+> is planned. It will replace the older GitHub wiki.
 
 ## Data & paths
 
@@ -208,8 +216,9 @@ from shearnet import SimpleGalaxyNN, EnhancedGalaxyNN, GalaxyResNet
 
 ## Example results
 
-ShearNet predicts `g1`, `g2`, `sigma`, and `flux`. Representative performance on
-5,000 test galaxies (stamp size 53×53, pixel scale 0.141 arcsec):
+ShearNet predicts `g1` and `g2` by default (configurable via `output_keys`, e.g.
+to also recover `hlr` / `flux`). Representative performance on 5,000 test galaxies
+(stamp size 53×53, pixel scale 0.141 arcsec):
 
 | Method                       | MSE (g1, g2) | Time   |
 |------------------------------|--------------|--------|
@@ -226,14 +235,16 @@ ShearNet/
 ├── shearnet/            # The installable package
 │   ├── core/            #   models, training loop, dataset simulation
 │   ├── methods/         #   NGmix and moment-based baselines
-│   ├── utils/           #   metrics, normalization, plotting, device helpers
+│   ├── metrics.py       #   evaluation: MSE/bias, responses, multiplicative bias
+│   ├── plotting/        #   learning curves, scatter, PSF systematics, animations
+│   ├── utils/           #   normalization, device, simulation helpers
 │   ├── cli/             #   shearnet-train / shearnet-eval entry points
 │   └── config/          #   layered YAML config handler + defaults
 ├── configs/             # Ready-made and example YAML configs
+├── notebooks/           # Curated, runnable walkthroughs (see notebooks/README.md)
 ├── tests/               # Unit / smoke test suite (pytest)
 ├── psf_data/            # Bundled empirical SuperBIT PSFs (for --exp superbit)
-├── notebooks/           # example.ipynb — end-to-end usage walkthrough
-├── scripts/             # post-installation + wiki generation
+├── scripts/             # post-installation helper
 ├── research/            # Experiment record: shear_bias, unit_tests, etc. (not needed to use ShearNet)
 ├── makefile             # Installation targets
 └── pyproject.toml       # Package metadata and dependencies
