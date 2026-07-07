@@ -232,67 +232,110 @@ def process_obs_response(obs, boot):
     return struct, mcal_images
 
 
-def leakage_response_to_table(data_list, step=0.01):
+def leakage_response_to_table(data_list, step=0.01, apply_shearnet=False):
     """
     Assemble the PSF-leakage table from metacal per-object struct arrays and
     apply the PSF-response correction.
 
-    For every object:
-        R11_psf     = (g['1p_psf'][0]     - g['1m_psf'][0])     / (2*step)
-        R11_psf_sn  = (g_sn['1p_psf'][0]  - g_sn['1m_psf'][0])  / (2*step)
-        g          = g['noshear']    - gpsf * R11_psf      (PSF-response corrected)
-        g_sn       = g_sn['noshear'] - gpsf * R11_psf_sn   (PSF-response corrected)
+    The metacal PSF response is an *ensemble* quantity, computed exactly as in
+    ngmix/tests/test_metacal_galsim_psf_response.py -- a ratio of ensemble
+    means, NOT a per-object finite difference::
 
-    The raw (uncorrected) noshear estimates are retained as ``g_raw`` /
-    ``g_sn_raw`` and the responses as ``r11_psf`` / ``r11_psf_sn`` for
-    diagnostics. ``g`` / ``g_sn`` hold the corrected values so the existing
-    plotting notebook shows the corrected leakage directly.
+        Rbar_psf    = (<g['1p_psf'][0]>    - <g['1m_psf'][0]>)    / (2*step)
+        Rbar_psf_sn = (<g_sn['1p_psf'][0]> - <g_sn['1m_psf'][0]>) / (2*step)
+
+    and the (single, constant) response is then applied per object::
+
+        g    = g['noshear']    - gpsf * Rbar_psf
+        g_sn = g_sn['noshear'] - gpsf * Rbar_psf_sn        (only if apply_shearnet)
+
+    Using the ensemble mean rather than a per-object response is essential: the
+    per-object response ``(g_1p_psf - g_1m_psf)/(2*step)`` is a difference of two
+    noisy shear estimates divided by ``2*step`` and has enormous variance, so
+    subtracting ``gpsf * r_per_object`` injects that variance (and a noise bias,
+    because the metacal shear types share the object's noise realization) into
+    every corrected shear.
+
+    IMPORTANT: metacal PSF response only equals the physical PSF leakage for a
+    metacal-family estimator that explicitly deconvolves the PSF (e.g. ngmix).
+    For a black-box network such as ShearNet the response to shearing the
+    (dilated) reconvolution PSF measures out-of-distribution sensitivity to the
+    metacal manipulation, not physical leakage, so it does NOT match the raw
+    leakage slope and must not be used to "correct" ShearNet. The ShearNet
+    response is therefore reported as a diagnostic (``r11_psf_sn``,
+    ``rbar_psf_sn``) but only applied to ``g_sn`` when ``apply_shearnet=True``.
+
+    Raw (uncorrected) estimates are kept as ``g_raw`` / ``g_sn_raw``. Returns
+    ``(table, Rbar_psf, Rbar_psf_sn)``.
     """
     dg = 2.0 * step
-    rows = []
 
+    # ---- pass 1: gather per-object stores + ensemble response accumulators ----
+    stores = []
+    g1p_ng, g1m_ng, g1p_sn, g1m_sn = [], [], [], []
     for arr in data_list:
-        row = {}
+        good = bool(np.all(arr["flags"] == 0))
         g_store, g_sn_store = {}, {}
         gpsf = np.array([np.nan, np.nan])
-
-        row["flag"] = 0 if np.all(arr["flags"] == 0) else 1
-
+        meta = {}
         for rec in arr:
             stype = rec["shear_type"]
             g_store[stype] = np.array(rec["g"], dtype=float)
             g_sn_store[stype] = np.array(rec["g_sn"], dtype=float)
             if stype == "noshear":
                 gpsf = np.array(rec["gpsf"], dtype=float)
-                row["s2n"] = rec["s2n"]
-                row["T"] = rec["T"]
-                row["Tpsf"] = rec["Tpsf"]
+                meta = {"s2n": rec["s2n"], "T": rec["T"], "Tpsf": rec["Tpsf"]}
+        stores.append((good, g_store, g_sn_store, gpsf, meta))
 
-        row["gpsf"] = gpsf
+        if good and "1p_psf" in g_store and "1m_psf" in g_store:
+            g1p_ng.append(g_store["1p_psf"][0])
+            g1m_ng.append(g_store["1m_psf"][0])
+        if good and "1p_psf" in g_sn_store and "1m_psf" in g_sn_store:
+            g1p_sn.append(g_sn_store["1p_psf"][0])
+            g1m_sn.append(g_sn_store["1m_psf"][0])
 
-        # ---- ngmix PSF response + correction ----
+    def _rbar(a, b):
+        a, b = np.asarray(a, float), np.asarray(b, float)
+        if a.size == 0 or b.size == 0:
+            return np.nan
+        return (np.nanmean(a) - np.nanmean(b)) / dg
+
+    rbar_psf = _rbar(g1p_ng, g1m_ng)
+    rbar_psf_sn = _rbar(g1p_sn, g1m_sn)
+
+    # ---- pass 2: build rows, applying the single ensemble response ----
+    rows = []
+    for good, g_store, g_sn_store, gpsf, meta in stores:
+        row = {"flag": 0 if good else 1, "gpsf": gpsf}
+        row.update(meta)
+
+        # per-object response kept for diagnostics only
         if "1p_psf" in g_store and "1m_psf" in g_store:
-            r11_psf = (g_store["1p_psf"][0] - g_store["1m_psf"][0]) / dg
+            row["r11_psf"] = (g_store["1p_psf"][0] - g_store["1m_psf"][0]) / dg
         else:
-            r11_psf = np.nan
-        g_noshear = g_store.get("noshear", np.array([np.nan, np.nan]))
-        row["r11_psf"] = r11_psf
-        row["g_raw"] = g_noshear
-        row["g"] = g_noshear - gpsf * r11_psf
-
-        # ---- ShearNet PSF response + correction ----
+            row["r11_psf"] = np.nan
         if "1p_psf" in g_sn_store and "1m_psf" in g_sn_store:
-            r11_psf_sn = (g_sn_store["1p_psf"][0] - g_sn_store["1m_psf"][0]) / dg
+            row["r11_psf_sn"] = (g_sn_store["1p_psf"][0] - g_sn_store["1m_psf"][0]) / dg
         else:
-            r11_psf_sn = np.nan
+            row["r11_psf_sn"] = np.nan
+        row["rbar_psf"] = rbar_psf
+        row["rbar_psf_sn"] = rbar_psf_sn
+
+        g_noshear = g_store.get("noshear", np.array([np.nan, np.nan]))
+        row["g_raw"] = g_noshear
+        row["g"] = g_noshear - gpsf * rbar_psf if np.isfinite(rbar_psf) else g_noshear
+
         g_sn_noshear = g_sn_store.get("noshear", np.array([np.nan, np.nan]))
-        row["r11_psf_sn"] = r11_psf_sn
         row["g_sn_raw"] = g_sn_noshear
-        row["g_sn"] = g_sn_noshear - gpsf * r11_psf_sn
+        # ShearNet: metacal response is not physical leakage -> off by default
+        if apply_shearnet and np.isfinite(rbar_psf_sn):
+            row["g_sn"] = g_sn_noshear - gpsf * rbar_psf_sn
+        else:
+            row["g_sn"] = g_sn_noshear
 
         rows.append(row)
 
-    return Table(rows)
+    return Table(rows), rbar_psf, rbar_psf_sn
 
 def shear_data_to_table(data_list):
     """

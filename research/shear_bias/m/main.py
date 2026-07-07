@@ -93,6 +93,9 @@ GAL_MODEL = _config["eval"]["gal_model"]
 PSF_RESPONSE = _config["eval"]["bias"].get("psf_response", False)
 RECONV_PSF   = _config["eval"]["bias"].get("reconv_psf", "dilate")
 MCAL_STEP    = _config["eval"]["bias"].get("metacal_step", 0.01)
+# metacal PSF response is not physical leakage for a network -> ShearNet
+# correction is opt-in only (see the correction block below).
+PSF_RESPONSE_SHEARNET = _config["eval"]["bias"].get("psf_response_shearnet", False)
 
 # ----- ShearNet -----
 INCLUDE_SN    = _config["eval"]["include_shearnet"]
@@ -434,30 +437,58 @@ tab_p["g_sn_raw"] = g_sn_raw_p
 tab_m["g_sn_raw"] = g_sn_raw_m
 
 # ---- PSF-response (metacal leakage) correction ----
-# Same correction as research/shear_bias/psf_leakage: subtract the
-# metacal PSF response (R11_psf) times the measured PSF ellipticity from the
-# noshear shear estimate, for both ngmix and ShearNet. The raw (uncorrected)
-# noshear estimates are retained as *_raw; the downstream jackknife then uses
-# the corrected g_noshear / g_sn_noshear columns, so m and c reflect the
-# PSF-leakage-corrected shear.
-if PSF_RESPONSE:
-    print(
-        f"[bias/m] PSF-response correction ON "
-        f"(reconv_psf={RECONV_PSF}, metacal_step={MCAL_STEP}); "
-        f"correcting g_noshear (and g_sn_noshear) by -gpsf * R11_psf, "
-        f"raw values kept as g_noshear_raw / g_sn_noshear_raw."
+# The metacal PSF response is an ENSEMBLE quantity (a ratio of ensemble means,
+# exactly as in ngmix/tests/test_metacal_galsim_psf_response.py), NOT a
+# per-object finite difference. A per-object response (g_1p_psf-g_1m_psf)/(2*step)
+# has huge variance and, since the metacal shear types share each object's noise
+# realization, is correlated with g_noshear -- subtracting gpsf*(per-object R)
+# therefore injects that variance/noise-bias into the shear and does not cancel
+# between the +/- shear pair (so it corrupts m, which should be untouched by an
+# additive PSF-leakage term). We instead form a single constant response Rbar
+# over the combined p/m ensemble and apply it; with a constant Rbar and the same
+# gpsf for the pair, the correction cancels exactly in (g_p - g_m)/2, so it moves
+# only the additive bias c, as PSF leakage physically should.
+#
+# NOTE: this response is only physical for a PSF-deconvolving estimator (ngmix).
+# For ShearNet it measures OOD sensitivity to the reconvolution, not leakage, so
+# it is applied only when eval.bias.psf_response_shearnet is set.
+if PSF_RESPONSE and "g_1p_psf" not in tab_p.colnames:
+    print("[bias/m] PSF-response requested but no *_psf metacal types were run "
+          "(reconv_psf must be 'dilate'); skipping correction.")
+elif PSF_RESPONSE:
+    dg = 2.0 * MCAL_STEP
+
+    def _rbar(c1p, c1m):
+        g1p = np.concatenate([np.asarray(tab_p[c1p], float)[:, 0],
+                              np.asarray(tab_m[c1p], float)[:, 0]])
+        g1m = np.concatenate([np.asarray(tab_p[c1m], float)[:, 0],
+                              np.asarray(tab_m[c1m], float)[:, 0]])
+        return (np.nanmean(g1p) - np.nanmean(g1m)) / dg
+
+    rbar_psf = _rbar("g_1p_psf", "g_1m_psf")
+    rbar_psf_sn = (
+        _rbar("g_sn_1p_psf", "g_sn_1m_psf") if STATE is not None else np.nan
     )
+    print(
+        f"[bias/m] PSF-response correction ON (reconv_psf={RECONV_PSF}, "
+        f"metacal_step={MCAL_STEP}); ensemble Rbar_psf(ngmix)={rbar_psf:.4f}, "
+        f"Rbar_psf(shearnet)={rbar_psf_sn:.4f}. Applying constant Rbar to "
+        f"g_noshear; raw kept as g_noshear_raw."
+    )
+    if STATE is not None and not PSF_RESPONSE_SHEARNET:
+        print("[bias/m] NOTE: ShearNet g_sn_noshear left UNCORRECTED "
+              "(metacal response is not physical leakage for a network).")
     for _tab in (tab_p, tab_m):
-        _gpsf    = np.asarray(_tab["gpsf_noshear"], dtype=float)   # (N, 2)
-        _r11_psf = np.asarray(_tab["r11_psf"], dtype=float)        # (N,)
-        _g       = np.asarray(_tab["g_noshear"], dtype=float)      # (N, 2)
+        _gpsf = np.asarray(_tab["gpsf_noshear"], dtype=float)   # (N, 2)
+        _g    = np.asarray(_tab["g_noshear"], dtype=float)      # (N, 2)
         _tab["g_noshear_raw"] = _g.copy()
-        _tab["g_noshear"]     = _g - _gpsf * _r11_psf[:, None]
+        _tab["g_noshear"]     = _g - _gpsf * rbar_psf
         if STATE is not None:
-            _gsn        = np.asarray(_tab["g_sn_noshear"], dtype=float)
-            _r11_psf_sn = np.asarray(_tab["r11_psf_sn"], dtype=float)
+            _gsn = np.asarray(_tab["g_sn_noshear"], dtype=float)
             _tab["g_sn_noshear_raw"] = _gsn.copy()
-            _tab["g_sn_noshear"]     = _gsn - _gpsf * _r11_psf_sn[:, None]
+            _tab["g_sn_noshear"] = (
+                _gsn - _gpsf * rbar_psf_sn if PSF_RESPONSE_SHEARNET else _gsn
+            )
 
 fname = OUTPUT_FITS
 

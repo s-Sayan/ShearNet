@@ -83,6 +83,10 @@ GAL_MODEL = _config["eval"]["gal_model"]
 PSF_RESPONSE = LEAKAGE_CFG.get("psf_response", False)
 RECONV_PSF   = LEAKAGE_CFG.get("reconv_psf", "dilate")
 MCAL_STEP    = LEAKAGE_CFG.get("metacal_step", 0.01)
+# The metacal PSF response is only physical for a PSF-deconvolving estimator
+# (ngmix). For ShearNet it measures OOD sensitivity to the reconvolution, not
+# leakage, so it is reported as a diagnostic but NOT applied unless requested.
+PSF_RESPONSE_SHEARNET = LEAKAGE_CFG.get("psf_response_shearnet", False)
 # PSF-shear response terms ('*_psf') require the 'dilate' reconvolution PSF.
 MCAL_TYPES = (
     ["noshear", "1p_psf", "1m_psf"] if RECONV_PSF == "dilate" else ["noshear"]
@@ -397,7 +401,19 @@ with Pool(processes=nproc) as pool:
         img_buffer.clear()
 
 if PSF_RESPONSE:
-    tab = leakage_response_to_table(data_list, step=MCAL_STEP)
+    tab, rbar_psf, rbar_psf_sn = leakage_response_to_table(
+        data_list, step=MCAL_STEP, apply_shearnet=PSF_RESPONSE_SHEARNET
+    )
+    print(
+        f"[psf_leakage] ensemble metacal PSF response  "
+        f"Rbar_psf(ngmix)={rbar_psf:.4f}  Rbar_psf(shearnet)={rbar_psf_sn:.4f}"
+    )
+    if STATE is not None and not PSF_RESPONSE_SHEARNET:
+        print(
+            "[psf_leakage] NOTE: ShearNet g_sn left UNCORRECTED "
+            "(metacal PSF response is not physical leakage for a network; "
+            "set eval.leakage.psf_response_shearnet: true to override)."
+        )
     tab["g_th"] = np.asarray(gth_list)
     tab["gal_hlr_th"]  = np.array(hlr_list_out)
     tab["gal_flux_th"] = np.array(flux_list_out)

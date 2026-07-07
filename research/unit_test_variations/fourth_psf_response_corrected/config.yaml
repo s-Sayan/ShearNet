@@ -59,14 +59,16 @@ eval:
     psf_model: gauss         # ngmix PSF fit model
     n_jackknife: 20
     shear_true: 0.01
-    psf_response: true      # true -> apply metacal PSF-response correction to g_noshear / g_sn_noshear (affects m, c)
+    psf_response: true       # true -> apply metacal PSF-response correction to g_noshear / g_sn_noshear (affects m, c)
+    psf_response_shearnet: true  # metacal response is not physical leakage for a network; keep ShearNet raw
     reconv_psf: dilate       # metacal reconvolution PSF; must be 'dilate' for the *_psf shear terms
     metacal_step: 0.01       # metacal shear step; R11 = (g_1p - g_1m)/(2*step), R11_psf = (g_1p_psf - g_1m_psf)/(2*step)
     output: benchmarking/m/metacal_results.fits
 
   leakage:                   # PSF leakage
     psf_model: em5
-    psf_response: true      # true -> apply metacal PSF-response (leakage) correction to g and g_sn
+    psf_response: true       # true -> apply metacal PSF-response (leakage) correction to g and g_sn
+    psf_response_shearnet: true  # metacal response is not physical leakage for a network; keep ShearNet raw
     reconv_psf: dilate       # metacal reconvolution PSF; must be 'dilate' for the *_psf shear terms
     metacal_step: 0.01       # metacal shear step; R11_psf = (g_1p_psf - g_1m_psf) / (2*step)
     output: benchmarking/psf_leakage/psf_leakage_results.fits
