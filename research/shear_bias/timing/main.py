@@ -40,7 +40,7 @@ import galsim.des
 import matplotlib.pyplot as plt
 from astropy.io import fits
 
-import superbit_lensing.utils as utils
+import shearnet.utils.superbit as utils  # vendored from superbit-lensing (see shearnet/utils/superbit.py)
 
 
 # ============================================================

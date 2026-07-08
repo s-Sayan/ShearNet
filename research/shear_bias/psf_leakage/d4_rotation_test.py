@@ -6,7 +6,7 @@ import galsim.des
 import ngmix
 import os
 from astropy.io import fits
-import superbit_lensing.utils as utils
+import shearnet.utils.superbit as utils  # vendored from superbit-lensing (see shearnet/utils/superbit.py)
 from helpers import (
     _get_priors, make_struct, process_obs, shear_data_to_table,
     get_init_guess, get_em_ngauss, get_coellip_ngauss

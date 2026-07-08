@@ -13,7 +13,7 @@ from IPython.display import display, Math
 import matplotlib.colors as colors
 from astropy.table import Table
 from astropy.io import fits
-import superbit_lensing.utils as utils
+import shearnet.utils.superbit as utils  # vendored from superbit-lensing (see shearnet/utils/superbit.py)
 from multiprocessing import Pool
 import os
 

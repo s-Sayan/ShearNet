@@ -51,6 +51,7 @@ dev = [
     "flake8>=4.0",
     "isort>=5.0",
     "ipython>=8.0",
+    "ipdb>=0.13",  # interactive debugger used by research scripts (research/shear_bias/**/main.py)
     "jupyter>=1.0",
 ]
 [project.urls]

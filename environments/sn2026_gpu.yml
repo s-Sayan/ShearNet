@@ -321,7 +321,6 @@ dependencies:
       - six==1.17.0
       - slicerator==1.1.0
       - statsmodels==0.14.6
-      - superbit-lensing==1.0.0
       - tensorstore==0.1.76
       - threadpoolctl==3.6.0
       - tifffile==2026.2.16

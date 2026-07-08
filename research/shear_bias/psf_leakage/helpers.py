@@ -2,7 +2,7 @@
 import numpy as np
 import ngmix
 from astropy.table import Table
-import superbit_lensing.utils as utils
+import shearnet.utils.superbit as utils  # vendored from superbit-lensing (see shearnet/utils/superbit.py)
 from ngmix.gaussmom import GaussMom
 
 
