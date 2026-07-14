@@ -97,6 +97,17 @@ MCAL_STEP    = _config["eval"]["bias"].get("metacal_step", 0.01)
 # correction is opt-in only (see the correction block below).
 PSF_RESPONSE_SHEARNET = _config["eval"]["bias"].get("psf_response_shearnet", False)
 
+# ----- Skip-deconvolution ("direct") PSF-response correction -----
+# Measure R11_psf by shearing the real PSF by +/- step and convolving the galaxy
+# with it (no metacal deconvolution/dilation), then subtract gpsf*Rbar_psf from
+# g_noshear / g_sn_noshear. Switchable per shape-measurement software; when on it
+# takes precedence over the metacal psf_response correction. This is the
+# physically-correct PSF response for a non-deconvolving network like ShearNet.
+PSF_RESPONSE_DIRECT_NGMIX = _config["eval"]["bias"].get("psf_response_direct_ngmix", False)
+PSF_RESPONSE_DIRECT_SN    = _config["eval"]["bias"].get("psf_response_direct_shearnet", False)
+PSF_RESPONSE_DIRECT = PSF_RESPONSE_DIRECT_NGMIX or PSF_RESPONSE_DIRECT_SN
+PSF_DIRECT_STEP = _config["eval"]["bias"].get("psf_response_direct_step", MCAL_STEP)
+
 # ----- ShearNet -----
 INCLUDE_SN    = _config["eval"]["include_shearnet"]
 SN_MODEL_NAME = _config["meta"]["model_name"]
@@ -239,10 +250,34 @@ def make_data(rng, noise, shear_true):
     obsp = ngmix.Observation(im_p, weight=wt, jacobian=jacobian, psf=psf_obs)
     obsm = ngmix.Observation(im_m, weight=wt, jacobian=jacobian, psf=psf_obs)
 
+    # ---- skip-deconvolution ("direct") PSF-shear variants ----
+    # Shear the REAL psf by +/- PSF_DIRECT_STEP in g1 and convolve the (already
+    # shear_true-sheared, shifted) galaxies objp/objm with it. Reuse the same
+    # galaxy noise field im_noise so it cancels in the +/- difference. No metacal.
+    direct_p, direct_m = None, None
+    if PSF_RESPONSE_DIRECT:
+        direct_p, direct_m = {}, {}
+        for _s, _key in ((+PSF_DIRECT_STEP, "1p_psf_direct"),
+                         (-PSF_DIRECT_STEP, "1m_psf_direct")):
+            psf_s = psf.shear(g1=_s, g2=0.0)
+            psf_s_im = psf_s.withGSParams(gsp).drawImage(
+                nx=npix_psf, ny=npix_psf, scale=scale
+            ).array
+            psf_s_im = psf_s_im + rng.normal(scale=psf_noise, size=psf_s_im.shape)
+            psf_s_wt = psf_s_im * 0 + 1.0 / psf_noise**2
+            psf_s_obs = ngmix.Observation(psf_s_im, weight=psf_s_wt, jacobian=psf_jacobian)
+            for _obj, _store in ((objp, direct_p), (objm, direct_m)):
+                im_s = galsim.Convolve(psf_s, _obj, gsparams=gsp).withGSParams(gsp).drawImage(
+                    nx=npix, ny=npix, scale=scale
+                ).array + im_noise
+                _store[_key] = ngmix.Observation(
+                    im_s, weight=wt, jacobian=jacobian, psf=psf_s_obs
+                )
+
     if psf_fwhm == "superbit":
-        return obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr, gal_flux, x_im, y_im
+        return obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr, gal_flux, x_im, y_im, direct_p, direct_m
     else:
-        return obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr, gal_flux
+        return obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr, gal_flux, direct_p, direct_m
 
 def process_single_object(args):
     i, base_seed, noise, shear_true = args
@@ -251,9 +286,9 @@ def process_single_object(args):
     rng = np.random.RandomState(base_seed + i)
 
     if PSF_FWHM == "superbit":
-        obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr, gal_flux, x_im, y_im = make_data(rng=rng, noise=noise, shear_true=shear_true)
+        obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr, gal_flux, x_im, y_im, direct_p, direct_m = make_data(rng=rng, noise=noise, shear_true=shear_true)
     else:
-        obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr, gal_flux = make_data(rng=rng, noise=noise, shear_true=shear_true)
+        obs0, obsp, obsm, g_th_p, g_th_m, gal_hlr, gal_flux, direct_p, direct_m = make_data(rng=rng, noise=noise, shear_true=shear_true)
 
     # create priors & runners locally (safe)
     prior = _get_priors(base_seed + i)
@@ -304,6 +339,28 @@ def process_single_object(args):
     raw_p   = obsp.image.copy()
     raw_m   = obsm.image.copy()
     psf_im  = obsp.psf.image.copy()
+
+    # ---- skip-deconvolution ("direct") PSF response ----
+    # Append the PSF-sheared variants as extra shear types ('1p_psf_direct',
+    # '1m_psf_direct') so they flow through the existing ShearNet batch + table
+    # machinery. ngmix is fit here (plain, non-metacal bootstrapper) only when
+    # requested; otherwise its shape is left NaN and only ShearNet evaluates them.
+    if PSF_RESPONSE_DIRECT:
+        plain_boot = (
+            ngmix.bootstrap.Bootstrapper(runner=runner, psf_runner=psf_runner)
+            if PSF_RESPONSE_DIRECT_NGMIX else None
+        )
+
+        def _augment(direct_obs, data_struct, images):
+            extra = []
+            for key, obs_d in direct_obs.items():
+                res = plain_boot.go(obs_d) if plain_boot is not None else {"flags": 1}
+                extra.append(make_struct(res=res, obs=obs_d, shear_type=key))
+                images[key] = (obs_d.image.copy(), obs_d.psf.image.copy())
+            return np.hstack([data_struct, *extra])
+
+        data_p = _augment(direct_p, data_p, mcal_images_p)
+        data_m = _augment(direct_m, data_m, mcal_images_m)
 
     if PSF_FWHM == "superbit":
         return data_p, data_m, g_th_p, g_th_m, mcal_images_p, mcal_images_m, raw_p, raw_m, psf_im, gal_hlr, gal_flux, x_im, y_im
@@ -436,6 +493,51 @@ if STATE is not None:
 tab_p["g_sn_raw"] = g_sn_raw_p
 tab_m["g_sn_raw"] = g_sn_raw_m
 
+# ---- skip-deconvolution ("direct") PSF-response correction ----
+# Same ensemble-Rbar philosophy as the metacal block below, but Rbar_psf comes
+# from the '*_psf_direct' columns (real PSF sheared +/- step, galaxy convolved
+# with it -- no deconvolution/dilation). This is the physically-correct PSF
+# response for ShearNet. ngmix and ShearNet are corrected independently per the
+# config flags. Takes precedence over the metacal psf_response block.
+def _rbar_pm(c1p, c1m, step):
+    dg = 2.0 * step
+    g1p = np.concatenate([np.asarray(tab_p[c1p], float)[:, 0],
+                          np.asarray(tab_m[c1p], float)[:, 0]])
+    g1m = np.concatenate([np.asarray(tab_p[c1m], float)[:, 0],
+                          np.asarray(tab_m[c1m], float)[:, 0]])
+    return (np.nanmean(g1p) - np.nanmean(g1m)) / dg
+
+if PSF_RESPONSE_DIRECT and "g_1p_psf_direct" not in tab_p.colnames:
+    print("[bias/m] direct PSF-response requested but no *_psf_direct columns "
+          "present; skipping correction.")
+elif PSF_RESPONSE_DIRECT:
+    rbar_psf_direct = (
+        _rbar_pm("g_1p_psf_direct", "g_1m_psf_direct", PSF_DIRECT_STEP)
+        if PSF_RESPONSE_DIRECT_NGMIX else np.nan
+    )
+    rbar_psf_sn_direct = (
+        _rbar_pm("g_sn_1p_psf_direct", "g_sn_1m_psf_direct", PSF_DIRECT_STEP)
+        if (STATE is not None and PSF_RESPONSE_DIRECT_SN) else np.nan
+    )
+    print(
+        f"[bias/m] DIRECT (skip-deconvolution) PSF-response correction ON "
+        f"(step={PSF_DIRECT_STEP}; ngmix={PSF_RESPONSE_DIRECT_NGMIX}, "
+        f"shearnet={PSF_RESPONSE_DIRECT_SN}); ensemble "
+        f"Rbar_psf(ngmix)={rbar_psf_direct:.4f}, "
+        f"Rbar_psf(shearnet)={rbar_psf_sn_direct:.4f}. Applying constant Rbar to "
+        f"g_noshear / g_sn_noshear; raw kept as *_raw."
+    )
+    for _tab in (tab_p, tab_m):
+        _gpsf = np.asarray(_tab["gpsf_noshear"], dtype=float)   # (N, 2)
+        if PSF_RESPONSE_DIRECT_NGMIX:
+            _g = np.asarray(_tab["g_noshear"], dtype=float)
+            _tab["g_noshear_raw"] = _g.copy()
+            _tab["g_noshear"]     = _g - _gpsf * rbar_psf_direct
+        if STATE is not None and PSF_RESPONSE_DIRECT_SN:
+            _gsn = np.asarray(_tab["g_sn_noshear"], dtype=float)
+            _tab["g_sn_noshear_raw"] = _gsn.copy()
+            _tab["g_sn_noshear"]     = _gsn - _gpsf * rbar_psf_sn_direct
+
 # ---- PSF-response (metacal leakage) correction ----
 # The metacal PSF response is an ENSEMBLE quantity (a ratio of ensemble means,
 # exactly as in ngmix/tests/test_metacal_galsim_psf_response.py), NOT a
@@ -452,7 +554,7 @@ tab_m["g_sn_raw"] = g_sn_raw_m
 # NOTE: this response is only physical for a PSF-deconvolving estimator (ngmix).
 # For ShearNet it measures OOD sensitivity to the reconvolution, not leakage, so
 # it is applied only when eval.bias.psf_response_shearnet is set.
-if PSF_RESPONSE and "g_1p_psf" not in tab_p.colnames:
+elif PSF_RESPONSE and "g_1p_psf" not in tab_p.colnames:
     print("[bias/m] PSF-response requested but no *_psf metacal types were run "
           "(reconv_psf must be 'dilate'); skipping correction.")
 elif PSF_RESPONSE:

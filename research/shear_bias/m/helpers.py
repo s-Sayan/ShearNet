@@ -79,7 +79,9 @@ def progress(total, miniters=1):
 def make_struct(res, obs, shear_type, state=None):
     dt = [
         ("flags", "i4"),
-        ("shear_type", "U7"),
+        # widened from U7 to hold the skip-deconvolution keys '1p_psf_direct' /
+        # '1m_psf_direct' alongside the metacal types (noshear, 1p, 1m, *_psf)
+        ("shear_type", "U16"),
         ("s2n", "f8"),
         ("g", "f8", 2),
         ("T", "f8"),
@@ -193,6 +195,14 @@ def shear_data_to_table(data_list, mcal_shear=0.01):
 
         if "1p_psf" in g_sn_store and "1m_psf" in g_sn_store:
             row["r11_psf_sn"] = (g_sn_store["1p_psf"][0] - g_sn_store["1m_psf"][0]) / dg
+
+        # skip-deconvolution ("direct") PSF response: real PSF sheared +/- step,
+        # galaxy convolved with it (no metacal). Present only in direct mode.
+        if "1p_psf_direct" in g_store and "1m_psf_direct" in g_store:
+            row["r11_psf_direct"] = (g_store["1p_psf_direct"][0] - g_store["1m_psf_direct"][0]) / dg
+
+        if "1p_psf_direct" in g_sn_store and "1m_psf_direct" in g_sn_store:
+            row["r11_psf_sn_direct"] = (g_sn_store["1p_psf_direct"][0] - g_sn_store["1m_psf_direct"][0]) / dg
 
         rows.append(row)
 
