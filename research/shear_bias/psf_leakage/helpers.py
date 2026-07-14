@@ -232,6 +232,130 @@ def process_obs_response(obs, boot):
     return struct, mcal_images
 
 
+# ============================================================
+# Skip-deconvolution ("direct") PSF response
+#
+# Instead of measuring the PSF response through metacal (which deconvolves the
+# galaxy from its PSF and reconvolves it with a *dilated, sheared* target PSF),
+# we shear the real PSF directly and convolve the ORIGINAL galaxy with it. This
+# bypasses the deconvolution/dilation step entirely, so the images stay in the
+# form the shape measurement software (ngmix or ShearNet) was designed for:
+#   galaxy (x) PSF, galaxy (x) PSF sheared +g1, galaxy (x) PSF sheared -g1.
+# The per-object PSF response is then the usual finite difference
+#   R11_psf = (g['1p_psf'] - g['1m_psf']) / (2 * step),
+# assembled downstream by ``leakage_response_to_table`` (the arithmetic is
+# identical to the metacal path; only the images differ).
+#
+# See ``bypass_deconvolution_test.md`` in this directory for the rationale.
+# ============================================================
+def render_psf_shear_variants(
+    obj0, psf, *, step, noise, scale, npix, npix_psf, rng, gsp=None, dy=0.0, dx=0.0
+):
+    """
+    Render the same galaxy convolved with the PSF and with the PSF sheared by
+    ``+/-step`` in g1, returning ngmix Observations keyed by shear type
+    ('noshear', '1p_psf', '1m_psf').
+
+    A single noise realisation is shared across the three renders so it cancels
+    in the +/- difference (common random numbers). No deconvolution/metacal is
+    involved -- the reduced-shear ``step`` is applied straight to the real PSF
+    before convolution, matching ngmix/metacal's ``Shape(step, 0)`` convention.
+
+    Parameters
+    ----------
+    obj0 : galsim.GSObject
+        The (already shifted, if desired) pre-PSF galaxy profile.
+    psf : galsim.GSObject
+        The PSF profile to shear and convolve with.
+    step : float
+        Reduced-shear step applied to the PSF in the g1 direction.
+    noise, scale, npix, npix_psf : float/int
+        Image noise sigma, pixel scale, galaxy stamp size, PSF stamp size.
+    rng : np.random.RandomState
+        Source of the shared noise field.
+    gsp : galsim.GSParams, optional
+    dy, dx : float
+        Sub-pixel galaxy shift (arcsec), used to offset the jacobian centre so
+        it matches how ``make_data`` places the object.
+    """
+    import galsim
+
+    if gsp is None:
+        gsp = galsim.GSParams(maximum_fft_size=32768)
+
+    # one shared noise realisation for all three renders
+    im_noise = rng.normal(scale=noise, size=(npix, npix))
+
+    psf_variants = {
+        "noshear": psf,
+        "1p_psf": psf.shear(g1=+step, g2=0.0),
+        "1m_psf": psf.shear(g1=-step, g2=0.0),
+    }
+
+    obs_dict = {}
+    for stype, psf_used in psf_variants.items():
+        obj_psf = galsim.Convolve(psf_used, obj0, gsparams=gsp)
+
+        psf_im = psf_used.withGSParams(gsp).drawImage(
+            nx=npix_psf, ny=npix_psf, scale=scale
+        ).array
+        im = obj_psf.withGSParams(gsp).drawImage(
+            nx=npix, ny=npix, scale=scale
+        ).array
+        im = im + im_noise
+
+        cen = (np.array(im.shape) - 1.0) / 2.0
+        psf_cen = (np.array(psf_im.shape) - 1.0) / 2.0
+
+        jacobian = ngmix.DiagonalJacobian(
+            row=cen[0] + dy / scale, col=cen[1] + dx / scale, scale=scale,
+        )
+        psf_jacobian = ngmix.DiagonalJacobian(
+            row=psf_cen[0], col=psf_cen[1], scale=scale,
+        )
+
+        wt = im * 0 + 1.0 / noise**2
+        psf_noise = psf_im.max() / 1000.0
+        psf_wt = psf_im * 0 + 1.0 / psf_noise**2
+
+        psf_obs = ngmix.Observation(psf_im, weight=psf_wt, jacobian=psf_jacobian)
+        obs_dict[stype] = ngmix.Observation(
+            im, weight=wt, jacobian=jacobian, psf=psf_obs
+        )
+
+    return obs_dict
+
+
+def process_obs_direct(obs_dict, boot=None, do_ngmix=True):
+    """
+    Skip-deconvolution counterpart of ``process_obs_response``.
+
+    Given the pre-rendered PSF-shear-variant observations from
+    ``render_psf_shear_variants``, optionally fit each with ngmix and return the
+    per-shear-type struct array plus the (galaxy, psf) images so ShearNet can be
+    evaluated on each variant in the main process.
+
+    ``do_ngmix=False`` skips the ngmix fit entirely (ShearNet-only run): the
+    ngmix shape ``g`` is left NaN while ``gpsf`` and the images are still
+    populated. This is what makes the two shape-measurement softwares
+    independently switchable from the config.
+    """
+    dlist = []
+    for stype, obs in obs_dict.items():
+        if do_ngmix and boot is not None:
+            res = boot.go(obs)
+        else:
+            # skip the ngmix fit -> make_struct_response leaves g/T/s2n NaN
+            res = {"flags": 1}
+        dlist.append(make_struct_response(res=res, obs=obs, shear_type=stype))
+    struct = np.hstack(dlist)
+    mcal_images = {
+        stype: (obs.image.copy(), obs.psf.image.copy())
+        for stype, obs in obs_dict.items()
+    }
+    return struct, mcal_images
+
+
 def leakage_response_to_table(data_list, step=0.01, apply_shearnet=False):
     """
     Assemble the PSF-leakage table from metacal per-object struct arrays and
@@ -336,6 +460,90 @@ def leakage_response_to_table(data_list, step=0.01, apply_shearnet=False):
         rows.append(row)
 
     return Table(rows), rbar_psf, rbar_psf_sn
+
+
+def leakage_response_direct_to_table(data_list, step=0.01):
+    """
+    Assemble the skip-deconvolution ("direct") PSF-response table.
+
+    Unlike :func:`leakage_response_to_table` (metacal), the ngmix and ShearNet
+    ensemble responses are each computed over the objects where *that* software
+    produced a finite shape -- so the two shape-measurement softwares can be
+    enabled independently from the config (ngmix-only, ShearNet-only, or both).
+
+    No leakage correction is applied here (``g == g_raw``, ``g_sn == g_sn_raw``);
+    the point is to *measure* the response, not remove it. The column names match
+    the metacal path (``r11_psf``, ``r11_psf_sn``, ``rbar_psf``, ``rbar_psf_sn``,
+    ``gpsf``, ``g``, ``g_raw``, ``g_sn``, ``g_sn_raw``, ``s2n``, ``T``, ``Tpsf``)
+    so the existing plotting cells work unchanged.
+
+    Returns ``(table, Rbar_psf, Rbar_psf_sn)``.
+    """
+    dg = 2.0 * step
+
+    stores = []
+    g1p_ng, g1m_ng, g1p_sn, g1m_sn = [], [], [], []
+    for arr in data_list:
+        g_store, g_sn_store = {}, {}
+        gpsf = np.array([np.nan, np.nan])
+        meta = {}
+        for rec in arr:
+            stype = rec["shear_type"]
+            g_store[stype] = np.array(rec["g"], dtype=float)
+            g_sn_store[stype] = np.array(rec["g_sn"], dtype=float)
+            if stype == "noshear":
+                gpsf = np.array(rec["gpsf"], dtype=float)
+                meta = {"s2n": rec["s2n"], "T": rec["T"], "Tpsf": rec["Tpsf"]}
+        stores.append((g_store, g_sn_store, gpsf, meta))
+
+        # accumulate each software's ensemble only where its own shape is finite
+        if ("1p_psf" in g_store and "1m_psf" in g_store
+                and np.isfinite(g_store["1p_psf"][0])
+                and np.isfinite(g_store["1m_psf"][0])):
+            g1p_ng.append(g_store["1p_psf"][0])
+            g1m_ng.append(g_store["1m_psf"][0])
+        if ("1p_psf" in g_sn_store and "1m_psf" in g_sn_store
+                and np.isfinite(g_sn_store["1p_psf"][0])
+                and np.isfinite(g_sn_store["1m_psf"][0])):
+            g1p_sn.append(g_sn_store["1p_psf"][0])
+            g1m_sn.append(g_sn_store["1m_psf"][0])
+
+    def _rbar(a, b):
+        a, b = np.asarray(a, float), np.asarray(b, float)
+        if a.size == 0 or b.size == 0:
+            return np.nan
+        return (np.nanmean(a) - np.nanmean(b)) / dg
+
+    rbar_psf = _rbar(g1p_ng, g1m_ng)
+    rbar_psf_sn = _rbar(g1p_sn, g1m_sn)
+
+    rows = []
+    for g_store, g_sn_store, gpsf, meta in stores:
+        row = {"flag": 0, "gpsf": gpsf}
+        row.update(meta)
+
+        if "1p_psf" in g_store and "1m_psf" in g_store:
+            row["r11_psf"] = (g_store["1p_psf"][0] - g_store["1m_psf"][0]) / dg
+        else:
+            row["r11_psf"] = np.nan
+        if "1p_psf" in g_sn_store and "1m_psf" in g_sn_store:
+            row["r11_psf_sn"] = (g_sn_store["1p_psf"][0] - g_sn_store["1m_psf"][0]) / dg
+        else:
+            row["r11_psf_sn"] = np.nan
+        row["rbar_psf"] = rbar_psf
+        row["rbar_psf_sn"] = rbar_psf_sn
+
+        g_noshear = g_store.get("noshear", np.array([np.nan, np.nan]))
+        row["g_raw"] = g_noshear
+        row["g"] = g_noshear
+        g_sn_noshear = g_sn_store.get("noshear", np.array([np.nan, np.nan]))
+        row["g_sn_raw"] = g_sn_noshear
+        row["g_sn"] = g_sn_noshear
+
+        rows.append(row)
+
+    return Table(rows), rbar_psf, rbar_psf_sn
+
 
 def shear_data_to_table(data_list):
     """

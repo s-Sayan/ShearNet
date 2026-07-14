@@ -71,6 +71,15 @@ eval:
     psf_response_shearnet: false  # metacal response is not physical leakage for a network; keep ShearNet raw
     reconv_psf: dilate       # metacal reconvolution PSF; must be 'dilate' for the *_psf shear terms
     metacal_step: 0.01       # metacal shear step; R11_psf = (g_1p_psf - g_1m_psf) / (2*step)
+    # ---- skip-deconvolution ("direct") PSF response -------------------------
+    # Measure R11_psf by shearing the REAL PSF by +/- step in g1 and convolving
+    # the original galaxy with it (no metacal deconvolution/dilation). Switchable
+    # per shape-measurement software. If either flag below is true, this mode
+    # runs INSTEAD of the metacal psf_response path above and writes the same
+    # r11_psf / r11_psf_sn columns (see bypass_deconvolution_test.md).
+    psf_response_direct_ngmix: false     # measure direct R11_psf with ngmix
+    psf_response_direct_shearnet: false  # measure direct R11_psf with ShearNet
+    psf_response_direct_step: 0.01       # PSF shear step (defaults to metacal_step)
     output: benchmarking/psf_leakage/psf_leakage_results.fits
 
   timing:                    # ngmix vs ShearNet speed

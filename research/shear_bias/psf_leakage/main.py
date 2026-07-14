@@ -25,8 +25,11 @@ from helpers import (
     make_struct,
     process_obs,
     process_obs_response,
+    render_psf_shear_variants,
+    process_obs_direct,
     shear_data_to_table,
     leakage_response_to_table,
+    leakage_response_direct_to_table,
     get_init_guess,
     get_em_ngauss,
     get_coellip_ngauss
@@ -91,6 +94,15 @@ PSF_RESPONSE_SHEARNET = LEAKAGE_CFG.get("psf_response_shearnet", False)
 MCAL_TYPES = (
     ["noshear", "1p_psf", "1m_psf"] if RECONV_PSF == "dilate" else ["noshear"]
 )
+
+# ----- Skip-deconvolution ("direct") PSF response -----
+# Shear the real PSF by +/- step and convolve the original galaxy with it (no
+# metacal deconvolution/dilation). Switchable per shape-measurement software; if
+# either is on, this mode runs instead of the metacal psf_response path above.
+PSF_RESPONSE_DIRECT_NGMIX = LEAKAGE_CFG.get("psf_response_direct_ngmix", False)
+PSF_RESPONSE_DIRECT_SN    = LEAKAGE_CFG.get("psf_response_direct_shearnet", False)
+PSF_RESPONSE_DIRECT = PSF_RESPONSE_DIRECT_NGMIX or PSF_RESPONSE_DIRECT_SN
+PSF_DIRECT_STEP = LEAKAGE_CFG.get("psf_response_direct_step", MCAL_STEP)
 
 # ----- ShearNet -----
 INCLUDE_SN    = _config["eval"]["include_shearnet"]
@@ -214,6 +226,58 @@ def make_data(rng, noise):
 
     return obs0, g_th, gal_hlr, gal_flux
 
+
+def make_data_direct(rng, noise, step):
+    """
+    Skip-deconvolution PSF-response data. Draws the same catalog galaxy + PSFEx
+    PSF as ``make_data``, then renders three observations that differ ONLY in the
+    PSF: the original PSF and the PSF sheared by +/- ``step`` in g1. No metacal /
+    deconvolution is involved. Returns ``(obs_dict, g_th, gal_hlr, gal_flux)``
+    where ``obs_dict`` is keyed by shear type ('noshear', '1p_psf', '1m_psf').
+    """
+    scale = SCALE
+
+    index = rng.randint(len(cosmos_cat))
+    q    = cosmos_cat['Q'][index]
+    phi  = cosmos_cat['PHI'][index] * galsim.radians
+    if GAL_HLR == "catalog":
+        gal_hlr = cosmos_cat['HLR'][index]
+    else:
+        gal_hlr = GAL_HLR
+    if GAL_FLUX == "catalog":
+        gal_flux = cosmos_cat['FLUX'][index]
+    else:
+        gal_flux = GAL_FLUX
+
+    npix_psf = PSF_NPIX
+    npix = NPIX
+    dy, dx = rng.uniform(low=-scale / 2, high=scale / 2, size=2)
+
+    image_xsize = 9600
+    image_ysize = 6400
+    margin = 500
+    x_im = rng.randint(margin, image_xsize - margin)
+    y_im = rng.randint(margin, image_ysize - margin)
+    image_position = galsim.PositionD(x_im, y_im)
+    psf = GALSIM_PSF.getPSF(image_position)
+    gsp = galsim.GSParams(maximum_fft_size=32768)
+    obj0 = galsim.Exponential(half_light_radius=gal_hlr, flux=gal_flux).shear(q=q, beta=phi)
+
+    g1_th, g2_th, _, _, _ = utils.g_from_gal_jac(obj0)
+    g_th = np.array([g1_th, g2_th])
+
+    obj0 = obj0.shift(dx=dx, dy=dy)
+
+    obs_dict = render_psf_shear_variants(
+        obj0, psf,
+        step=step, noise=noise, scale=scale,
+        npix=npix, npix_psf=npix_psf,
+        rng=rng, gsp=gsp, dy=dy, dx=dx,
+    )
+
+    return obs_dict, g_th, gal_hlr, gal_flux
+
+
 def process_single_object(args):
     i, base_seed, noise = args
 
@@ -317,6 +381,59 @@ def process_single_object_response(args):
     return data, g_th, mcal_images, gal_hlr, gal_flux
 
 
+def process_single_object_direct(args):
+    """
+    Skip-deconvolution PSF-response worker. Renders the three PSF-shear-variant
+    observations (see ``make_data_direct``) and, when ngmix is enabled for this
+    mode, fits each with the ordinary (non-metacal) bootstrapper. Returns the
+    sheared images so ShearNet can be evaluated on each variant in the main
+    process. Result layout matches ``process_single_object_response``:
+    ``(data, g_th, images, gal_hlr, gal_flux)``.
+    """
+    i, base_seed, noise = args
+
+    rng = np.random.RandomState(base_seed + i)
+
+    obs_dict, g_th, gal_hlr, gal_flux = make_data_direct(
+        rng=rng, noise=noise, step=PSF_DIRECT_STEP
+    )
+
+    boot = None
+    if PSF_RESPONSE_DIRECT_NGMIX:
+        prior = _get_priors(base_seed + i)
+        TGUESS, _ = get_init_guess(obs_dict["noshear"])
+
+        fitter = ngmix.fitting.Fitter(model=GAL_MODEL, prior=prior, fit_pars=LM_PARS)
+        guesser = ngmix.guessers.TPSFFluxAndPriorGuesser(
+            rng=rng, T=TGUESS, prior=prior
+        )
+
+        if 'em' in PSF_MODEL:
+            psf_ngauss = get_em_ngauss(PSF_MODEL)
+            psf_fitter = ngmix.em.EMFitter(maxiter=EM_PARS['maxiter'], tol=EM_PARS['tol'])
+            psf_guesser = ngmix.guessers.GMixPSFGuesser(rng=rng, ngauss=psf_ngauss)
+        elif 'coellip' in PSF_MODEL:
+            psf_ngauss = get_coellip_ngauss(PSF_MODEL)
+            psf_fitter = ngmix.fitting.CoellipFitter(ngauss=psf_ngauss, fit_pars=PSF_LM_PARS)
+            psf_guesser = ngmix.guessers.CoellipPSFGuesser(rng=rng, ngauss=psf_ngauss)
+        elif PSF_MODEL == 'gauss':
+            psf_fitter = ngmix.fitting.Fitter(model='gauss', fit_pars=PSF_LM_PARS)
+            psf_guesser = ngmix.guessers.SimplePSFGuesser(rng=rng)
+
+        psf_runner = ngmix.runners.PSFRunner(
+            fitter=psf_fitter, guesser=psf_guesser, ntry=NTRY
+        )
+        runner = ngmix.runners.Runner(
+            fitter=fitter, guesser=guesser, ntry=NTRY
+        )
+        boot = ngmix.bootstrap.Bootstrapper(runner=runner, psf_runner=psf_runner)
+
+    data, mcal_images = process_obs_direct(
+        obs_dict, boot=boot, do_ngmix=PSF_RESPONSE_DIRECT_NGMIX
+    )
+    return data, g_th, mcal_images, gal_hlr, gal_flux
+
+
 args_list = [(i, SEED, NOISE) for i in range(NOBS)]
 
 data_list = []
@@ -370,7 +487,18 @@ def _run_shearnet_batch_response(buf):
 
 hlr_list_out, flux_list_out = [], []
 
-if PSF_RESPONSE:
+if PSF_RESPONSE_DIRECT:
+    print(
+        f"[psf_leakage] DIRECT (skip-deconvolution) PSF response ON "
+        f"(ngmix={PSF_RESPONSE_DIRECT_NGMIX}, shearnet={PSF_RESPONSE_DIRECT_SN}, "
+        f"step={PSF_DIRECT_STEP}); PSF sheared directly, no metacal deconvolution."
+    )
+    _worker = process_single_object_direct
+    # reuse the per-shear-type ShearNet evaluator; skip it unless SN is requested
+    _batch = _run_shearnet_batch_response if PSF_RESPONSE_DIRECT_SN else (lambda buf: None)
+    # result layout: (data, g_th, images, gal_hlr, gal_flux)
+    _hlr_idx, _flux_idx = 3, 4
+elif PSF_RESPONSE:
     print(
         f"[psf_leakage] PSF-response correction ON "
         f"(reconv_psf={RECONV_PSF}, metacal_step={MCAL_STEP}); "
@@ -400,7 +528,21 @@ with Pool(processes=nproc) as pool:
         _batch(img_buffer)
         img_buffer.clear()
 
-if PSF_RESPONSE:
+if PSF_RESPONSE_DIRECT:
+    # Dedicated direct assembler: ngmix and ShearNet ensemble responses are each
+    # computed only where that software produced a finite shape, so the two are
+    # independently switchable. No leakage correction is applied here.
+    tab, rbar_psf, rbar_psf_sn = leakage_response_direct_to_table(
+        data_list, step=PSF_DIRECT_STEP
+    )
+    print(
+        f"[psf_leakage] ensemble DIRECT PSF response  "
+        f"Rbar_psf(ngmix)={rbar_psf:.4f}  Rbar_psf(shearnet)={rbar_psf_sn:.4f}"
+    )
+    tab["g_th"] = np.asarray(gth_list)
+    tab["gal_hlr_th"]  = np.array(hlr_list_out)
+    tab["gal_flux_th"] = np.array(flux_list_out)
+elif PSF_RESPONSE:
     tab, rbar_psf, rbar_psf_sn = leakage_response_to_table(
         data_list, step=MCAL_STEP, apply_shearnet=PSF_RESPONSE_SHEARNET
     )
