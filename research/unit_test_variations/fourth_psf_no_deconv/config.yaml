@@ -3,7 +3,7 @@ meta:
   description: "superbit PSF; g1, g2, hlr, flux from catalog; constant noise"
 
 paths:
-  root: /home/adfield/ShearNet/research/unit_test_variations/fourth_psf_response_corrected
+  root: /home/adfield/ShearNet/research/unit_test_variations/fourth_psf_no_deconv
   psfex_model_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
   train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
   eval_catalog:  /home/adfield/ShearNet/cosmos_catalog_eval.fits
