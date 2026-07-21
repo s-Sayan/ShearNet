@@ -531,13 +531,18 @@ with Pool(processes=nproc) as pool:
 if PSF_RESPONSE_DIRECT:
     # Dedicated direct assembler: ngmix and ShearNet ensemble responses are each
     # computed only where that software produced a finite shape, so the two are
-    # independently switchable. No leakage correction is applied here.
+    # independently switchable. The per-software flags also APPLY the constant
+    # ensemble correction to g / g_sn (raw kept as g_raw / g_sn_raw), matching the
+    # metacal leakage path and the m/bias pipeline.
     tab, rbar_psf, rbar_psf_sn = leakage_response_direct_to_table(
-        data_list, step=PSF_DIRECT_STEP
+        data_list, step=PSF_DIRECT_STEP,
+        apply_ngmix=PSF_RESPONSE_DIRECT_NGMIX,
+        apply_shearnet=PSF_RESPONSE_DIRECT_SN,
     )
     print(
         f"[psf_leakage] ensemble DIRECT PSF response  "
-        f"Rbar_psf(ngmix)={rbar_psf:.4f}  Rbar_psf(shearnet)={rbar_psf_sn:.4f}"
+        f"Rbar_psf(ngmix)={rbar_psf:.4f}  Rbar_psf(shearnet)={rbar_psf_sn:.4f}  "
+        f"(applied: ngmix={PSF_RESPONSE_DIRECT_NGMIX}, shearnet={PSF_RESPONSE_DIRECT_SN})"
     )
     tab["g_th"] = np.asarray(gth_list)
     tab["gal_hlr_th"]  = np.array(hlr_list_out)

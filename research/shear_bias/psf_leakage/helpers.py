@@ -462,20 +462,26 @@ def leakage_response_to_table(data_list, step=0.01, apply_shearnet=False):
     return Table(rows), rbar_psf, rbar_psf_sn
 
 
-def leakage_response_direct_to_table(data_list, step=0.01):
+def leakage_response_direct_to_table(data_list, step=0.01,
+                                     apply_ngmix=False, apply_shearnet=False):
     """
     Assemble the skip-deconvolution ("direct") PSF-response table.
 
-    Unlike :func:`leakage_response_to_table` (metacal), the ngmix and ShearNet
-    ensemble responses are each computed over the objects where *that* software
-    produced a finite shape -- so the two shape-measurement softwares can be
-    enabled independently from the config (ngmix-only, ShearNet-only, or both).
+    The ngmix and ShearNet ensemble responses are each computed over the objects
+    where *that* software produced a finite shape -- so the two shape-measurement
+    softwares can be enabled independently from the config.
 
-    No leakage correction is applied here (``g == g_raw``, ``g_sn == g_sn_raw``);
-    the point is to *measure* the response, not remove it. The column names match
-    the metacal path (``r11_psf``, ``r11_psf_sn``, ``rbar_psf``, ``rbar_psf_sn``,
-    ``gpsf``, ``g``, ``g_raw``, ``g_sn``, ``g_sn_raw``, ``s2n``, ``T``, ``Tpsf``)
-    so the existing plotting cells work unchanged.
+    Correction application (mirrors the metacal path and the m/bias pipeline):
+    when ``apply_ngmix`` / ``apply_shearnet`` is set, the constant ensemble
+    response is subtracted from the corresponding noshear shape
+    (``g = g_noshear - gpsf * Rbar_psf`` and/or
+    ``g_sn = g_sn_noshear - gpsf * Rbar_psf_sn``). The uncorrected shapes are
+    always kept in ``g_raw`` / ``g_sn_raw``. With both flags off this is a pure
+    measurement (``g == g_raw``, ``g_sn == g_sn_raw``).
+
+    Column names match the metacal path (``r11_psf``, ``r11_psf_sn``,
+    ``rbar_psf``, ``rbar_psf_sn``, ``gpsf``, ``g``, ``g_raw``, ``g_sn``,
+    ``g_sn_raw``, ``s2n``, ``T``, ``Tpsf``).
 
     Returns ``(table, Rbar_psf, Rbar_psf_sn)``.
     """
@@ -535,10 +541,12 @@ def leakage_response_direct_to_table(data_list, step=0.01):
 
         g_noshear = g_store.get("noshear", np.array([np.nan, np.nan]))
         row["g_raw"] = g_noshear
-        row["g"] = g_noshear
+        row["g"] = (g_noshear - gpsf * rbar_psf
+                    if apply_ngmix and np.isfinite(rbar_psf) else g_noshear)
         g_sn_noshear = g_sn_store.get("noshear", np.array([np.nan, np.nan]))
         row["g_sn_raw"] = g_sn_noshear
-        row["g_sn"] = g_sn_noshear
+        row["g_sn"] = (g_sn_noshear - gpsf * rbar_psf_sn
+                       if apply_shearnet and np.isfinite(rbar_psf_sn) else g_sn_noshear)
 
         rows.append(row)
 
