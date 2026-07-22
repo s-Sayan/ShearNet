@@ -20,6 +20,7 @@ from ..core.augment import d4_augment
 from ..utils.normalization import (
     fit_image_normalizer,
     fit_normalizer,
+    identity_normalizer,
     save_image_normalizer,
     save_normalizer,
     transform_images,
@@ -213,6 +214,21 @@ Examples:
         help="Dataset-level input-image standardization (default off).",
     )
     parser.add_argument(
+        "--normalize_labels",
+        dest="normalize_labels",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Z-score standardize network outputs/labels (default on).",
+    )
+    parser.add_argument(
+        "--no_normalize_labels",
+        dest="normalize_labels",
+        action="store_const",
+        const=False,
+        help="Disable label normalization; train on raw labels (ablation).",
+    )
+    parser.add_argument(
         "--d4_augment",
         action="store_const",
         const=True,
@@ -375,6 +391,8 @@ def _config_from_args(args):
     # ``config``) unless the user overrides them on the CLI.
     if args.normalize_images is not None:
         config._set_nested("dataset.normalize_images", args.normalize_images)
+    if args.normalize_labels is not None:
+        config._set_nested("dataset.normalize_labels", args.normalize_labels)
     if args.d4_augment is not None:
         config._set_nested("dataset.d4_augment", args.d4_augment)
     if args.ema_decay is not None:
@@ -447,8 +465,10 @@ def _prepare_training_data(config):
     """Simulate the training set and standardize its labels (and, optionally, images).
 
     Reads the dataset/model settings from ``config``, generates the stamps,
-    splits off the PSF channel for the two-branch model, and fits the label
-    normalizer on the training portion only. Two opt-in transforms may also be
+    splits off the PSF channel for the two-branch model, and (when
+    ``dataset.normalize_labels`` is true, the default) fits the label normalizer
+    on the training portion only; when false, an identity normalizer is used so
+    the network trains on raw labels. Two further opt-in transforms may also be
     applied here, both fit on the training portion only:
 
     * ``dataset.normalize_images``: dataset-level input standardization
@@ -468,6 +488,7 @@ def _prepare_training_data(config):
     """
     spec = DatasetSpec.from_config(config)
     val_split = config.get("training.val_split")
+    normalize_labels = config.get("dataset.normalize_labels", True)
     normalize_images = config.get("dataset.normalize_images", False)
     do_d4_augment = config.get("dataset.d4_augment", False)
     output_keys = tuple(config.get("model.output_keys"))
@@ -513,7 +534,12 @@ def _prepare_training_data(config):
         eff_val_split = len(lab_val) / len(labels)
 
     # Fit the label normalizer on the (possibly augmented) training portion.
-    norm_params = fit_normalizer(labels[:split_idx])
+    # When disabled (ablation), use an identity normalizer so the network sees
+    # raw labels while the save/load/eval paths stay unchanged.
+    if normalize_labels:
+        norm_params = fit_normalizer(labels[:split_idx])
+    else:
+        norm_params = identity_normalizer(labels)
     labels = transform_labels(labels, norm_params)
 
     # Optional dataset-level image standardization, fit on the same training

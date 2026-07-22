@@ -65,6 +65,31 @@ def fit_normalizer(labels: np.ndarray) -> dict:
     return norm_params
 
 
+def identity_normalizer(labels: np.ndarray) -> dict:
+    """Return a no-op label normalizer (mean 0, std 1) matching ``labels`` width.
+
+    Used when label normalization is disabled (``dataset.normalize_labels:
+    false``) so the network trains on raw labels while every downstream consumer
+    keeps working unchanged: ``transform_labels`` becomes the identity, the saved
+    normalizer round-trips, and ``inverse_transform_labels`` at eval is likewise
+    a no-op. This keeps label normalization a clean on/off ablation without
+    special-casing the save/load/eval paths.
+
+    Parameters
+    ----------
+    labels : np.ndarray, shape (N, n_params)
+
+    Returns
+    -------
+    norm_params : dict
+        {"mean": zeros(n_params), "std": ones(n_params)}
+    """
+    n = labels.shape[1]
+    norm_params = {"mean": np.zeros(n, dtype=float), "std": np.ones(n, dtype=float)}
+    logger.info("  Label normalization DISABLED (identity normalizer).")
+    return norm_params
+
+
 def transform_labels(labels: np.ndarray, norm_params: dict) -> np.ndarray:
     """Z-score normalize labels to zero mean and unit variance.
 

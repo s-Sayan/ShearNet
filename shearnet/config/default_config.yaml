@@ -12,6 +12,12 @@ dataset:
   pixel_size: 0.141
   apply_psf_shear: false
   psf_shear_range: 0.05
+  # Z-score standardization of the network outputs (labels: g1, g2, hlr, flux),
+  # fit on the training portion only. Default true, matching historical behavior
+  # (labels were always normalized). Set false to train on raw labels for the
+  # label-normalization ablation; when off, an identity normalizer is saved so
+  # eval and the benchmarks are unaffected.
+  normalize_labels: true
   # Dataset-level input-image standardization (independent of label
   # normalization). When true, a single scalar mean/std per channel is fit on
   # the training stamps and reused at train/eval/benchmark time. Default false

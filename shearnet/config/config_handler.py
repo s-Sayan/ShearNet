@@ -106,6 +106,7 @@ class Config:
         "train.plot": "plotting.plot",
         "paths.train_catalog": "catalog.cosmos_cat_fname",
         "image.normalize_images": "dataset.normalize_images",
+        "train.normalize_labels": "dataset.normalize_labels",
     }
 
     def _normalize_schema(self) -> None:
@@ -167,6 +168,7 @@ class Config:
             "nse_sd": "dataset.nse_sd",
             "normalized": "dataset.normalized",
             "normalize_images": "dataset.normalize_images",
+            "normalize_labels": "dataset.normalize_labels",
             "d4_augment": "dataset.d4_augment",
             "stamp_size": "dataset.stamp_size",
             "pixel_size": "dataset.pixel_size",
