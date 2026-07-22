@@ -1,0 +1,101 @@
+meta:
+  model_name: fourth_validation_normalized_images
+  description: "superbit PSF; g1, g2, hlr, flux from catalog; constant noise"
+
+paths:
+  root: /home/adfield/ShearNet/research/unit_test_variations/fourth_with_normalized_images
+  psfex_model_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
+  train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
+  eval_catalog:  /home/adfield/ShearNet/cosmos_catalog_eval.fits
+  checkpoint_dir: null      # null -> $SHEARNET_DATA_PATH/model_checkpoint
+  plot_dir:       null      # null -> $SHEARNET_DATA_PATH/plots
+
+image:
+  stamp_size: 53
+  pixel_scale: 0.141
+  noise_sd: 12.719674
+  normalize_images: true
+
+psf:
+  mode: superbit            # superbit = PSFEx file above | ideal = analytic Gaussian
+  gaussian_fwhm: 0.5        # only used when mode: ideal
+  stamp_size: 53            # psf_npix
+  noise: 1.0e-6             # consumed by the bias test;
+
+galaxy:
+  hlr_type:  catalog        # constant | catalog
+  flux_type: catalog        # constant | catalog
+  hlr:  0.5                 # value used when *_type is constant
+  flux: 12258.97
+
+model:
+  architecture: fork-like
+  process_psf: true
+  galaxy_branch: research_backed
+  psf_branch:    forklens_psf
+  fusion: transformer                   # concat | transformer
+  output_keys: [g1, g2, hlr, flux]
+  gap: true
+
+train:
+  seed: 42
+  samples: 300000
+  epochs: 80
+  batch_size: 128
+  learning_rate: 1.0e-4
+  weight_decay:  1.5e-2
+  patience: 20
+  val_split: 0.2
+  eval_interval: 1
+  loss_weights: [1.0, 1.0, 1.0, 1.0]   # one per output_key, in order
+  plot: true
+
+eval:
+  seed: 150
+  n_obs: 200000
+  include_shearnet: true     # load ShearNet next to ngmix (bias test may set false for a pure-ngmix baseline)
+  gal_model: gauss           # ngmix galaxy fit model
+
+  bias:                      # shear-bias / metacal
+    psf_model: gauss         # ngmix PSF fit model
+    n_jackknife: 20
+    shear_true: 0.01
+    psf_response: false      # true -> apply metacal PSF-response correction to g_noshear / g_sn_noshear (affects m, c)
+    psf_response_shearnet: false  # metacal response is not physical leakage for a network; keep ShearNet raw
+    reconv_psf: dilate       # metacal reconvolution PSF; must be 'dilate' for the *_psf shear terms
+    metacal_step: 0.01       # metacal shear step; R11 = (g_1p - g_1m)/(2*step), R11_psf = (g_1p_psf - g_1m_psf)/(2*step)
+    # ---- skip-deconvolution ("direct") PSF-response correction ---------------
+    # Measure R11_psf by shearing the REAL PSF by +/- step and convolving the
+    # galaxy with it (no metacal deconvolution/dilation), then subtract
+    # gpsf * Rbar_psf from g_noshear / g_sn_noshear. Switchable per software; when
+    # on it takes precedence over the metacal psf_response block above. This is
+    # the physically-correct PSF response for ShearNet (a non-deconvolving net),
+    # so use it to see the true effect of the leakage correction on m and c.
+    psf_response_direct_ngmix: false     # measure + apply direct correction to ngmix g_noshear
+    psf_response_direct_shearnet: false  # measure + apply direct correction to ShearNet g_sn_noshear
+    psf_response_direct_step: 0.01       # PSF shear step (defaults to metacal_step)
+    output: benchmarking/m/metacal_results.fits
+
+  leakage:                   # PSF leakage
+    psf_model: em5
+    psf_response: false      # true -> apply metacal PSF-response (leakage) correction to g and g_sn
+    psf_response_shearnet: false  # metacal response is not physical leakage for a network; keep ShearNet raw
+    reconv_psf: dilate       # metacal reconvolution PSF; must be 'dilate' for the *_psf shear terms
+    metacal_step: 0.01       # metacal shear step; R11_psf = (g_1p_psf - g_1m_psf) / (2*step)
+    # ---- skip-deconvolution ("direct") PSF response -------------------------
+    # Measure R11_psf by shearing the REAL PSF by +/- step in g1 and convolving
+    # the original galaxy with it (no metacal deconvolution/dilation). Switchable
+    # per shape-measurement software. If either flag below is true, this mode
+    # runs INSTEAD of the metacal psf_response path above and writes the same
+    # r11_psf / r11_psf_sn columns.
+    psf_response_direct_ngmix: false     # measure direct R11_psf with ngmix
+    psf_response_direct_shearnet: false  # measure direct R11_psf with ShearNet
+    psf_response_direct_step: 0.01       # PSF shear step (defaults to metacal_step)
+    output: benchmarking/psf_leakage/psf_leakage_results.fits
+
+  timing:                    # ngmix vs ShearNet speed
+    psf_model: em5
+    n_warmup: 20
+    shearnet_batch_size: 512
+    nproc: null              # null -> SLURM_CPUS_PER_TASK
+    output: timing/timing_results.npz

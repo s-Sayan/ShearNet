@@ -12,6 +12,16 @@ dataset:
   pixel_size: 0.141
   apply_psf_shear: false
   psf_shear_range: 0.05
+  # Dataset-level input-image standardization (independent of label
+  # normalization). When true, a single scalar mean/std per channel is fit on
+  # the training stamps and reused at train/eval/benchmark time. Default false
+  # so existing runs are unchanged; toggle for the A/B.
+  normalize_images: false
+  # D4 (8x) training augmentation -- ABLATION ONLY. Meaningful only for the
+  # non-equivariant baselines (cnn / fork-like); a provable no-op for
+  # d4-fork-like. Leave false unless running the augmentation-vs-architecture
+  # ablation.
+  d4_augment: false
 
 # Model configuration  
 model:
@@ -37,6 +47,9 @@ training:
   val_split: 0.2
   eval_interval: 1
   loss: "mse"  # registry name: mse, mae, huber (or one added via register_loss)
+  # Exponential moving average of the weights. null = off (default, no change).
+  # Set e.g. 0.999 to validate/checkpoint the averaged weights.
+  ema_decay: null
 
 # Evaluation configuration
 evaluation:

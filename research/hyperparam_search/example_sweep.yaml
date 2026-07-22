@@ -1,0 +1,22 @@
+# Example ShearNet hyperparameter sweep (item 5).
+#
+# Run:
+#   python research/hyperparam_search/sweep.py --sweep research/hyperparam_search/example_sweep.yaml --dry-run
+#   python research/hyperparam_search/sweep.py --sweep research/hyperparam_search/example_sweep.yaml
+#
+# Each run trains via `shearnet-train --config <generated>` and is ranked by its
+# best validation loss. Start from a light base config (few samples/epochs) to
+# find promising regions, then re-run the winners at full scale.
+
+base_config: ../../configs/dry_run.yaml   # relative to this file (or pass an absolute path)
+method: grid                              # "grid" (full product) or "random"
+n_samples: 12                             # random only
+seed: 0                                   # random only
+model_name_prefix: sweep
+
+grid:
+  training.learning_rate: [1.0e-3, 5.0e-4, 1.0e-4]
+  training.batch_size: [32, 64, 128]
+  training.weight_decay: [1.0e-4, 1.0e-5]
+  # EMA (item 4) is just another sweepable knob: null = off, 0.999 = on.
+  training.ema_decay: [null, 0.999]

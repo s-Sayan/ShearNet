@@ -7,6 +7,7 @@ import os
 
 import jax.numpy as jnp
 import jax.random as random
+import numpy as np
 
 import shearnet.core.models
 
@@ -15,9 +16,13 @@ from ..config.config_handler import Config, load_default_config
 from ..core.dataset import split_combined_images
 from ..core.specs import DatasetSpec, TrainConfig
 from ..utils.device import get_device
+from ..core.augment import d4_augment
 from ..utils.normalization import (
+    fit_image_normalizer,
     fit_normalizer,
+    save_image_normalizer,
     save_normalizer,
+    transform_images,
     transform_labels,
 )
 from ..plotting import plot_learning_curve
@@ -200,6 +205,26 @@ Examples:
         default=None,
         help="Training loss: a registry name (mse, mae, huber, ...) [default: mse]",
     )
+    parser.add_argument(
+        "--normalize_images",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Dataset-level input-image standardization (default off).",
+    )
+    parser.add_argument(
+        "--d4_augment",
+        action="store_const",
+        const=True,
+        default=None,
+        help="8x D4 training augmentation -- ABLATION ONLY; do not use with d4-fork-like.",
+    )
+    parser.add_argument(
+        "--ema_decay",
+        type=float,
+        default=None,
+        help="EMA decay for the weights, e.g. 0.999 (default off).",
+    )
 
     return parser
 
@@ -346,6 +371,14 @@ def _config_from_args(args):
         "training.loss_weights", args.loss_weights if args.loss_weights is not None else None
     )
     config._set_nested("training.loss", args.loss if args.loss is not None else d["loss"])
+    # New opt-in knobs default to their default_config values (already seeded in
+    # ``config``) unless the user overrides them on the CLI.
+    if args.normalize_images is not None:
+        config._set_nested("dataset.normalize_images", args.normalize_images)
+    if args.d4_augment is not None:
+        config._set_nested("dataset.d4_augment", args.d4_augment)
+    if args.ema_decay is not None:
+        config._set_nested("training.ema_decay", args.ema_decay)
     config._set_nested("catalog.cosmos_cat_fname", None)
     return config
 
@@ -411,18 +444,33 @@ def build_train_config(args):
 
 
 def _prepare_training_data(config):
-    """Simulate the training set and z-score normalize its labels.
+    """Simulate the training set and standardize its labels (and, optionally, images).
 
     Reads the dataset/model settings from ``config``, generates the stamps,
     splits off the PSF channel for the two-branch model, and fits the label
-    normalizer on the training portion only.
+    normalizer on the training portion only. Two opt-in transforms may also be
+    applied here, both fit on the training portion only:
+
+    * ``dataset.normalize_images``: dataset-level input standardization
+      (independent of the label normalizer -- see
+      :mod:`shearnet.utils.normalization`).
+    * ``dataset.d4_augment``: 8x D4 augmentation of the *training* portion only
+      (ABLATION ONLY -- see :mod:`shearnet.core.augment`).
 
     Returns:
-        ``(galaxy_images, psf_images, labels, norm_params)`` where ``psf_images``
-        is ``None`` for single-branch models and ``labels`` is already normalized.
+        ``(galaxy_images, psf_images, labels, norm_params, img_params,
+        eff_val_split)``. ``psf_images`` is ``None`` for single-branch models;
+        ``labels`` is already normalized; ``img_params`` is ``None`` unless image
+        normalization was enabled; ``eff_val_split`` is the validation fraction
+        ``train_model`` must use so its internal split lands on the same
+        train/val boundary after any augmentation (equal to
+        ``training.val_split`` when augmentation is off).
     """
     spec = DatasetSpec.from_config(config)
     val_split = config.get("training.val_split")
+    normalize_images = config.get("dataset.normalize_images", False)
+    do_d4_augment = config.get("dataset.d4_augment", False)
+    output_keys = tuple(config.get("model.output_keys"))
 
     galaxy_images, labels = spec.build()
     # Split off the PSF channel only when the two-branch model needs it;
@@ -436,15 +484,56 @@ def _prepare_training_data(config):
     logger.info(f"Shape of train images: {galaxy_images.shape}")
     logger.info(f"Shape of train labels: {labels.shape}")
 
-    # Fit the normalizer on the training portion only, then transform all labels.
+    # Everything below fits on the TRAIN portion only. Split first (on raw data)
+    # so augmentation and the normalizers never see the validation stamps.
     split_idx = int(len(labels) * (1 - val_split))
+    eff_val_split = val_split
+
+    if do_d4_augment:
+        # ABLATION ONLY: augment the train portion 8x, keep val untouched, and
+        # reassemble as [aug_train, val]. eff_val_split is recomputed so
+        # train_model's internal fractional split reproduces this exact boundary.
+        gal_tr, psf_tr, lab_tr = galaxy_images[:split_idx], (
+            psf_images[:split_idx] if psf_images is not None else None
+        ), labels[:split_idx]
+        gal_val, psf_val, lab_val = galaxy_images[split_idx:], (
+            psf_images[split_idx:] if psf_images is not None else None
+        ), labels[split_idx:]
+
+        gal_tr, psf_tr, lab_tr = d4_augment(gal_tr, psf_tr, lab_tr, output_keys)
+        logger.info(
+            f"D4 augmentation (ABLATION) on: train {split_idx} -> {len(lab_tr)} stamps."
+        )
+
+        galaxy_images = np.concatenate([gal_tr, gal_val], axis=0)
+        labels = np.concatenate([lab_tr, lab_val], axis=0)
+        if psf_images is not None:
+            psf_images = np.concatenate([psf_tr, psf_val], axis=0)
+        split_idx = len(lab_tr)
+        eff_val_split = len(lab_val) / len(labels)
+
+    # Fit the label normalizer on the (possibly augmented) training portion.
     norm_params = fit_normalizer(labels[:split_idx])
     labels = transform_labels(labels, norm_params)
-    return galaxy_images, psf_images, labels, norm_params
+
+    # Optional dataset-level image standardization, fit on the same training
+    # portion and applied to galaxy (and PSF) stamps. Independent of the label
+    # normalizer above.
+    img_params = None
+    if normalize_images:
+        img_params = fit_image_normalizer(
+            galaxy_images[:split_idx],
+            psf_images[:split_idx] if psf_images is not None else None,
+        )
+        galaxy_images = transform_images(galaxy_images, img_params, channel="gal")
+        if psf_images is not None:
+            psf_images = transform_images(psf_images, img_params, channel="psf")
+
+    return galaxy_images, psf_images, labels, norm_params, img_params, eff_val_split
 
 
-def _save_run_artifacts(config, model_dir, norm_params):
-    """Persist the resolved config (with provenance) and the label normalizer.
+def _save_run_artifacts(config, model_dir, norm_params, img_params=None):
+    """Persist the resolved config (with provenance) and the normalizers.
 
     Provenance — the ShearNet version and a sha256 of the model-source file — is
     recorded into the saved config instead of copying ``models.py`` to
@@ -466,6 +555,11 @@ def _save_run_artifacts(config, model_dir, norm_params):
 
     normalizer_path = os.path.join(model_dir, "label_normalizer.npz")
     save_normalizer(norm_params, normalizer_path)
+
+    # Image normalizer travels next to the label normalizer; eval and the
+    # research benchmarks pick it up via normalization.maybe_normalize_images.
+    if img_params is not None:
+        save_image_normalizer(img_params, os.path.join(model_dir, "image_normalizer.npz"))
 
 
 def _save_losses(loss_path, train_loss, val_loss, val_loss_per_key, output_keys):
@@ -507,16 +601,24 @@ def main():
 
     get_device()
 
-    train_galaxy_images, train_psf_images, train_labels, norm_params = _prepare_training_data(
-        config
-    )
+    (
+        train_galaxy_images,
+        train_psf_images,
+        train_labels,
+        norm_params,
+        img_params,
+        eff_val_split,
+    ) = _prepare_training_data(config)
 
     rng_key = random.PRNGKey(config.get("dataset.seed"))
 
     model_dir = os.path.join(plot_path, model_name)
-    _save_run_artifacts(config, model_dir, norm_params)
+    _save_run_artifacts(config, model_dir, norm_params, img_params)
 
     train_cfg = TrainConfig.from_config(config, save_path=save_path)
+    # After D4 augmentation the train/val boundary shifts; use the effective
+    # split so train_model's internal split matches (a no-op when not augmenting).
+    train_cfg.val_split = eff_val_split
 
     state, train_loss, val_loss, val_loss_per_key = train_cfg.run(
         train_galaxy_images, train_labels, rng_key, psf_images=train_psf_images

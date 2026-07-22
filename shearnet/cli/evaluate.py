@@ -19,7 +19,11 @@ from ..config.config_handler import Config
 from ..core.dataset import generate_dataset, split_combined_images
 from ..core.models import build_model
 from ..methods.ngmix import _get_priors, mp_fit_one, ngmix_pred
-from ..utils.normalization import inverse_transform_labels, load_normalizer
+from ..utils.normalization import (
+    inverse_transform_labels,
+    load_normalizer,
+    maybe_normalize_images,
+)
 
 from ..logging_utils import ansi, get_logger
 
@@ -223,10 +227,13 @@ def run_shearnet(state, gal_images, psf_images, labels, config, batch_size=128):
     logger.info(f"\n{BOLD}Running ShearNet predictions...{END}")
     start = time.time()
 
-    normalizer_path = os.path.join(
-        config["plot_path"], config["model_name"], "label_normalizer.npz"
-    )
+    model_dir = os.path.join(config["plot_path"], config["model_name"])
+    normalizer_path = os.path.join(model_dir, "label_normalizer.npz")
     norm_params = load_normalizer(normalizer_path) if os.path.exists(normalizer_path) else None
+
+    # Apply the saved image normalizer (if the model was trained with one) to the
+    # inputs, exactly as at training time. No-op when the file is absent.
+    gal_images, psf_images = maybe_normalize_images(gal_images, psf_images, model_dir)
 
     preds_list = []
     n = len(gal_images)

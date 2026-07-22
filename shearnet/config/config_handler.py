@@ -101,9 +101,11 @@ class Config:
         "train.val_split": "training.val_split",
         "train.eval_interval": "training.eval_interval",
         "train.loss_weights": "training.loss_weights",
+        "train.ema_decay": "training.ema_decay",
         "meta.model_name": "output.model_name",
         "train.plot": "plotting.plot",
         "paths.train_catalog": "catalog.cosmos_cat_fname",
+        "image.normalize_images": "dataset.normalize_images",
     }
 
     def _normalize_schema(self) -> None:
@@ -164,6 +166,8 @@ class Config:
             "seed": "dataset.seed",
             "nse_sd": "dataset.nse_sd",
             "normalized": "dataset.normalized",
+            "normalize_images": "dataset.normalize_images",
+            "d4_augment": "dataset.d4_augment",
             "stamp_size": "dataset.stamp_size",
             "pixel_size": "dataset.pixel_size",
             "apply_psf_shear": "dataset.apply_psf_shear",
@@ -181,6 +185,7 @@ class Config:
             "weight_decay": "training.weight_decay",
             "patience": "training.patience",
             "loss": "training.loss",
+            "ema_decay": "training.ema_decay",
             # Output args
             "save_path": "output.save_path",
             "plot_path": "output.plot_path",

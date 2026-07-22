@@ -139,7 +139,7 @@ import jax
 import jax.numpy as jnp
 if INCLUDE_SN:
     from shearnet.cli.evaluate import load_model as _initialize_model, load_config as _eval_load_config
-    from shearnet.utils.normalization import load_normalizer, inverse_transform_labels
+    from shearnet.utils.normalization import load_normalizer, load_image_normalizer, inverse_transform_labels
     
     eval_config = argparse.Namespace(
         model_name=SN_MODEL_NAME, config=None, seed=None,
@@ -156,8 +156,16 @@ if INCLUDE_SN:
     data_path = os.getenv('SHEARNET_DATA_PATH', os.path.abspath('.'))
     _normalizer_path = os.path.join(data_path, 'plots', SN_MODEL_NAME, 'label_normalizer.npz')
     NORM_PARAMS = load_normalizer(_normalizer_path) if os.path.exists(_normalizer_path) else None
+    _img_norm_path = os.path.join(data_path, 'plots', SN_MODEL_NAME, 'image_normalizer.npz')
+    IMG_NORM = load_image_normalizer(_img_norm_path) if os.path.exists(_img_norm_path) else None
 
     def _sn_predict(params, gal, psf, output_keys, gap):
+        # Apply the saved dataset-level image normalizer (if the model was trained
+        # with one) so benchmark predictions match training. No-op otherwise.
+        if IMG_NORM is not None:
+            gal = (gal - IMG_NORM['gal_mean']) / IMG_NORM['gal_std']
+            if 'psf_mean' in IMG_NORM:
+                psf = (psf - IMG_NORM['psf_mean']) / IMG_NORM['psf_std']
         return STATE.apply_fn(params, gal, psf, output_keys=output_keys, gap=gap, deterministic=True)
     SN_PREDICT = jax.jit(_sn_predict, static_argnames=("output_keys", "gap"))
 else:

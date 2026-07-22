@@ -139,6 +139,7 @@ def train_model(
     weights=None,
     fusion="concat",
     loss="mse",
+    ema_decay=None,
 ):
     """Train a ShearNet model with validation and early stopping.
 
@@ -177,6 +178,10 @@ def train_model(
             :func:`shearnet.core.losses.register_loss`) or a JAX callable
             ``(preds, labels, weights) -> scalar``. The per-key validation
             breakdown is always reported as MSE regardless of this objective.
+        ema_decay: If not ``None``, keep an exponential moving average of the
+            weights with this decay (e.g. ``0.999``) and use the averaged
+            weights for validation *and* for the saved checkpoint. When ``None``
+            (default) training is exactly as before -- no EMA is maintained.
 
     Returns:
         ``(state, train_losses, val_losses, val_losses_per_key)`` where ``state``
@@ -232,6 +237,20 @@ def train_model(
         optax.adamw(learning_rate=lr_schedule, weight_decay=weight_decay),
     )
     state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
+
+    # Exponential moving average of the weights (item: EMA). When ema_decay is
+    # None this whole mechanism is inert and training is byte-for-byte as before.
+    use_ema = ema_decay is not None
+    ema_params = state.params if use_ema else None
+    if use_ema:
+        logger.info(f"Weight EMA enabled (decay={ema_decay}); "
+                    "validation and checkpoint use the averaged weights.")
+
+        @jax.jit
+        def _ema_update(ema, live):
+            return jax.tree_util.tree_map(
+                lambda e, p: ema_decay * e + (1.0 - ema_decay) * p, ema, live
+            )
 
     train_losses, val_losses, val_losses_per_key = [], [], []
     best_val_loss = float("inf")
@@ -307,13 +326,17 @@ def train_model(
             batch_labels = shuffled_train_labels[sl]
             batch_size_actual = len(batch_galaxy_images)
             state, loss = _train_batch(state, batch_galaxy_images, batch_psf_images, batch_labels)
+            if use_ema:
+                ema_params = _ema_update(ema_params, state.params)
             train_loss += loss * batch_size_actual
             total_samples += batch_size_actual
         train_loss /= total_samples
         train_losses.append(train_loss)
 
-        # Validation phase
+        # Validation phase. With EMA on, validate (and later checkpoint) the
+        # averaged weights, not the live ones.
         if (epoch + 1) % eval_interval == 0:
+            eval_state = state.replace(params=ema_params) if use_ema else state
             val_loss, total_samples = 0, 0
             val_per_key_sum = jnp.zeros(n_out)
             for i in range(0, len(val_galaxy_images), batch_size):
@@ -323,7 +346,7 @@ def train_model(
                 batch_labels = val_labels[sl]
                 batch_size_actual = len(batch_galaxy_images)
                 loss, per_key = _eval_batch(
-                    state, batch_galaxy_images, batch_psf_images, batch_labels
+                    eval_state, batch_galaxy_images, batch_psf_images, batch_labels
                 )
                 val_loss += loss * batch_size_actual
                 if per_key is not None:
@@ -348,7 +371,7 @@ def train_model(
                 logger.info(f"New best validation loss: {val_loss:.4e}")
                 if save_path:
                     save_checkpoint(
-                        state,
+                        eval_state,
                         step=epoch + 1,
                         checkpoint_dir=save_path,
                         model_name=model_name,
@@ -365,4 +388,6 @@ def train_model(
                 logger.info("Early stopping triggered.")
                 break
 
-    return state, train_losses, val_losses, val_losses_per_key
+    # With EMA on, hand back the averaged-weight state (what was checkpointed).
+    final_state = state.replace(params=ema_params) if use_ema else state
+    return final_state, train_losses, val_losses, val_losses_per_key

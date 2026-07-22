@@ -97,6 +97,7 @@ class TrainConfig:
     gap: bool = False
     weights: Optional[list] = field(default=None)
     loss: str = "mse"
+    ema_decay: Optional[float] = None
 
     @classmethod
     def from_config(cls, config, save_path=None) -> "TrainConfig":
@@ -119,6 +120,7 @@ class TrainConfig:
             gap=config.get("model.gap"),
             weights=config.get("training.loss_weights"),
             loss=config.get("training.loss", "mse"),
+            ema_decay=config.get("training.ema_decay", None),
         )
 
     def as_kwargs(self) -> dict:
