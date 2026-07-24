@@ -111,11 +111,12 @@ def _load_cosmos_cat(seed=42, cat_path=None):
 def _worker_init():
     """Pool-worker initializer: keep generation workers off the GPU.
 
-    Generation is pure galsim/ngmix/numpy and never runs a JAX op, but importing
-    the package transitively imports jax. Hiding the GPU here guarantees a worker
-    can never grab a CUDA context -- belt-and-suspenders on top of the ``spawn``
-    start method (which already avoids the fork-with-live-CUDA deadlock).
+    Belt-and-suspenders only: the real fix is that the parent sets
+    ``JAX_PLATFORMS=cpu`` in the environment *before* spawning, so a worker's JAX
+    is CPU-only from its first import (this initializer runs only after that
+    import). Generation is pure galsim/ngmix and never runs a JAX op.
     """
+    os.environ["JAX_PLATFORMS"] = "cpu"
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 
@@ -329,13 +330,29 @@ def generate_dataset(
         # 'spawn', never 'fork': the parent already holds a JAX/CUDA context
         # (get_device()), and forking it deadlocks. Spawned workers start clean
         # and run pure galsim/ngmix.
+        #
+        # Force the workers' JAX onto CPU. A worker imports the package (to reach
+        # _generate_one), which transitively imports jax; without this each
+        # worker would probe CUDA and preallocate GPU memory, racing the parent
+        # for VRAM (33 GiB OOM spam). The env var must be set BEFORE the workers
+        # import -- i.e. inherited at spawn -- so the Pool initializer is too
+        # late. The parent's already-initialized GPU backend is unaffected; we
+        # restore the env once the pool is done.
         ctx = mp.get_context("spawn")
         chunk = max(1, min(64, (samples // (nproc * 8)) or 1))
-        with ctx.Pool(processes=nproc, initializer=_worker_init) as pool:
-            results = list(
-                tqdm(pool.imap(worker, tasks, chunksize=chunk),
-                     total=samples, disable=_disable, mininterval=10)
-            )
+        _prev_platforms = os.environ.get("JAX_PLATFORMS")
+        os.environ["JAX_PLATFORMS"] = "cpu"
+        try:
+            with ctx.Pool(processes=nproc, initializer=_worker_init) as pool:
+                results = list(
+                    tqdm(pool.imap(worker, tasks, chunksize=chunk),
+                         total=samples, disable=_disable, mininterval=10)
+                )
+        finally:
+            if _prev_platforms is None:
+                os.environ.pop("JAX_PLATFORMS", None)
+            else:
+                os.environ["JAX_PLATFORMS"] = _prev_platforms
 
     images_arr = np.array([r[0] for r in results])
     labels_arr = np.array([r[1] for r in results])
