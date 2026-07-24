@@ -6,6 +6,45 @@ import shearnet.utils.superbit as utils  # vendored from superbit-lensing (see s
 from ngmix.gaussmom import GaussMom
 
 
+def parse_psf_response(cfg):
+    """Resolve the PSF-response ``(method, step)`` from an eval sub-config block.
+
+    New schema::
+
+        psf_response: none | metacal | direct
+        psf_response_step: 0.01        # shear step, shared by both methods
+
+    Back-compatible with the legacy keys: a boolean ``psf_response`` maps
+    ``true -> metacal`` / ``false -> none``; the legacy
+    ``psf_response_direct_ngmix`` / ``psf_response_direct_shearnet`` booleans map
+    to ``direct``; and ``metacal_step`` / ``psf_response_direct_step`` feed the
+    step when ``psf_response_step`` is absent. Both ngmix and ShearNet are
+    always measured/corrected the same way; raw (uncorrected) copies are kept
+    regardless of method.
+    """
+    m = cfg.get("psf_response", "none")
+    if isinstance(m, bool):  # legacy boolean form
+        m = "metacal" if m else "none"
+    m = str(m).strip().lower()
+    if m in ("", "off", "false"):
+        m = "none"
+    elif m == "true":
+        m = "metacal"
+    if m == "none" and (
+        cfg.get("psf_response_direct_ngmix", False)
+        or cfg.get("psf_response_direct_shearnet", False)
+    ):
+        m = "direct"
+    if m not in ("none", "metacal", "direct"):
+        raise ValueError(
+            f"psf_response must be one of none|metacal|direct, got {m!r}"
+        )
+    step = cfg.get("psf_response_step")
+    if step is None:
+        step = cfg.get("metacal_step", cfg.get("psf_response_direct_step", 0.01))
+    return m, float(step)
+
+
 ## the trained state should be imported here
 # state = checkpoints.restore_checkpoint(ckpt_dir=model_dir, target=state)
 

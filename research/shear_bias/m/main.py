@@ -30,6 +30,7 @@ from helpers import (
     get_coellip_ngauss,
     get_init_guess,
     superscript,
+    parse_psf_response,
 )
 
 norm2 = colors.SymLogNorm(linthresh=1e-4, base=np.e)
@@ -82,31 +83,27 @@ GALSIM_PSF = galsim.des.DES_PSFEx(_config["paths"]["psfex_model_file"], wcs=util
 PSF_MODEL = _config["eval"]["bias"]["psf_model"]
 GAL_MODEL = _config["eval"]["gal_model"]
 
-# ----- PSF response (metacal leakage) correction -----
-# When enabled, the measured shear (ngmix and ShearNet) is corrected for PSF
-# leakage using the metacal PSF response, following
-#   ngmix/tests/test_metacal_galsim_psf_response.py :
-#       R11_psf = (g['1p_psf'] - g['1m_psf']) / (2*step)
-#       g_corrected = g['noshear'] - g_psf * R11_psf
-# This mostly shifts the additive bias c (and slightly m), which is exactly
-# the PSF-leakage term the leakage benchmark isolates.
-PSF_RESPONSE = _config["eval"]["bias"].get("psf_response", False)
-RECONV_PSF   = _config["eval"]["bias"].get("reconv_psf", "dilate")
-MCAL_STEP    = _config["eval"]["bias"].get("metacal_step", 0.01)
-# metacal PSF response is not physical leakage for a network -> ShearNet
-# correction is opt-in only (see the correction block below).
-PSF_RESPONSE_SHEARNET = _config["eval"]["bias"].get("psf_response_shearnet", False)
-
-# ----- Skip-deconvolution ("direct") PSF-response correction -----
-# Measure R11_psf by shearing the real PSF by +/- step and convolving the galaxy
-# with it (no metacal deconvolution/dilation), then subtract gpsf*Rbar_psf from
-# g_noshear / g_sn_noshear. Switchable per shape-measurement software; when on it
-# takes precedence over the metacal psf_response correction. This is the
-# physically-correct PSF response for a non-deconvolving network like ShearNet.
-PSF_RESPONSE_DIRECT_NGMIX = _config["eval"]["bias"].get("psf_response_direct_ngmix", False)
-PSF_RESPONSE_DIRECT_SN    = _config["eval"]["bias"].get("psf_response_direct_shearnet", False)
-PSF_RESPONSE_DIRECT = PSF_RESPONSE_DIRECT_NGMIX or PSF_RESPONSE_DIRECT_SN
-PSF_DIRECT_STEP = _config["eval"]["bias"].get("psf_response_direct_step", MCAL_STEP)
+# ----- PSF-response correction method -----
+# A single 'psf_response' string selects the method; BOTH ngmix and ShearNet are
+# measured/corrected the same way, and an uncorrected ("raw") copy of each is
+# ALWAYS kept (g_noshear_raw / g_sn_raw). Options:
+#   none    -> no PSF-response correction
+#   metacal -> deconvolve / dilate / reconvolve metacal PSF response (R11_psf =
+#              (g['1p_psf'] - g['1m_psf'])/(2*step); g_corr = g - g_psf*R11_psf)
+#   direct  -> skip-deconvolution: shear the REAL PSF by +/- step, reconvolve the
+#              galaxy (no deconvolution) -- the physical response for a network.
+# 'psf_response_step' is the shear step used by BOTH methods.
+_PSF_METHOD, PSF_STEP = parse_psf_response(_config["eval"]["bias"])
+# Derive the internal flags the rest of the script uses. Both estimators are
+# corrected the same way; raw copies are kept regardless of method.
+PSF_RESPONSE              = _PSF_METHOD == "metacal"
+PSF_RESPONSE_SHEARNET     = _PSF_METHOD == "metacal"
+PSF_RESPONSE_DIRECT_NGMIX = _PSF_METHOD == "direct"
+PSF_RESPONSE_DIRECT_SN    = _PSF_METHOD == "direct"
+PSF_RESPONSE_DIRECT       = _PSF_METHOD == "direct"
+RECONV_PSF   = "dilate"   # hardcoded: required for the *_psf metacal terms
+MCAL_STEP    = PSF_STEP
+PSF_DIRECT_STEP = PSF_STEP
 
 # ----- ShearNet -----
 INCLUDE_SN    = _config["eval"]["include_shearnet"]

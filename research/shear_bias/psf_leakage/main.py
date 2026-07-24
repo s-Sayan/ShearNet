@@ -32,7 +32,8 @@ from helpers import (
     leakage_response_direct_to_table,
     get_init_guess,
     get_em_ngauss,
-    get_coellip_ngauss
+    get_coellip_ngauss,
+    parse_psf_response,
 )
 
 norm2 = colors.SymLogNorm(linthresh=1e-4, base=np.e)
@@ -77,32 +78,27 @@ LEAKAGE_CFG = _config["eval"]["leakage"]
 PSF_MODEL = LEAKAGE_CFG["psf_model"]
 GAL_MODEL = _config["eval"]["gal_model"]
 
-# ----- PSF response (metacal leakage) correction -----
-# When enabled, the measured shear (ngmix and ShearNet) is corrected for PSF
-# leakage using the metacal PSF response, following
-#   ngmix/tests/test_metacal_galsim_psf_response.py :
-#       R11_psf = (g['1p_psf'] - g['1m_psf']) / (2*step)
-#       g_corrected = g['noshear'] - g_psf * R11_psf
-PSF_RESPONSE = LEAKAGE_CFG.get("psf_response", False)
-RECONV_PSF   = LEAKAGE_CFG.get("reconv_psf", "dilate")
-MCAL_STEP    = LEAKAGE_CFG.get("metacal_step", 0.01)
-# The metacal PSF response is only physical for a PSF-deconvolving estimator
-# (ngmix). For ShearNet it measures OOD sensitivity to the reconvolution, not
-# leakage, so it is reported as a diagnostic but NOT applied unless requested.
-PSF_RESPONSE_SHEARNET = LEAKAGE_CFG.get("psf_response_shearnet", False)
+# ----- PSF-response correction method -----
+# A single 'psf_response' string selects the method; BOTH ngmix and ShearNet are
+# measured/corrected the same way, and an uncorrected ("raw") copy of each is
+# ALWAYS kept (g_raw / g_sn_raw). Options:
+#   none    -> no PSF-response correction
+#   metacal -> deconvolve / dilate / reconvolve metacal PSF response (R11_psf =
+#              (g['1p_psf'] - g['1m_psf'])/(2*step); g_corr = g - g_psf*R11_psf)
+#   direct  -> skip-deconvolution: shear the REAL PSF by +/- step, reconvolve the
+#              galaxy (no deconvolution) -- the physical response for a network.
+# 'psf_response_step' is the shear step used by BOTH methods.
+_PSF_METHOD, PSF_STEP = parse_psf_response(LEAKAGE_CFG)
+PSF_RESPONSE              = _PSF_METHOD == "metacal"
+PSF_RESPONSE_SHEARNET     = _PSF_METHOD == "metacal"
+PSF_RESPONSE_DIRECT_NGMIX = _PSF_METHOD == "direct"
+PSF_RESPONSE_DIRECT_SN    = _PSF_METHOD == "direct"
+PSF_RESPONSE_DIRECT       = _PSF_METHOD == "direct"
+RECONV_PSF   = "dilate"   # hardcoded: required for the *_psf metacal terms
+MCAL_STEP    = PSF_STEP
+PSF_DIRECT_STEP = PSF_STEP
 # PSF-shear response terms ('*_psf') require the 'dilate' reconvolution PSF.
-MCAL_TYPES = (
-    ["noshear", "1p_psf", "1m_psf"] if RECONV_PSF == "dilate" else ["noshear"]
-)
-
-# ----- Skip-deconvolution ("direct") PSF response -----
-# Shear the real PSF by +/- step and convolve the original galaxy with it (no
-# metacal deconvolution/dilation). Switchable per shape-measurement software; if
-# either is on, this mode runs instead of the metacal psf_response path above.
-PSF_RESPONSE_DIRECT_NGMIX = LEAKAGE_CFG.get("psf_response_direct_ngmix", False)
-PSF_RESPONSE_DIRECT_SN    = LEAKAGE_CFG.get("psf_response_direct_shearnet", False)
-PSF_RESPONSE_DIRECT = PSF_RESPONSE_DIRECT_NGMIX or PSF_RESPONSE_DIRECT_SN
-PSF_DIRECT_STEP = LEAKAGE_CFG.get("psf_response_direct_step", MCAL_STEP)
+MCAL_TYPES = ["noshear", "1p_psf", "1m_psf"]
 
 # ----- ShearNet -----
 INCLUDE_SN    = _config["eval"]["include_shearnet"]
@@ -386,7 +382,9 @@ def process_single_object_response(args):
     )
 
     data, mcal_images = process_obs_response(obs, boot)
-    return data, g_th, mcal_images, gal_hlr, gal_flux
+    # Append the RAW observed image so ShearNet can be evaluated on it (g_sn_raw)
+    # in the main process, in addition to the metacal images used for its response.
+    return data, g_th, mcal_images, gal_hlr, gal_flux, obs.image.copy(), obs.psf.image.copy()
 
 
 def process_single_object_direct(args):
@@ -439,7 +437,10 @@ def process_single_object_direct(args):
     data, mcal_images = process_obs_direct(
         obs_dict, boot=boot, do_ngmix=PSF_RESPONSE_DIRECT_NGMIX
     )
-    return data, g_th, mcal_images, gal_hlr, gal_flux
+    # Append the RAW observed image (the unsheared-PSF 'noshear' obs) so ShearNet
+    # can be evaluated on it (g_sn_raw) alongside the direct-response images.
+    _raw = obs_dict["noshear"]
+    return data, g_th, mcal_images, gal_hlr, gal_flux, _raw.image.copy(), _raw.psf.image.copy()
 
 
 args_list = [(i, SEED, NOISE) for i in range(NOBS)]
@@ -491,6 +492,16 @@ def _run_shearnet_batch_response(buf):
         for k in range(n):
             idx = np.where(data_list[base + k]["shear_type"] == stype)[0][0]
             data_list[base + k][idx]["g_sn"] = preds[k][g_idx]
+
+    # ALSO evaluate ShearNet on the RAW observed image (appended at r[5], r[6]) ->
+    # g_sn_raw. ShearNet is non-deconvolving, so the metacal/direct images above
+    # are used ONLY to form its response, never as its honest noshear input.
+    raw_gal = jnp.stack([r[5] for r in buf])
+    raw_psf = jnp.stack([r[6] for r in buf])
+    raw_preds = np.array(SN_PREDICT(STATE.params, raw_gal, raw_psf, OUTPUT_KEYS, GAP))
+    if NORM_PARAMS is not None:
+        raw_preds = inverse_transform_labels(raw_preds, NORM_PARAMS)
+    g_sn_raw_list.append(raw_preds[:, g_idx])
 
 
 hlr_list_out, flux_list_out = [], []
@@ -586,6 +597,16 @@ else:
         tab["g_sn"] = np.concatenate(g_sn_raw_list, axis=0)
     else:
         tab["g_sn"] = np.full((len(tab), 2), np.nan)
+
+# ShearNet-on-raw is the honest, method-independent leakage measurement (the
+# network is never fed metacal-reconvolved images). g_sn_raw_list is populated in
+# every mode -- raw path (_run_shearnet_batch) and response/direct paths
+# (_run_shearnet_batch_response) -- so store it unconditionally; the plot defaults
+# ShearNet to this column.
+if STATE is not None and g_sn_raw_list:
+    tab["g_sn_raw"] = np.concatenate(g_sn_raw_list, axis=0)
+elif "g_sn_raw" not in tab.colnames:
+    tab["g_sn_raw"] = np.full((len(tab), 2), np.nan)
 
 fname = OUTPUT_FITS
 
