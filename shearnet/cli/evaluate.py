@@ -124,6 +124,7 @@ def load_config(args):
         "psfex_model_file": config.get("dataset.psfex_model_file"),
         "hlr_type": config.get("dataset.hlr_type", "constant"),
         "flux_type": config.get("dataset.flux_type", "constant"),
+        "nproc": config.get("dataset.nproc", None),
     }
 
 
@@ -147,6 +148,7 @@ def generate_test_data(config):
         hlr_type=config["hlr_type"],
         flux_type=config["flux_type"],
         cosmos_cat_fname=config["cosmos_cat_fname"],
+        nproc=config["nproc"],
     )
 
     if config["process_psf"]:

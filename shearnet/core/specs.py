@@ -38,6 +38,8 @@ class DatasetSpec:
     hlr_type: str = "constant"
     flux_type: str = "constant"
     cosmos_cat_fname: Optional[str] = None
+    compute_metacal: bool = False
+    nproc: Optional[int] = None
 
     @classmethod
     def from_config(cls, config) -> "DatasetSpec":
@@ -56,6 +58,8 @@ class DatasetSpec:
             hlr_type=config.get("dataset.hlr_type"),
             flux_type=config.get("dataset.flux_type"),
             cosmos_cat_fname=config.get("catalog.cosmos_cat_fname"),
+            compute_metacal=config.get("dataset.compute_metacal", False),
+            nproc=config.get("dataset.nproc", None),
         )
 
     def as_kwargs(self) -> dict:

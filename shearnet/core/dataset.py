@@ -1,5 +1,7 @@
 """Galaxy/PSF postage-stamp simulation and dataset generation for ShearNet."""
 
+import functools
+import multiprocessing as mp
 import os
 import sys
 from dataclasses import dataclass
@@ -106,6 +108,75 @@ def _load_cosmos_cat(seed=42, cat_path=None):
     return _cosmos_cat_cache
 
 
+def _worker_init():
+    """Pool-worker initializer: keep generation workers off the GPU.
+
+    Generation is pure galsim/ngmix/numpy and never runs a JAX op, but importing
+    the package transitively imports jax. Hiding the GPU here guarantees a worker
+    can never grab a CUDA context -- belt-and-suspenders on top of the ``spawn``
+    start method (which already avoids the fork-with-live-CUDA deadlock).
+    """
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+
+def _generate_one(task, cfg):
+    """Simulate one stamp for :func:`generate_dataset` (serial call or pool worker).
+
+    ``task`` is ``(i, g1, g2, hlr, flux)`` and ``cfg`` bundles the shared
+    simulation settings. Returns ``(image, label, obs_or_None)`` -- ``obs`` is
+    returned only when ``cfg['return_obs']`` is set, so training runs never pickle
+    the heavy ngmix ``Observation`` objects back from the workers.
+
+    For the empirical (``superbit``) PSF the sampling deviate is seeded from
+    ``(seed, i)``, so the dataset is identical for any ``nproc`` (the old shared
+    deviate depended on loop order and could not be parallelized). Analytic
+    (``ideal``) PSFs do not use the deviate.
+    """
+    i, g1, g2, hlr, flux = task
+    ud = None
+    if cfg["exp"] == "superbit":
+        ud = galsim.UniformDeviate(int(cfg["seed"]) * 1_000_003 + int(i))
+
+    obj_obs = sim_func(
+        g1,
+        g2,
+        hlr=hlr,
+        flux=flux,
+        psf_fwhm=cfg["psf_fwhm"],
+        nse_sd=cfg["nse_sd"],
+        type=cfg["type"],
+        npix=cfg["npix"],
+        scale=cfg["scale"],
+        seed=i,
+        exp=cfg["exp"],
+        apply_psf_shear=cfg["apply_psf_shear"],
+        psf_shear_range=cfg["psf_shear_range"],
+        ud=ud,
+        psf_files=cfg["psf_files"],
+        base_shear_g1=cfg["base_shear_g1"],
+        base_shear_g2=cfg["base_shear_g2"],
+        compute_metacal=cfg["compute_metacal"],
+        compute_psf_admom=cfg["compute_psf_admom"],
+    )
+
+    if cfg["return_psf"]:
+        image = np.stack([obj_obs.image, obj_obs.psf.image], axis=-1)
+    else:
+        image = obj_obs.image
+
+    available = {
+        "g1": g1,
+        "g2": g2,
+        "hlr": hlr,
+        "flux": flux,
+        "psf_e1": obj_obs.psf.meta["e1"],
+        "psf_e2": obj_obs.psf.meta["e2"],
+        "psf_T": obj_obs.psf.meta["T"],
+    }
+    label = np.array([available[k] for k in cfg["output_keys"]], dtype=np.float32)
+    return image, label, (obj_obs if cfg["return_obs"] else None)
+
+
 def generate_dataset(
     samples,
     psf_fwhm,
@@ -128,6 +199,8 @@ def generate_dataset(
     flux_type="constant",
     cosmos_cat_fname=None,
     as_result=False,
+    compute_metacal=False,
+    nproc=1,
 ):
     """Simulate a dataset of galaxy postage stamps with known shear labels.
 
@@ -163,6 +236,14 @@ def generate_dataset(
             random catalog is used as a fallback (e.g. in CI) when absent.
         as_result: Return a :class:`DatasetResult` (stable shape regardless of
             ``return_obs``) instead of a tuple.
+        compute_metacal: Compute and store the four metacal (+/- e1/e2)
+            reconvolved images per object. Off by default -- plain training does
+            not use them (they only live in each ``Observation``'s metadata).
+        nproc: Number of worker processes for generation. ``None`` (default) is
+            auto -- ``SLURM_CPUS_PER_TASK`` on a cluster, else ``1`` (serial).
+            An explicit ``>1`` uses a ``spawn``-based pool (safe alongside JAX --
+            never ``fork``); ``1`` forces serial. The output is identical for any
+            ``nproc`` (PSF sampling is seeded per object).
 
     Returns:
         By default ``(images, labels)`` as numpy arrays, or ``(images, labels,
@@ -172,9 +253,12 @@ def generate_dataset(
         axis when ``return_psf``/``return_clean`` are set. ``labels`` has shape
         ``(samples, len(output_keys))``.
     """
-    images = []
-    labels = []
-    obs = []
+    if return_clean:
+        raise NotImplementedError(
+            "return_clean is no longer supported: the noise-free clean image was "
+            "removed from sim_func (it was unused and could trigger oversized FFTs "
+            "for compact galaxies)."
+        )
 
     cosmos_cat = _load_cosmos_cat(seed=seed, cat_path=cosmos_cat_fname)
     g1_list = cosmos_cat["G1"]
@@ -182,7 +266,6 @@ def generate_dataset(
     hlr_list = cosmos_cat["HLR"]
     flux_list = cosmos_cat["FLUX"]
 
-    ud = galsim.UniformDeviate(seed)
     if exp == "superbit":
         if os.path.isfile(psf_file_or_dir):
             psf_files = [psf_file_or_dir]
@@ -199,84 +282,68 @@ def generate_dataset(
     _requested = set(output_keys)
     if not _requested.issubset(_valid):
         raise ValueError(f"Invalid output_keys: {_requested - _valid}. Must be subset of {_valid}.")
+    if hlr_type not in ("catalog", "constant"):
+        raise ValueError("hlr can only be 'constant' or 'catalog'")
+    if flux_type not in ("catalog", "constant"):
+        raise ValueError("flux can only be 'constant' or 'catalog'")
 
-    for i in tqdm(range(samples), disable=not sys.stderr.isatty(), mininterval=10):
-        g1, g2 = g1_list[i], g2_list[i]
-        if hlr_type == "catalog":
-            hlr = hlr_list[i]
-        elif hlr_type == "constant":
-            hlr = 0.5
-        else:
-            raise ValueError("hlr can only be 'constant' or 'catalog'")
-
-        if flux_type == "catalog":
-            flux = flux_list[i]
-        elif flux_type == "constant":
-            flux = 12258.97
-        else:
-            raise ValueError("flux can only be 'constant' or 'catalog'")
-
-        obj_obs = sim_func(
-            g1,
-            g2,
-            hlr=hlr,
-            flux=flux,
-            psf_fwhm=psf_fwhm,
-            nse_sd=nse_sd,
-            type=type,
-            npix=npix,
-            scale=scale,
-            seed=i,
-            exp=exp,
-            apply_psf_shear=apply_psf_shear,
-            psf_shear_range=psf_shear_range,
-            ud=ud,
-            psf_files=psf_files,
-            base_shear_g1=base_shear_g1,
-            base_shear_g2=base_shear_g2,
+    # generate_dataset indexes the catalog by position, so samples must fit.
+    if samples > len(g1_list):
+        raise ValueError(
+            f"Requested {samples} samples but the catalog has only {len(g1_list)} rows. "
+            "Lower `samples` or use a larger catalog."
         )
 
-        galaxy_images = obj_obs.image
-        psf_images = obj_obs.psf.image
+    # The PSF adaptive-moments fit only feeds the psf_* labels; skip it otherwise.
+    do_admom = bool(_requested & {"psf_e1", "psf_e2", "psf_T"})
 
-        if return_clean:
-            raise NotImplementedError(
-                "return_clean is no longer supported: the noise-free clean image was "
-                "removed from sim_func (it was unused and could trigger oversized FFTs "
-                "for compact galaxies)."
+    cfg = {
+        "psf_fwhm": psf_fwhm, "nse_sd": nse_sd, "type": type, "npix": npix, "scale": scale,
+        "seed": seed, "exp": exp, "apply_psf_shear": apply_psf_shear,
+        "psf_shear_range": psf_shear_range, "psf_files": psf_files,
+        "base_shear_g1": base_shear_g1, "base_shear_g2": base_shear_g2,
+        "return_psf": return_psf, "return_obs": return_obs, "output_keys": tuple(output_keys),
+        "compute_metacal": compute_metacal, "compute_psf_admom": do_admom,
+    }
+
+    def _hlr(i):
+        return float(hlr_list[i]) if hlr_type == "catalog" else 0.5
+
+    def _flux(i):
+        return float(flux_list[i]) if flux_type == "catalog" else 12258.97
+
+    tasks = [(i, float(g1_list[i]), float(g2_list[i]), _hlr(i), _flux(i)) for i in range(samples)]
+
+    if nproc is None:
+        # Auto: respect the SLURM allocation, NOT the node's total cores
+        # (os.cpu_count would oversubscribe a shared node).
+        nproc = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
+    # Never spawn more workers than there are stamps (matters for tiny runs).
+    nproc = max(1, min(int(nproc), len(tasks)))
+
+    _disable = not sys.stderr.isatty()
+    worker = functools.partial(_generate_one, cfg=cfg)
+    if nproc == 1:
+        results = [worker(t) for t in tqdm(tasks, disable=_disable, mininterval=10)]
+    else:
+        # 'spawn', never 'fork': the parent already holds a JAX/CUDA context
+        # (get_device()), and forking it deadlocks. Spawned workers start clean
+        # and run pure galsim/ngmix.
+        ctx = mp.get_context("spawn")
+        chunk = max(1, min(64, (samples // (nproc * 8)) or 1))
+        with ctx.Pool(processes=nproc, initializer=_worker_init) as pool:
+            results = list(
+                tqdm(pool.imap(worker, tasks, chunksize=chunk),
+                     total=samples, disable=_disable, mininterval=10)
             )
-        if return_psf:
-            # Create (height, width, 2) array: [galaxy, psf]
-            combined_images = np.stack([galaxy_images, psf_images], axis=-1)
-            images.append(combined_images)
-        else:
-            # Just galaxy images
-            images.append(galaxy_images)
 
-        psf_e1 = obj_obs.psf.meta["e1"]
-        psf_e2 = obj_obs.psf.meta["e2"]
-        psf_T = obj_obs.psf.meta["T"]
-
-        _available = {
-            "g1": g1,
-            "g2": g2,
-            "hlr": hlr,
-            "flux": flux,
-            "psf_e1": psf_e1,
-            "psf_e2": psf_e2,
-            "psf_T": psf_T,
-        }
-
-        labels.append(np.array([_available[k] for k in output_keys], dtype=np.float32))
-
-        obs.append(obj_obs)
-
-    images_arr = np.array(images)
-    labels_arr = np.array(labels)
+    images_arr = np.array([r[0] for r in results])
+    labels_arr = np.array([r[1] for r in results])
+    obs = [r[2] for r in results] if return_obs else None
 
     if as_result:
         # Opt-in structured return with a stable shape regardless of return_obs.
-        return DatasetResult(images_arr, labels_arr, obs if return_obs else None)
+        return DatasetResult(images_arr, labels_arr, obs)
 
     if return_obs:
         return images_arr, labels_arr, obs
@@ -358,6 +425,8 @@ def sim_func(
     psf_files=None,
     base_shear_g1=0.0,
     base_shear_g2=0.0,
+    compute_metacal=True,
+    compute_psf_admom=True,
 ):
     """Simulate a single galaxy observation and return an ngmix ``Observation``.
 
@@ -365,6 +434,13 @@ def sim_func(
     draws the noisy image, fits the PSF adaptive moments, and packages everything
     into an ngmix ``Observation``. The metadata also stores the +/- e1/e2 sheared
     counterparts used for metacalibration-style responses.
+
+    ``compute_metacal`` and ``compute_psf_admom`` gate the two expensive pieces of
+    per-object work that plain network *training* does not use: the four metacal
+    (+/- e1/e2) reconvolutions/draws and the ngmix adaptive-moments fit of the
+    PSF. Both default to ``True`` (unchanged behavior); pass ``False`` to skip
+    them for a large speed-up. When the admom fit is skipped the PSF ``e1/e2/T``
+    metadata are set to NaN (they are only needed for the ``psf_*`` labels).
 
     Args:
         g1, g2: Intrinsic shear of the galaxy.
@@ -411,11 +487,6 @@ def sim_func(
 
     sheared_gal = sheared_gal.shear(g1=base_shear_g1, g2=base_shear_g2)
 
-    sheared_gal_e1_positive = sheared_gal.shear(g1=0.01, g2=0.0)
-    sheared_gal_e1_negative = sheared_gal.shear(g1=-0.01, g2=0.0)
-    sheared_gal_e2_positive = sheared_gal.shear(g1=0.0, g2=0.01)
-    sheared_gal_e2_negative = sheared_gal.shear(g1=0.0, g2=-0.01)
-
     # Convolve with PSF
     if exp == "ideal":
         psf = galsim.Gaussian(fwhm=psf_fwhm)
@@ -425,19 +496,9 @@ def sim_func(
 
         obj = galsim.Convolve([sheared_gal, psf], gsparams=gsp)
 
-        obj_e1_positive = galsim.Convolve([sheared_gal_e1_positive, psf], gsparams=gsp)
-        obj_e1_negative = galsim.Convolve([sheared_gal_e1_negative, psf], gsparams=gsp)
-        obj_e2_positive = galsim.Convolve([sheared_gal_e2_positive, psf], gsparams=gsp)
-        obj_e2_negative = galsim.Convolve([sheared_gal_e2_negative, psf], gsparams=gsp)
-
     elif exp == "superbit":
         psf = import_psf(psf_files, ud)
         obj = galsim.Convolve([psf, sheared_gal], gsparams=gsp)
-
-        obj_e1_positive = galsim.Convolve([sheared_gal_e1_positive, psf], gsparams=gsp)
-        obj_e1_negative = galsim.Convolve([sheared_gal_e1_negative, psf], gsparams=gsp)
-        obj_e2_positive = galsim.Convolve([sheared_gal_e2_positive, psf], gsparams=gsp)
-        obj_e2_negative = galsim.Convolve([sheared_gal_e2_negative, psf], gsparams=gsp)
 
     else:
         raise ValueError("For now only supported experiments are 'ideal' or 'superbit'")
@@ -446,10 +507,18 @@ def sim_func(
     obj_im = _safe_draw(obj.withGSParams(gsp), npix, scale)
     psf_im = _safe_draw(psf.withGSParams(gsp), npix, scale)
 
-    e1_positive_im = _safe_draw(obj_e1_positive.withGSParams(gsp), npix, scale)
-    e1_negative_im = _safe_draw(obj_e1_negative.withGSParams(gsp), npix, scale)
-    e2_positive_im = _safe_draw(obj_e2_positive.withGSParams(gsp), npix, scale)
-    e2_negative_im = _safe_draw(obj_e2_negative.withGSParams(gsp), npix, scale)
+    # Metacal (+/- e1/e2) reconvolutions + draws -- skipped unless requested,
+    # since plain training never uses them. Identical for ideal/superbit once the
+    # PSF is defined, so it lives here rather than duplicated per branch.
+    if compute_metacal:
+        obj_e1_positive = galsim.Convolve([sheared_gal.shear(g1=0.01, g2=0.0), psf], gsparams=gsp)
+        obj_e1_negative = galsim.Convolve([sheared_gal.shear(g1=-0.01, g2=0.0), psf], gsparams=gsp)
+        obj_e2_positive = galsim.Convolve([sheared_gal.shear(g1=0.0, g2=0.01), psf], gsparams=gsp)
+        obj_e2_negative = galsim.Convolve([sheared_gal.shear(g1=0.0, g2=-0.01), psf], gsparams=gsp)
+        e1_positive_im = _safe_draw(obj_e1_positive.withGSParams(gsp), npix, scale)
+        e1_negative_im = _safe_draw(obj_e1_negative.withGSParams(gsp), npix, scale)
+        e2_positive_im = _safe_draw(obj_e2_positive.withGSParams(gsp), npix, scale)
+        e2_negative_im = _safe_draw(obj_e2_negative.withGSParams(gsp), npix, scale)
 
     # Add noise
     nse = rng.normal(size=obj_im.shape, scale=nse_sd)
@@ -467,15 +536,21 @@ def sim_func(
         weight=np.ones_like(psf_im) / target_psf_noise**2,
         jacobian=psf_jac,
     )
-    admom_psf_measurement = get_admoms_ngmix_fit(obs=psf_obs, reduced=True)
-    psf_obs.update_meta_data(
-        {
-            "e1": admom_psf_measurement["e1"],
-            "e2": admom_psf_measurement["e2"],
-            "T": admom_psf_measurement["T"],
-            "admom_flags": admom_psf_measurement["flags"],
-        }
-    )
+    if compute_psf_admom:
+        admom_psf_measurement = get_admoms_ngmix_fit(obs=psf_obs, reduced=True)
+        psf_obs.update_meta_data(
+            {
+                "e1": admom_psf_measurement["e1"],
+                "e2": admom_psf_measurement["e2"],
+                "T": admom_psf_measurement["T"],
+                "admom_flags": admom_psf_measurement["flags"],
+            }
+        )
+    else:
+        # These feed only the psf_e1/psf_e2/psf_T labels; when those are not
+        # requested, skip the (expensive) fit and leave NaN placeholders so the
+        # metadata keys still exist.
+        psf_obs.update_meta_data({"e1": np.nan, "e2": np.nan, "T": np.nan, "admom_flags": -1})
 
     obj_obs = ngmix.Observation(
         image=obj_im + nse,
@@ -490,15 +565,17 @@ def sim_func(
     # Calculate SNR using ngmix built-in method
     snr = obj_obs.get_s2n()
 
-    obj_obs.update_meta_data(
-        {
-            "snr": snr,
-            "e1_positive": e1_positive_im,
-            "e1_negative": e1_negative_im,
-            "e2_positive": e2_positive_im,
-            "e2_negative": e2_negative_im,
-        }
-    )
+    obj_meta = {"snr": snr}
+    if compute_metacal:
+        obj_meta.update(
+            {
+                "e1_positive": e1_positive_im,
+                "e1_negative": e1_negative_im,
+                "e2_positive": e2_positive_im,
+                "e2_negative": e2_negative_im,
+            }
+        )
+    obj_obs.update_meta_data(obj_meta)
 
     return obj_obs
 

@@ -107,6 +107,8 @@ class Config:
         "paths.train_catalog": "catalog.cosmos_cat_fname",
         "image.normalize_images": "dataset.normalize_images",
         "train.normalize_labels": "dataset.normalize_labels",
+        "train.nproc": "dataset.nproc",
+        "train.compute_metacal": "dataset.compute_metacal",
     }
 
     def _normalize_schema(self) -> None:

@@ -28,6 +28,16 @@ dataset:
   # d4-fork-like. Leave false unless running the augmentation-vs-architecture
   # ablation.
   d4_augment: false
+  # Number of worker processes for dataset generation. null (default) = auto:
+  # uses SLURM_CPUS_PER_TASK on a cluster, else 1 (serial) off-cluster. An
+  # explicit int forces that many; 1 = serial. Uses a spawn-based pool
+  # (JAX-safe, never fork). NOTE: auto reads the SLURM allocation, NOT the
+  # node's total cores (os.cpu_count would oversubscribe a shared node). Output
+  # is identical for any value (PSF sampling is seeded per object).
+  nproc: null
+  # Compute + store the 4 metacal (+/- e1/e2) reconvolved images per object.
+  # Off by default; training never uses them (they only live in obs metadata).
+  compute_metacal: false
 
 # Model configuration  
 model:
