@@ -599,6 +599,15 @@ elif PSF_RESPONSE:
 
 fname = OUTPUT_FITS
 
+# Unit ("no response") columns so the NOT-response-corrected m can be recomputed
+# straight from the FITS: jackknife_mc_v2(..., r11_col="r11_unit") divides the
+# ensemble shear by 1 instead of the metacal R11. Everything else needed for both
+# the corrected (r11 / r11_sn) and uncorrected (r11_unit) m is already stored:
+# g_noshear / g_sn_noshear (numerators), r11 / r11_sn (metacal shear response),
+# gpsf / g_th (leakage & truth). Saving all of it makes both m's reproducible.
+tab_p["r11_unit"] = np.ones(len(tab_p))
+tab_m["r11_unit"] = np.ones(len(tab_m))
+
 # Create directory if needed
 outdir = os.path.dirname(fname)
 if outdir != "":
@@ -614,57 +623,30 @@ hdul.writeto(fname, overwrite=True)
 
 print(f"Saved tables to {fname}")
 
-(
-    m_full,
-    c_full,
-    m,
-    merr,
-    c,
-    cerr,
-    m_jk,
-    c_jk,
-    r11_mean,
-    r11_err,
-    _,
-    _,
-    _,
-    _,
-) = jackknife_mc_v2(tab_p, tab_m, SHEAR_TRUE, njac=NJAC)
+# Both estimators are reported TWO ways, from the SAME noshear numerator and the
+# SAME metacal shear pairs used everywhere else in the benchmark:
+#   - response corrected : ensemble shear / <R11>   (metacal R^gamma; r11 / r11_sn)
+#   - not resp. corrected: ensemble shear / 1       (r11_unit)
+# The metacal R11 response is trustworthy (ShearNet R^gamma ~ 0.92, tight), so the
+# response-corrected value is the headline m; the uncorrected one shows the raw
+# ensemble slope for reference. All columns needed for both are in the FITS.
+def _report_m(label, g_col, r11_col):
+    (_mf, _cf, _m, _merr, _c, _cerr, _mjk, _cjk,
+     _r11, _r11err, _, _, _, _) = jackknife_mc_v2(
+        tab_p, tab_m, SHEAR_TRUE, njac=NJAC, g_col=g_col, r11_col=r11_col
+    )
+    _em = int(np.floor(np.log10(abs(_m)))) if _m != 0 and np.isfinite(_m) else 0
+    _ec = int(np.floor(np.log10(abs(_c)))) if _c != 0 and np.isfinite(_c) else 0
+    print(f"\n{label} ({NOBS} objects)   [g={g_col}, R={r11_col}, <R>={_r11:.4f}]")
+    print(f"m = ({_m/10**_em:.3f} ± {_merr/10**_em:.3f}) × 10{superscript(_em)}")
+    print(f"c = ({_c/10**_ec:.3f} ± {_cerr/10**_ec:.3f}) × 10{superscript(_ec)}")
+    return _m, _merr, _c, _cerr
 
-exp_m = int(np.floor(np.log10(abs(m)))) if m != 0 else 0
-exp_c = int(np.floor(np.log10(abs(c)))) if c != 0 else 0
-
-m_scaled = m / 10**exp_m
-merr_scaled = merr / 10**exp_m
-
-c_scaled = c / 10**exp_c
-cerr_scaled = cerr / 10**exp_c
-
-print(f"Shear Bias results for {NOBS} objects")
-print(f"m = ({m_scaled:.3f} ± {merr_scaled:.3f}) × 10{superscript(exp_m)}")
-print(f"c = ({c_scaled:.3f} ± {cerr_scaled:.3f}) × 10{superscript(exp_c)}")
+print(f"\n================ ngmix shear bias ================")
+_report_m("ngmix m  [response corrected]",     g_col="g_noshear", r11_col="r11")
+_report_m("ngmix m  [NOT response corrected]", g_col="g_noshear", r11_col="r11_unit")
 
 if STATE is not None:
-    (
-        _,
-        _,
-        m_sn,
-        merr_sn,
-        c_sn,
-        cerr_sn,
-        _,
-        _,
-        _,
-        _,
-        _,
-        _,
-        _,
-        _,
-    ) = jackknife_mc_v2(tab_p, tab_m, SHEAR_TRUE, njac=NJAC, g_col="g_sn_noshear", r11_col="r11_sn")
-
-    exp_m_sn = int(np.floor(np.log10(abs(m_sn)))) if m_sn != 0 else 0
-    exp_c_sn = int(np.floor(np.log10(abs(c_sn)))) if c_sn != 0 else 0
-
-    print(f"\nShearNet Bias results for {NOBS} objects")
-    print(f"m = ({m_sn/10**exp_m_sn:.3f} ± {merr_sn/10**exp_m_sn:.3f}) × 10{superscript(exp_m_sn)}")
-    print(f"c = ({c_sn/10**exp_c_sn:.3f} ± {cerr_sn/10**exp_c_sn:.3f}) × 10{superscript(exp_c_sn)}")
+    print(f"\n================ ShearNet shear bias ================")
+    _report_m("ShearNet m  [response corrected]",     g_col="g_sn_noshear", r11_col="r11_sn")
+    _report_m("ShearNet m  [NOT response corrected]", g_col="g_sn_noshear", r11_col="r11_unit")
