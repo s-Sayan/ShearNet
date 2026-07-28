@@ -90,6 +90,7 @@ class TrainConfig:
     galaxy_type: str = "research_backed"
     psf_type: str = "forklens_psf"
     fusion: str = "concat"
+    head: str = "gap"
     save_path: Optional[str] = None
     model_name: str = "my_model"
     val_split: float = 0.2
@@ -113,6 +114,7 @@ class TrainConfig:
             galaxy_type=config.get("model.galaxy.type"),
             psf_type=config.get("model.psf.type"),
             fusion=config.get("model.fusion", "concat"),
+            head=config.get("model.head", "gap"),
             save_path=save_path,
             model_name=config.get("output.model_name"),
             val_split=config.get("training.val_split"),

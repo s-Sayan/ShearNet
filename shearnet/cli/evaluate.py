@@ -112,6 +112,7 @@ def load_config(args):
         "galaxy_type": config.get("model.galaxy.type", "research_backed"),
         "psf_type": config.get("model.psf.type", "forklens_psf"),
         "fusion": config.get("model.fusion", "concat"),
+        "head": config.get("model.head", "gap"),
         "output_keys": tuple(config.get("model.output_keys", ("g1", "g2"))),
         "mcal": args.mcal,
         "plot": args.plot or config.get("plotting.plot", False),
@@ -177,6 +178,7 @@ def load_model(config, gal_images, psf_images):
         galaxy_type=config["galaxy_type"],
         psf_type=config["psf_type"],
         fusion=config.get("fusion", "concat"),
+        head=config.get("head", "gap"),
     )
 
     output_keys = tuple(config["output_keys"])

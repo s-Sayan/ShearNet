@@ -138,6 +138,7 @@ def train_model(
     gap=False,
     weights=None,
     fusion="concat",
+    head="gap",
     loss="mse",
     ema_decay=None,
 ):
@@ -211,7 +212,7 @@ def train_model(
             len(weights) == n_out
         ), f"loss_weights length {len(weights)} != output_keys length {n_out}"
 
-    model = build_model(nn, galaxy_type=galaxy_type, psf_type=psf_type, fusion=fusion)
+    model = build_model(nn, galaxy_type=galaxy_type, psf_type=psf_type, fusion=fusion, head=head)
 
     if is_fork_model(nn):
         params = model.init(

@@ -599,15 +599,6 @@ elif PSF_RESPONSE:
 
 fname = OUTPUT_FITS
 
-# Unit ("no response") columns so the NOT-response-corrected m can be recomputed
-# straight from the FITS: jackknife_mc_v2(..., r11_col="r11_unit") divides the
-# ensemble shear by 1 instead of the metacal R11. Everything else needed for both
-# the corrected (r11 / r11_sn) and uncorrected (r11_unit) m is already stored:
-# g_noshear / g_sn_noshear (numerators), r11 / r11_sn (metacal shear response),
-# gpsf / g_th (leakage & truth). Saving all of it makes both m's reproducible.
-tab_p["r11_unit"] = np.ones(len(tab_p))
-tab_m["r11_unit"] = np.ones(len(tab_m))
-
 # Create directory if needed
 outdir = os.path.dirname(fname)
 if outdir != "":
@@ -623,13 +614,10 @@ hdul.writeto(fname, overwrite=True)
 
 print(f"Saved tables to {fname}")
 
-# Both estimators are reported TWO ways, from the SAME noshear numerator and the
-# SAME metacal shear pairs used everywhere else in the benchmark:
-#   - response corrected : ensemble shear / <R11>   (metacal R^gamma; r11 / r11_sn)
-#   - not resp. corrected: ensemble shear / 1       (r11_unit)
-# The metacal R11 response is trustworthy (ShearNet R^gamma ~ 0.92, tight), so the
-# response-corrected value is the headline m; the uncorrected one shows the raw
-# ensemble slope for reference. All columns needed for both are in the FITS.
+# Both estimators are reported response corrected, from the noshear numerator
+# (g_noshear / g_sn_noshear) divided by the metacal R11 shear response
+# (r11 / r11_sn) -- the same images and response used everywhere else in the
+# benchmark (leakage panels, residual plot).
 def _report_m(label, g_col, r11_col):
     (_mf, _cf, _m, _merr, _c, _cerr, _mjk, _cjk,
      _r11, _r11err, _, _, _, _) = jackknife_mc_v2(
@@ -643,10 +631,8 @@ def _report_m(label, g_col, r11_col):
     return _m, _merr, _c, _cerr
 
 print(f"\n================ ngmix shear bias ================")
-_report_m("ngmix m  [response corrected]",     g_col="g_noshear", r11_col="r11")
-_report_m("ngmix m  [NOT response corrected]", g_col="g_noshear", r11_col="r11_unit")
+_report_m("ngmix m  [response corrected]", g_col="g_noshear", r11_col="r11")
 
 if STATE is not None:
     print(f"\n================ ShearNet shear bias ================")
-    _report_m("ShearNet m  [response corrected]",     g_col="g_sn_noshear", r11_col="r11_sn")
-    _report_m("ShearNet m  [NOT response corrected]", g_col="g_sn_noshear", r11_col="r11_unit")
+    _report_m("ShearNet m  [response corrected]", g_col="g_sn_noshear", r11_col="r11_sn")

@@ -32,20 +32,25 @@ model:
   architecture: d4-fork-like
   process_psf: true
   fusion: transformer                   # concat | transformer
+  head: attention
+  # D4 branch backbones (all choices stay D4-equivariant via orbit averaging):
+  #   d4cnn (smooth default) | research_backed | forklens_psf
+  galaxy_branch: research_backed
+  psf_branch:    forklens_psf
   output_keys: [g1, g2, hlr, flux]
   gap: true
 
 train:
   seed: 42
   samples: 500000
-  epochs: 80
+  epochs: 100
   batch_size: 128
-  learning_rate: 1.0e-3
-  weight_decay:  1.5e-2
+  learning_rate: 3.0e-4
+  weight_decay:  1.0e-2
   patience: 20
   val_split: 0.2
   eval_interval: 1
-  loss_weights: [1.0, 1.0, 1.0, 1.0]   # one per output_key, in order
+  loss_weights: [1.0, 1.0, 0.25, 0.25]   # one per output_key, in order
   ema_decay: 0.999
   plot: true
 

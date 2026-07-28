@@ -95,6 +95,104 @@ def test_d4_fork_like_is_equivariant(fusion):
     assert jnp.allclose(out_mir, out * jnp.array([1.0, -1.0]), atol=1e-5)
 
 
+# Pluggable D4 branches: every (galaxy, psf) backbone pair must stay a valid,
+# D4-equivariant estimator, because the Reynolds orbit average is exactly spin-2
+# equivariant for an arbitrary square-map backbone (not just the smooth d4cnn).
+D4_BRANCH_PAIRS = [
+    ("d4cnn", "d4cnn"),
+    ("research_backed", "forklens_psf"),
+    ("research_backed", "d4cnn"),
+    ("d4cnn", "forklens_psf"),
+    ("forklens_psf", "research_backed"),
+]
+
+
+@pytest.mark.parametrize("galaxy_branch,psf_branch", D4_BRANCH_PAIRS)
+def test_d4_fork_like_branches_forward_shape(galaxy_branch, psf_branch):
+    """Each D4 branch pair maps (gal, psf) -> (B, n_keys)."""
+    model = build_model(
+        "d4-fork-like", galaxy_type=galaxy_branch, psf_type=psf_branch, fusion="transformer"
+    )
+    gal = jnp.ones((2, 24, 24))
+    psf = jnp.ones((2, 24, 24))
+    for output_keys in [("g1", "g2"), ("g1", "g2", "hlr", "flux")]:
+        params = model.init(random.PRNGKey(0), gal, psf, output_keys=output_keys)
+        preds = model.apply(params, gal, psf, output_keys=output_keys)
+        assert preds.shape == (2, len(output_keys))
+
+
+@pytest.mark.parametrize("galaxy_branch,psf_branch", D4_BRANCH_PAIRS)
+def test_d4_fork_like_branches_are_equivariant(galaxy_branch, psf_branch):
+    """Spin-2 equivariance holds for every branch pair, not just d4cnn.
+
+    90-degree rotation flips the sign of both shape components; an x-axis mirror
+    leaves g1 and flips g2. This is a property of the Reynolds average, so it
+    holds for any square-map backbone at random init (up to float32 round-off).
+    """
+    model = build_model(
+        "d4-fork-like", galaxy_type=galaxy_branch, psf_type=psf_branch, fusion="transformer"
+    )
+    gal = random.normal(random.PRNGKey(2), (3, 24, 24))
+    psf = random.normal(random.PRNGKey(3), (3, 24, 24))
+    output_keys = ("g1", "g2")
+    params = model.init(random.PRNGKey(0), gal, psf, output_keys=output_keys)
+    out = model.apply(params, gal, psf, output_keys=output_keys, deterministic=True)
+
+    out_rot = model.apply(
+        params,
+        jnp.rot90(gal, 1, axes=(1, 2)),
+        jnp.rot90(psf, 1, axes=(1, 2)),
+        output_keys=output_keys,
+        deterministic=True,
+    )
+    assert jnp.allclose(out_rot, -out, atol=1e-5)
+
+    out_mir = model.apply(
+        params,
+        jnp.flip(gal, axis=1),
+        jnp.flip(psf, axis=1),
+        output_keys=output_keys,
+        deterministic=True,
+    )
+    assert jnp.allclose(out_mir, out * jnp.array([1.0, -1.0]), atol=1e-5)
+
+
+@pytest.mark.parametrize("head", ["gap", "attention"])
+@pytest.mark.parametrize("galaxy_branch,psf_branch", [("d4cnn", "d4cnn"), ("research_backed", "forklens_psf")])
+def test_d4_fork_like_head_is_equivariant(head, galaxy_branch, psf_branch):
+    """Both pooling heads stay exactly spin-2 equivariant.
+
+    The attention head derives its weights from the sign-free context map, so it
+    rotates with psi1/psi2 and the pooled vector still transforms as w_c. The two
+    extra outputs (hlr, flux) must be D4-INVARIANT (unchanged under the group).
+    """
+    model = build_model(
+        "d4-fork-like", galaxy_type=galaxy_branch, psf_type=psf_branch,
+        fusion="transformer", head=head,
+    )
+    gal = random.normal(random.PRNGKey(2), (3, 24, 24))
+    psf = random.normal(random.PRNGKey(3), (3, 24, 24))
+    ok = ("g1", "g2", "hlr", "flux")
+    params = model.init(random.PRNGKey(0), gal, psf, output_keys=ok)
+    out = model.apply(params, gal, psf, output_keys=ok, deterministic=True)
+
+    out_rot = model.apply(
+        params, jnp.rot90(gal, 1, axes=(1, 2)), jnp.rot90(psf, 1, axes=(1, 2)),
+        output_keys=ok, deterministic=True,
+    )
+    # g1, g2 flip sign under 90-degree rotation; hlr, flux are invariant.
+    assert jnp.allclose(out_rot[:, :2], -out[:, :2], atol=1e-5)
+    assert jnp.allclose(out_rot[:, 2:], out[:, 2:], atol=1e-5)
+
+    out_mir = model.apply(
+        params, jnp.flip(gal, axis=1), jnp.flip(psf, axis=1),
+        output_keys=ok, deterministic=True,
+    )
+    # mirror: g1 unchanged, g2 flips; hlr, flux invariant.
+    assert jnp.allclose(out_mir[:, :2], out[:, :2] * jnp.array([1.0, -1.0]), atol=1e-5)
+    assert jnp.allclose(out_mir[:, 2:], out[:, 2:], atol=1e-5)
+
+
 def test_single_branch_accepts_unbatched_input():
     """A single 2-D stamp gets a batch axis added (shape (1, n))."""
     model = build_model("cnn")

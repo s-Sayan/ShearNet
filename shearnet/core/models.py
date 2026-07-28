@@ -1,5 +1,6 @@
 """Flax neural-network architectures for galaxy shear estimation."""
 
+import jax
 import flax.linen as nn
 import jax.numpy as jnp
 
@@ -861,19 +862,61 @@ class D4ForkLike(nn.Module):
     Any additional ``output_keys`` beyond the first two are treated as
     D4-invariant scalars and regressed from the invariant orbit average.
 
+    Because the Reynolds average is exactly equivariant for an *arbitrary*
+    backbone F, the galaxy and PSF branches are pluggable: ``galaxy_branch`` /
+    ``psf_branch`` select which spatial backbone runs inside the orbit. Every
+    choice yields a D4-equivariant model; they differ only in feature-extraction
+    capacity (and smoothness -- see the note on ``d4cnn`` below).
+
     Attributes:
         fusion: ``'transformer'`` (galaxy cross-attends to PSF, the intended
             configuration) or ``'concat'`` (PSF summarised as a global context
             vector broadcast onto the galaxy map).
-        galaxy_features / psf_features: channel widths of the smooth backbones.
+        galaxy_branch / psf_branch: spatial backbone for each branch, one of
+            :data:`D4_BRANCH_BACKBONES` (``'d4cnn'`` default). ``'d4cnn'`` is the
+            smooth (GeLU / avg-pool) :class:`_D4SmoothCNN` -- the only branch that
+            keeps the map continuously differentiable, a prerequisite for the
+            analytic gradient-based calibration of Lin et al. (2026, Sec 2.1.2).
+            ``'research_backed'`` and ``'forklens_psf'`` are higher-capacity but
+            use ReLU / strided convs, so they stay equivariant but forgo that
+            smoothness. Any backbone must return a *square* spatial map so the
+            ``rot90`` orbit alignment is well defined.
+        galaxy_features / psf_features: channel widths of the ``d4cnn`` backbone
+            (ignored by the other branches, which fix their own widths).
         d_model / num_heads: transformer-fusion width and attention heads.
     """
 
     fusion: str = "transformer"
+    galaxy_branch: str = "d4cnn"
+    psf_branch: str = "d4cnn"
     galaxy_features: tuple = (16, 32)
     psf_features: tuple = (16, 32)
     d_model: int = 64
     num_heads: int = 4
+    head: str = "gap"          # 'gap' (fixed Gaussian window) | 'attention'
+    num_pool_heads: int = 4    # number of attention pooling maps (head='attention')
+
+    def _branch_map(self, branch, features, x, deterministic):
+        """Run the chosen spatial backbone over the orbit and return its map.
+
+        Any backbone returning a square spatial feature map is valid; the
+        enclosing Reynolds average makes the whole model exactly spin-2
+        equivariant regardless of the backbone's internal structure.
+        """
+        if branch == "d4cnn":
+            return _D4SmoothCNN(features=features)(x)
+        if branch == "research_backed":
+            return ResearchBackedGalaxyResNet()(
+                x, deterministic=deterministic, return_spatial=True
+            )
+        if branch == "forklens_psf":
+            return ForkLensPSFNet()(
+                x, deterministic=deterministic, return_spatial=True
+            )
+        raise ValueError(
+            f"Unknown D4 branch {branch!r}; choose from "
+            f"{sorted(D4_BRANCH_BACKBONES)}"
+        )
 
     def _fuse(self, galaxy_map, psf_map, deterministic):
         """Fuse galaxy/PSF maps into a single galaxy-frame spatial map."""
@@ -905,16 +948,16 @@ class D4ForkLike(nn.Module):
             psf_image = jnp.expand_dims(psf_image, axis=0)
         batch = galaxy_image.shape[0]
 
-        galaxy_backbone = _D4SmoothCNN(features=self.galaxy_features)
-        psf_backbone = _D4SmoothCNN(features=self.psf_features)
-
         # Build the D4 orbit of the (galaxy, PSF) pair and stack it into the
-        # batch axis so the shared backbone/fusion runs once over all 8 copies.
+        # batch axis so each branch backbone/fusion runs once over all 8 copies.
         gal_orbit = jnp.concatenate([_d4_apply(galaxy_image, i) for i in range(8)], axis=0)
         psf_orbit = jnp.concatenate([_d4_apply(psf_image, i) for i in range(8)], axis=0)
 
-        gal_maps = galaxy_backbone(gal_orbit)
-        psf_maps = psf_backbone(psf_orbit)
+        # Galaxy branch is created first, then PSF (preserves 'd4cnn' checkpoint
+        # param naming). Any square-map backbone stays exactly spin-2 equivariant
+        # once wrapped in the Reynolds average below.
+        gal_maps = self._branch_map(self.galaxy_branch, self.galaxy_features, gal_orbit, deterministic)
+        psf_maps = self._branch_map(self.psf_branch, self.psf_features, psf_orbit, deterministic)
         fused = self._fuse(gal_maps, psf_maps, deterministic)  # (8*batch, H, W, C)
 
         H, W, C = fused.shape[1], fused.shape[2], fused.shape[3]
@@ -927,10 +970,37 @@ class D4ForkLike(nn.Module):
         psi1 = jnp.mean(_D4_W1[:, None, None, None, None] * aligned, axis=0)
         psi2 = jnp.mean(_D4_W2[:, None, None, None, None] * aligned, axis=0)
 
-        # D4-symmetric Gaussian window + global average pool -> channel vectors.
-        window = _d4_gaussian_window(H)[None, :, :, None]
-        s1 = jnp.sum(psi1 * window, axis=(1, 2))
-        s2 = jnp.sum(psi2 * window, axis=(1, 2))
+        # Pool each equivariant map to a channel vector that carries only the
+        # spin-2 sign w_c: a D4-consistent spatial sum kills the rotation part and
+        # keeps the sign. ``psi_inv`` is the sign-free (trivial-rep) context map --
+        # it transforms purely spatially, so any weighting derived from it rotates
+        # WITH psi1/psi2 and the pooled vector stays exactly spin-2 equivariant.
+        psi_inv = jnp.mean(aligned, axis=0)
+
+        if self.head == "attention":
+            # Content-adaptive pooling: K learnable attention maps (from the
+            # sign-free context) replace the single fixed Gaussian window. The head
+            # then sees K spatial regions and a K*C-wide vector instead of
+            # collapsing everything through one radial window -- lifting the
+            # information bottleneck WITHOUT breaking equivariance (the weights
+            # rotate with the maps and a spatial sum is rotation-invariant).
+            K = self.num_pool_heads
+            ctx = nn.gelu(nn.Dense(self.d_model, name="pool_ctx")(psi_inv))
+            logits = nn.Dense(K, name="pool_logits")(ctx)          # (B, H, W, K)
+            attn = jax.nn.softmax(logits.reshape(batch, H * W, K), axis=1)
+            attn = attn.reshape(batch, H, W, K)
+
+            def _pool(psi):
+                # (B,H,W,C) weighted by (B,H,W,K) -> (B, K*C)
+                return jnp.einsum("bhwc,bhwk->bkc", psi, attn).reshape(batch, -1)
+        else:
+            # 'gap': original single fixed D4-symmetric Gaussian window + GAP.
+            window = _d4_gaussian_window(H)[None, :, :, None]
+
+            def _pool(psi):
+                return jnp.sum(psi * window, axis=(1, 2))
+
+        s1, s2 = _pool(psi1), _pool(psi2)
 
         # Bias-free tanh ("odd") MLPs preserve the spin-2 sign of the features.
         def odd_mlp(z, name):
@@ -947,10 +1017,9 @@ class D4ForkLike(nn.Module):
             columns.append(odd_mlp(s2, "odd_e2"))
 
         # Extra outputs (e.g. hlr, flux) are D4-invariant scalars: regress them
-        # from the sign-free (invariant) orbit average via a plain MLP.
+        # from the sign-free (invariant) pooled context via a plain MLP.
         if n_out > 2:
-            psi_inv = jnp.mean(aligned, axis=0)
-            s_inv = jnp.sum(psi_inv * window, axis=(1, 2))
+            s_inv = _pool(psi_inv)
             h = nn.gelu(nn.Dense(128)(s_inv))
             extra = nn.Dense(n_out - 2)(h)
             columns.extend(extra[:, k] for k in range(n_out - 2))
@@ -998,6 +1067,18 @@ def build_branch_model(model_type):
         raise ValueError(f"Invalid model type specified: {model_type}")
 
 
+# Spatial backbones usable as a galaxy/PSF branch inside :class:`D4ForkLike`.
+# Each must return a SQUARE spatial feature map (the orbit alignment uses
+# ``rot90``); the enclosing Reynolds average then makes the whole model exactly
+# spin-2 equivariant regardless of the backbone. ``d4cnn`` is the smooth default;
+# the others are higher-capacity but non-smooth (see :class:`D4ForkLike`).
+D4_BRANCH_BACKBONES = {
+    "d4cnn": _D4SmoothCNN,
+    "research_backed": ResearchBackedGalaxyResNet,
+    "forklens_psf": ForkLensPSFNet,
+}
+
+
 # Two-branch architectures that take a (galaxy, PSF) image pair rather than a
 # single stamp. Used by the training/evaluation code to decide whether to feed
 # PSF images through the model.
@@ -1009,21 +1090,36 @@ def is_fork_model(nn):
     return nn in FORK_MODELS
 
 
-def build_model(nn, galaxy_type="cnn", psf_type="cnn", fusion="concat"):
+def build_model(nn, galaxy_type="cnn", psf_type="cnn", fusion="concat", head="gap"):
     """Instantiate a top-level architecture from its ``nn`` name.
 
     The two-branch ``fork-like`` and ``d4-fork-like`` models are constructed
     with the given branch/fusion settings; every other name maps to a
     single-branch architecture in :data:`SINGLE_BRANCH_MODELS`.
 
-    ``d4-fork-like`` is the D4-equivariant variant (Lin et al. 2026): it ignores
-    ``galaxy_type``/``psf_type`` (it uses its own smooth backbones) and honours
-    ``fusion`` (``'transformer'`` or ``'concat'``).
+    ``d4-fork-like`` is the D4-equivariant variant (Lin et al. 2026). It honours
+    ``fusion`` (``'transformer'`` or ``'concat'``) and now maps
+    ``galaxy_type``/``psf_type`` onto its pluggable D4 branches
+    (:data:`D4_BRANCH_BACKBONES`, e.g. ``'d4cnn'`` / ``'research_backed'`` /
+    ``'forklens_psf'``); ``None`` falls back to the smooth ``'d4cnn'`` backbone,
+    which reproduces the original behaviour.
     """
     if nn == "fork-like":
         return ForkLike(galaxy_model_type=galaxy_type, psf_model_type=psf_type, fusion=fusion)
     if nn == "d4-fork-like":
-        return D4ForkLike(fusion=fusion)
+        def _d4_branch(t):
+            # ``build_model``'s generic default is 'cnn'; treat that (and None)
+            # as the smooth 'd4cnn' backbone so bare d4-fork-like construction
+            # reproduces the original behaviour. Explicit D4 branch names pass
+            # through; a typo passes through too and raises in ``_branch_map``.
+            return "d4cnn" if t in (None, "cnn") else t
+
+        return D4ForkLike(
+            fusion=fusion,
+            galaxy_branch=_d4_branch(galaxy_type),
+            psf_branch=_d4_branch(psf_type),
+            head=head or "gap",
+        )
     try:
         return SINGLE_BRANCH_MODELS[nn]()
     except KeyError:
