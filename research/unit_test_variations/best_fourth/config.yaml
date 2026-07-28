@@ -73,12 +73,17 @@ eval:
     #              the galaxy (the physical response for a non-deconvolving net)
     psf_response: metacal
     psf_response_step: 0.01  # shear step, shared by metacal AND direct
+    # ShearNet inference micro-batch. The D4 model + transformer fusion attention
+    # is O(tokens^2); research_backed (27x27) OOMs at large batches. 64 is safe;
+    # raise for d4cnn branches or a smaller GPU footprint.
+    shearnet_batch_size: 64
     output: benchmarking/m/metacal_results.fits
 
   leakage:                   # PSF leakage
     psf_model: em5
     psf_response: metacal    # none | metacal | direct  (see eval.bias for details)
     psf_response_step: 0.01  # shear step, shared by metacal AND direct
+    shearnet_batch_size: 64  # see eval.bias (O(tokens^2) fusion; avoids GPU OOM)
     output: benchmarking/psf_leakage/psf_leakage_results.fits
 
   timing:                    # ngmix vs ShearNet speed

@@ -450,7 +450,13 @@ gth_list = []
 g_sn_raw_list = []
 img_buffer = []
 
-BATCH_SIZE = 500
+# ShearNet inference micro-batch (objects per SN_PREDICT call). Each object is
+# expanded into an 8-element D4 orbit and, with transformer fusion, the attention
+# is O(tokens^2) in the galaxy-map resolution -- a high-res backbone like
+# research_backed (27x27 = 729 tokens) at a large batch OOMs the GPU (a 500-object
+# batch needs a ~31 GiB attention tensor). Keep it modest; override via
+# eval.leakage.shearnet_batch_size.
+BATCH_SIZE = int(LEAKAGE_CFG.get("shearnet_batch_size", 128))
 
 _ok = list(OUTPUT_KEYS)
 g_idx = [_ok.index("g1"), _ok.index("g2")]

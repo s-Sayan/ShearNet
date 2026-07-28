@@ -374,7 +374,13 @@ def process_single_object(args):
 
 args = [(i, SEED, NOISE, SHEAR_TRUE, STATE) for i in range(NOBS)]
 
-BATCH_SIZE = 500
+# ShearNet inference micro-batch (objects per SN_PREDICT call). Each object is
+# expanded into an 8-element D4 orbit and, with transformer fusion, the attention
+# is O(tokens^2) in the galaxy-map resolution -- a high-res backbone like
+# research_backed (27x27 = 729 tokens) at a large batch OOMs the GPU (a 500-object
+# batch needs a ~31 GiB attention tensor). Keep it modest; override via
+# eval.bias.shearnet_batch_size.
+BATCH_SIZE = int(_config["eval"]["bias"].get("shearnet_batch_size", 128))
 
 args_list = [(i, SEED, NOISE, SHEAR_TRUE) for i in range(NOBS)]
 
