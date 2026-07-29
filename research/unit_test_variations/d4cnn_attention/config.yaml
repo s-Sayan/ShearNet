@@ -43,11 +43,12 @@ model:
 train:
   seed: 42
   samples: 500000
-  epochs: 80
+  epochs: 30              # was 100: cosine now anneals during the useful window
+                          # (old run overfit by epoch ~8 at ~peak LR the whole time)
   batch_size: 128
-  learning_rate: 1.0e-4
-  weight_decay:  1.0e-2
-  patience: 20
+  learning_rate: 2.0e-4   # was 3.0e-4: lower peak -> better minimum
+  weight_decay:  2.0e-2   # was 1.0e-2: more decoupled decay vs the fast overfit
+  patience: 12            # was 20
   val_split: 0.2
   eval_interval: 1
   loss_weights: [1.0, 1.0, 1.0, 1.0]   # one per output_key, in order
