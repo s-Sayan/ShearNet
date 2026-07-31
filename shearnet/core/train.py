@@ -141,6 +141,9 @@ def train_model(
     head="gap",
     loss="mse",
     ema_decay=None,
+    dropout=0.0,
+    resample_noise=False,
+    resample_noise_sd=0.0,
 ):
     """Train a ShearNet model with validation and early stopping.
 
@@ -183,6 +186,25 @@ def train_model(
             weights with this decay (e.g. ``0.999``) and use the averaged
             weights for validation *and* for the saved checkpoint. When ``None``
             (default) training is exactly as before -- no EMA is maintained.
+        dropout: Spatial-dropout rate for the ``research_backed`` backbone (used
+            as a ``d4-fork-like`` branch or the single-branch model). ``0.0``
+            (default) adds no dropout and leaves training byte-for-byte as before;
+            a positive rate is active only during training and is switched off
+            (deterministic) for validation and inference. A dedicated ``'dropout'``
+            RNG stream is threaded through init and each train step only when the
+            rate is positive.
+        resample_noise: When ``True``, ``galaxy_images`` are treated as noise-free
+            stamps and a *fresh* Gaussian noise realization is drawn on-device for
+            every training batch each epoch (so a given galaxy never repeats the
+            same noise), while the validation split gets a single *frozen* noise
+            realization reused every epoch (so the validation loss stays
+            comparable). Off (default) trains on the images exactly as passed.
+            ``psf_images`` are never noised. Requires ``resample_noise_sd``.
+        resample_noise_sd: Std of the resampled noise in *model-input* units --
+            i.e. the physical noise std divided by the image-normalizer's galaxy
+            ``std`` (or the raw physical std when image normalization is off), so
+            that adding it to the (already-normalized) clean stamps reproduces a
+            normalized noisy stamp. Only used when ``resample_noise`` is ``True``.
 
     Returns:
         ``(state, train_losses, val_losses, val_losses_per_key)`` where ``state``
@@ -203,6 +225,17 @@ def train_model(
         train_psf_images = val_psf_images = None
     train_labels, val_labels = labels[:split_idx], labels[split_idx:]
 
+    # Fresh-noise training: the galaxy stamps arrived noise-free. The validation
+    # split is frozen to a single noise realization (drawn once here) so its loss
+    # is comparable across epochs; the training split is re-noised per batch in
+    # the epoch loop below. Only the galaxy channel is noised (PSF stays clean).
+    use_resample_noise = bool(resample_noise) and resample_noise_sd > 0.0
+    if use_resample_noise:
+        rng_key, val_noise_key = jax.random.split(rng_key)
+        val_galaxy_images = val_galaxy_images + resample_noise_sd * jax.random.normal(
+            val_noise_key, val_galaxy_images.shape
+        )
+
     n_out = len(output_keys)
     if weights is None:
         weights = jnp.ones(n_out)
@@ -212,11 +245,23 @@ def train_model(
             len(weights) == n_out
         ), f"loss_weights length {len(weights)} != output_keys length {n_out}"
 
-    model = build_model(nn, galaxy_type=galaxy_type, psf_type=psf_type, fusion=fusion, head=head)
+    model = build_model(
+        nn, galaxy_type=galaxy_type, psf_type=psf_type, fusion=fusion, head=head, dropout=dropout
+    )
+
+    # Dropout is opt-in (rate > 0). Only then does the model contain an
+    # nn.Dropout that needs a 'dropout' RNG stream; when off, init/apply are
+    # called exactly as before so existing runs and checkpoints are unchanged.
+    use_dropout = bool(dropout) and dropout > 0.0
+    if use_dropout:
+        rng_key, dropout_init_key = jax.random.split(rng_key)
+        init_rngs = {"params": rng_key, "dropout": dropout_init_key}
+    else:
+        init_rngs = rng_key
 
     if is_fork_model(nn):
         params = model.init(
-            rng_key,
+            init_rngs,
             jnp.ones_like(galaxy_images[0]),
             jnp.ones_like(psf_images[0]),
             output_keys=output_keys,
@@ -224,7 +269,7 @@ def train_model(
         )
     else:
         params = model.init(
-            rng_key, jnp.ones_like(galaxy_images[0]), output_keys=output_keys, gap=gap
+            init_rngs, jnp.ones_like(galaxy_images[0]), output_keys=output_keys, gap=gap
         )
 
     total_steps = epochs * (len(train_galaxy_images) // batch_size)
@@ -264,12 +309,22 @@ def train_model(
     is_fork = is_fork_model(nn)
     loss_callable = resolve_loss(loss)
 
+    # When dropout is active, training applies the model stochastically with a
+    # per-step 'dropout' rng and validation switches it off (deterministic=True).
+    # When off, apply is called exactly as before (no deterministic/rngs kwargs),
+    # so the no-dropout path is unchanged.
     if is_fork:
 
         @jax.jit
-        def _train_one(state, gal, psf, lab):
+        def _train_one(state, gal, psf, lab, dropout_rng):
             def _objective(params):
-                preds = state.apply_fn(params, gal, psf, output_keys, gap=gap)
+                if use_dropout:
+                    preds = state.apply_fn(
+                        params, gal, psf, output_keys, gap=gap,
+                        deterministic=False, rngs={"dropout": dropout_rng},
+                    )
+                else:
+                    preds = state.apply_fn(params, gal, psf, output_keys, gap=gap)
                 return loss_callable(preds, lab, weights)
 
             loss_val, grads = jax.value_and_grad(_objective)(state.params)
@@ -277,11 +332,16 @@ def train_model(
 
         @jax.jit
         def _eval_one(state, gal, psf, lab):
-            preds = state.apply_fn(state.params, gal, psf, output_keys, gap=gap)
+            if use_dropout:
+                preds = state.apply_fn(
+                    state.params, gal, psf, output_keys, gap=gap, deterministic=True
+                )
+            else:
+                preds = state.apply_fn(state.params, gal, psf, output_keys, gap=gap)
             return loss_callable(preds, lab, weights), _per_key_mse(preds, lab)
 
-        def _train_batch(state, gal, psf, lab):
-            return _train_one(state, gal, psf, lab)
+        def _train_batch(state, gal, psf, lab, dropout_rng):
+            return _train_one(state, gal, psf, lab, dropout_rng)
 
         def _eval_batch(state, gal, psf, lab):
             return _eval_one(state, gal, psf, lab)
@@ -289,9 +349,15 @@ def train_model(
     else:
 
         @jax.jit
-        def _train_one(state, gal, lab):
+        def _train_one(state, gal, lab, dropout_rng):
             def _objective(params):
-                preds = state.apply_fn(params, gal, gap=gap)
+                if use_dropout:
+                    preds = state.apply_fn(
+                        params, gal, gap=gap,
+                        deterministic=False, rngs={"dropout": dropout_rng},
+                    )
+                else:
+                    preds = state.apply_fn(params, gal, gap=gap)
                 return loss_callable(preds, lab, weights)
 
             loss_val, grads = jax.value_and_grad(_objective)(state.params)
@@ -299,11 +365,14 @@ def train_model(
 
         @jax.jit
         def _eval_one(state, gal, lab):
-            preds = state.apply_fn(state.params, gal, gap=gap)
+            if use_dropout:
+                preds = state.apply_fn(state.params, gal, gap=gap, deterministic=True)
+            else:
+                preds = state.apply_fn(state.params, gal, gap=gap)
             return loss_callable(preds, lab, weights), _per_key_mse(preds, lab)
 
-        def _train_batch(state, gal, psf, lab):
-            return _train_one(state, gal, lab)
+        def _train_batch(state, gal, psf, lab, dropout_rng):
+            return _train_one(state, gal, lab, dropout_rng)
 
         def _eval_batch(state, gal, psf, lab):
             return _eval_one(state, gal, lab)
@@ -326,7 +395,23 @@ def train_model(
             batch_psf_images = shuffled_train_psf_images[sl] if is_fork else None
             batch_labels = shuffled_train_labels[sl]
             batch_size_actual = len(batch_galaxy_images)
-            state, loss = _train_batch(state, batch_galaxy_images, batch_psf_images, batch_labels)
+            # Fresh-noise training: draw an independent noise realization for this
+            # batch (galaxy channel only) so the same galaxy sees different noise
+            # every epoch -- the network can't memorize a fixed noise pattern.
+            if use_resample_noise:
+                rng_key, noise_key = jax.random.split(rng_key)
+                batch_galaxy_images = batch_galaxy_images + resample_noise_sd * jax.random.normal(
+                    noise_key, batch_galaxy_images.shape
+                )
+            # Fresh 'dropout' key per step (None when dropout is off; jit treats
+            # None as an empty pytree, so the no-dropout path is unchanged).
+            if use_dropout:
+                rng_key, step_dropout_rng = jax.random.split(rng_key)
+            else:
+                step_dropout_rng = None
+            state, loss = _train_batch(
+                state, batch_galaxy_images, batch_psf_images, batch_labels, step_dropout_rng
+            )
             if use_ema:
                 ema_params = _ema_update(ema_params, state.params)
             train_loss += loss * batch_size_actual

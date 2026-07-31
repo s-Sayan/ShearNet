@@ -158,6 +158,7 @@ def _generate_one(task, cfg):
         base_shear_g2=cfg["base_shear_g2"],
         compute_metacal=cfg["compute_metacal"],
         compute_psf_admom=cfg["compute_psf_admom"],
+        add_noise=cfg["add_noise"],
     )
 
     if cfg["return_psf"]:
@@ -201,6 +202,7 @@ def generate_dataset(
     cosmos_cat_fname=None,
     as_result=False,
     compute_metacal=False,
+    add_noise=True,
     nproc=1,
 ):
     """Simulate a dataset of galaxy postage stamps with known shear labels.
@@ -240,6 +242,12 @@ def generate_dataset(
         compute_metacal: Compute and store the four metacal (+/- e1/e2)
             reconvolved images per object. Off by default -- plain training does
             not use them (they only live in each ``Observation``'s metadata).
+        add_noise: When ``True`` (default) each galaxy stamp has one Gaussian
+            noise realization baked in (the standard behavior). When ``False`` the
+            noise-free galaxy stamps are returned instead, for the fresh-noise
+            ``train.resample_noise`` path that re-draws noise every epoch during
+            training. Only affects the galaxy channel; the PSF stamp is always
+            noise-free.
         nproc: Number of worker processes for generation. ``None`` (default) is
             auto -- ``SLURM_CPUS_PER_TASK`` on a cluster, else ``1`` (serial).
             An explicit ``>1`` uses a ``spawn``-based pool (safe alongside JAX --
@@ -305,6 +313,7 @@ def generate_dataset(
         "base_shear_g1": base_shear_g1, "base_shear_g2": base_shear_g2,
         "return_psf": return_psf, "return_obs": return_obs, "output_keys": tuple(output_keys),
         "compute_metacal": compute_metacal, "compute_psf_admom": do_admom,
+        "add_noise": add_noise,
     }
 
     def _hlr(i):
@@ -444,6 +453,7 @@ def sim_func(
     base_shear_g2=0.0,
     compute_metacal=True,
     compute_psf_admom=True,
+    add_noise=True,
 ):
     """Simulate a single galaxy observation and return an ngmix ``Observation``.
 
@@ -537,7 +547,12 @@ def sim_func(
         e2_positive_im = _safe_draw(obj_e2_positive.withGSParams(gsp), npix, scale)
         e2_negative_im = _safe_draw(obj_e2_negative.withGSParams(gsp), npix, scale)
 
-    # Add noise
+    # Add noise. With ``add_noise=False`` the returned image is the noise-free
+    # galaxy stamp (galaxy (x) PSF, already drawn) -- used by the fresh-noise
+    # ``train.resample_noise`` path, which adds independent noise each epoch
+    # during training instead of baking a single realization in here. Both draws
+    # are kept unconditionally (this object's ``rng`` is private, seeded per
+    # object) so the noise-field the Observation carries stays valid.
     nse = rng.normal(size=obj_im.shape, scale=nse_sd)
     nse_im = rng.normal(size=obj_im.shape, scale=nse_sd)
 
@@ -570,7 +585,7 @@ def sim_func(
         psf_obs.update_meta_data({"e1": np.nan, "e2": np.nan, "T": np.nan, "admom_flags": -1})
 
     obj_obs = ngmix.Observation(
-        image=obj_im + nse,
+        image=obj_im + nse if add_noise else obj_im,
         noise=nse_im,
         weight=np.ones_like(nse_im) / nse_sd**2,
         jacobian=jac,

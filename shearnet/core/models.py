@@ -338,7 +338,20 @@ class ResearchBackedGalaxyResNet(nn.Module):
     - Multi-scale processing: Inspired by galaxy morphology having features at different scales
     - Residual learning: "Deep Residual Learning for Image Recognition" (He et al., CVPR 2016)
     - Attention mechanisms: "CBAM: Convolutional Block Attention Module" (Woo et al., ECCV 2018)
+
+    Attributes:
+        dropout: Spatial-dropout rate (Srivastava et al., JMLR 2014) applied to
+            the final feature map, just before it is returned as spatial features
+            or flattened. ``0.0`` (default) inserts no dropout layer at all, so
+            the parameter tree and every existing (inference / evaluation) call
+            path are byte-for-byte unchanged. A positive rate is the primary
+            anti-overfit lever for this high-capacity backbone; it is stochastic
+            only when ``deterministic=False`` (training) and is an exact identity
+            at inference (``deterministic=True``), so any equivariance guarantee of
+            an enclosing model is preserved for all evaluated quantities.
     """
+
+    dropout: float = 0.0
 
     @nn.compact
     def __call__(
@@ -418,6 +431,17 @@ class ResearchBackedGalaxyResNet(nn.Module):
             scales=(3, 9, 21),  # DECISION: Consistent scale selection
             use_dilated=True,
         )(x, deterministic=deterministic)
+
+        # OPTIONAL REGULARIZATION on the final feature map.
+        # CITATION: "Dropout: A Simple Way to Prevent Neural Networks from
+        # Overfitting" (Srivastava et al., JMLR 2014).
+        # The layer is only *created* when a positive rate is requested, so the
+        # default (dropout=0.0) leaves the module tree — and every existing
+        # inference/eval call path, which never supplies a 'dropout' rng — exactly
+        # as before. When active it draws a mask only under deterministic=False
+        # (training) and is the identity under deterministic=True (inference).
+        if self.dropout and self.dropout > 0.0:
+            x = nn.Dropout(rate=self.dropout, deterministic=deterministic)(x)
 
         if return_spatial:
             return x
@@ -884,6 +908,11 @@ class D4ForkLike(nn.Module):
         galaxy_features / psf_features: channel widths of the ``d4cnn`` backbone
             (ignored by the other branches, which fix their own widths).
         d_model / num_heads: transformer-fusion width and attention heads.
+        dropout: spatial-dropout rate forwarded to a ``research_backed`` branch
+            (ignored by ``d4cnn`` / ``forklens_psf``, which take no dropout). It
+            is stochastic only during training (``deterministic=False``) and an
+            exact identity at inference, so the model's spin-2 equivariance holds
+            for every evaluated quantity. ``0.0`` (default) inserts no dropout.
     """
 
     fusion: str = "transformer"
@@ -895,6 +924,7 @@ class D4ForkLike(nn.Module):
     num_heads: int = 4
     head: str = "gap"          # 'gap' (fixed Gaussian window) | 'attention'
     num_pool_heads: int = 4    # number of attention pooling maps (head='attention')
+    dropout: float = 0.0       # spatial-dropout rate for a 'research_backed' branch
 
     def _branch_map(self, branch, features, x, deterministic):
         """Run the chosen spatial backbone over the orbit and return its map.
@@ -906,7 +936,11 @@ class D4ForkLike(nn.Module):
         if branch == "d4cnn":
             return _D4SmoothCNN(features=features)(x)
         if branch == "research_backed":
-            return ResearchBackedGalaxyResNet()(
+            # ``dropout`` regularizes only this high-capacity backbone; it is
+            # stochastic under training (deterministic=False) and an exact
+            # identity at inference (deterministic=True), so the Reynolds average
+            # stays exactly spin-2 equivariant for every evaluated quantity.
+            return ResearchBackedGalaxyResNet(dropout=self.dropout)(
                 x, deterministic=deterministic, return_spatial=True
             )
         if branch == "forklens_psf":
@@ -1090,7 +1124,7 @@ def is_fork_model(nn):
     return nn in FORK_MODELS
 
 
-def build_model(nn, galaxy_type="cnn", psf_type="cnn", fusion="concat", head="gap"):
+def build_model(nn, galaxy_type="cnn", psf_type="cnn", fusion="concat", head="gap", dropout=0.0):
     """Instantiate a top-level architecture from its ``nn`` name.
 
     The two-branch ``fork-like`` and ``d4-fork-like`` models are constructed
@@ -1103,6 +1137,15 @@ def build_model(nn, galaxy_type="cnn", psf_type="cnn", fusion="concat", head="ga
     (:data:`D4_BRANCH_BACKBONES`, e.g. ``'d4cnn'`` / ``'research_backed'`` /
     ``'forklens_psf'``); ``None`` falls back to the smooth ``'d4cnn'`` backbone,
     which reproduces the original behaviour.
+
+    ``dropout`` (default ``0.0``) sets the spatial-dropout rate of the
+    ``research_backed`` backbone -- an anti-overfit lever for that high-capacity
+    branch, wherever it appears (a ``d4-fork-like`` branch or the single-branch
+    ``research_backed`` model). It is ignored by every other architecture. At
+    ``0.0`` no dropout layer is created, so the parameter tree and all existing
+    call paths are unchanged; a checkpoint trained with dropout loads and
+    evaluates identically when rebuilt at the default, because dropout adds no
+    parameters and is an exact identity at inference.
     """
     if nn == "fork-like":
         return ForkLike(galaxy_model_type=galaxy_type, psf_model_type=psf_type, fusion=fusion)
@@ -1119,8 +1162,15 @@ def build_model(nn, galaxy_type="cnn", psf_type="cnn", fusion="concat", head="ga
             galaxy_branch=_d4_branch(galaxy_type),
             psf_branch=_d4_branch(psf_type),
             head=head or "gap",
+            dropout=dropout or 0.0,
         )
     try:
-        return SINGLE_BRANCH_MODELS[nn]()
+        model_cls = SINGLE_BRANCH_MODELS[nn]
     except KeyError:
         raise ValueError(f"Invalid model type specified: {nn}")
+    # Only the research_backed backbone consumes a dropout rate; a positive value
+    # on any other single-branch model is silently ignored (they take no such
+    # argument). dropout=0.0 constructs every model exactly as before.
+    if dropout and nn == "research_backed":
+        return model_cls(dropout=dropout)
+    return model_cls()

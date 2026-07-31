@@ -39,6 +39,7 @@ class DatasetSpec:
     flux_type: str = "constant"
     cosmos_cat_fname: Optional[str] = None
     compute_metacal: bool = False
+    add_noise: bool = True
     nproc: Optional[int] = None
 
     @classmethod
@@ -59,6 +60,9 @@ class DatasetSpec:
             flux_type=config.get("dataset.flux_type"),
             cosmos_cat_fname=config.get("catalog.cosmos_cat_fname"),
             compute_metacal=config.get("dataset.compute_metacal", False),
+            # Fresh-noise training generates noise-free stamps here and re-draws
+            # noise every epoch in train_model, so bake no noise in at gen time.
+            add_noise=not config.get("training.resample_noise", False),
             nproc=config.get("dataset.nproc", None),
         )
 
@@ -103,6 +107,11 @@ class TrainConfig:
     weights: Optional[list] = field(default=None)
     loss: str = "mse"
     ema_decay: Optional[float] = None
+    dropout: float = 0.0
+    resample_noise: bool = False
+    # Per-step noise std in *model-input* units (physical nse_sd / image gal_std).
+    # Not read from config -- computed in cli.train and injected before run().
+    resample_noise_sd: float = 0.0
 
     @classmethod
     def from_config(cls, config, save_path=None) -> "TrainConfig":
@@ -127,6 +136,8 @@ class TrainConfig:
             weights=config.get("training.loss_weights"),
             loss=config.get("training.loss", "mse"),
             ema_decay=config.get("training.ema_decay", None),
+            dropout=config.get("model.dropout", 0.0),
+            resample_noise=config.get("training.resample_noise", False),
         )
 
     def as_kwargs(self) -> dict:

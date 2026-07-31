@@ -102,6 +102,7 @@ class Config:
         "train.eval_interval": "training.eval_interval",
         "train.loss_weights": "training.loss_weights",
         "train.ema_decay": "training.ema_decay",
+        "train.resample_noise": "training.resample_noise",
         "meta.model_name": "output.model_name",
         "train.plot": "plotting.plot",
         "paths.train_catalog": "catalog.cosmos_cat_fname",

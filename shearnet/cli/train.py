@@ -479,12 +479,16 @@ def _prepare_training_data(config):
 
     Returns:
         ``(galaxy_images, psf_images, labels, norm_params, img_params,
-        eff_val_split)``. ``psf_images`` is ``None`` for single-branch models;
-        ``labels`` is already normalized; ``img_params`` is ``None`` unless image
-        normalization was enabled; ``eff_val_split`` is the validation fraction
-        ``train_model`` must use so its internal split lands on the same
-        train/val boundary after any augmentation (equal to
-        ``training.val_split`` when augmentation is off).
+        eff_val_split, resample_noise_sd)``. ``psf_images`` is ``None`` for
+        single-branch models; ``labels`` is already normalized; ``img_params`` is
+        ``None`` unless image normalization was enabled; ``eff_val_split`` is the
+        validation fraction ``train_model`` must use so its internal split lands
+        on the same train/val boundary after any augmentation (equal to
+        ``training.val_split`` when augmentation is off); ``resample_noise_sd`` is
+        the per-step noise std in model-input units for the fresh-noise path
+        (``0.0`` unless ``training.resample_noise`` is set). With fresh noise the
+        galaxy stamps are returned noise-free (noise is added each epoch in
+        ``train_model``).
     """
     spec = DatasetSpec.from_config(config)
     val_split = config.get("training.val_split")
@@ -545,17 +549,41 @@ def _prepare_training_data(config):
     # Optional dataset-level image standardization, fit on the same training
     # portion and applied to galaxy (and PSF) stamps. Independent of the label
     # normalizer above.
+    resample_noise = config.get("training.resample_noise", False)
+    nse_sd = spec.nse_sd
     img_params = None
     if normalize_images:
         img_params = fit_image_normalizer(
             galaxy_images[:split_idx],
             psf_images[:split_idx] if psf_images is not None else None,
         )
+        if resample_noise:
+            # With fresh-noise training the stamps here are noise-free, so their
+            # galaxy std understates what the network (and eval, on real noisy
+            # stamps) actually sees. Inflate it to the noisy-equivalent
+            # sqrt(var_clean + nse_sd^2) -- exact in expectation since the added
+            # noise is independent and zero-mean -- so the input scale and the
+            # saved normalizer match a standard baked-noise run. Mean is unchanged.
+            img_params["gal_std"] = float(np.sqrt(img_params["gal_std"] ** 2 + nse_sd ** 2))
         galaxy_images = transform_images(galaxy_images, img_params, channel="gal")
         if psf_images is not None:
             psf_images = transform_images(psf_images, img_params, channel="psf")
 
-    return galaxy_images, psf_images, labels, norm_params, img_params, eff_val_split
+    # Fresh-noise training re-noises the (now normalized) clean stamps every epoch
+    # inside train_model; express the physical noise std in model-input units
+    # (divide by the galaxy normalizer std, or 1.0 when image norm is off).
+    gal_std = img_params["gal_std"] if img_params is not None else 1.0
+    resample_noise_sd = (nse_sd / gal_std) if resample_noise else 0.0
+
+    return (
+        galaxy_images,
+        psf_images,
+        labels,
+        norm_params,
+        img_params,
+        eff_val_split,
+        resample_noise_sd,
+    )
 
 
 def _save_run_artifacts(config, model_dir, norm_params, img_params=None):
@@ -634,6 +662,7 @@ def main():
         norm_params,
         img_params,
         eff_val_split,
+        resample_noise_sd,
     ) = _prepare_training_data(config)
 
     rng_key = random.PRNGKey(config.get("dataset.seed"))
@@ -645,6 +674,9 @@ def main():
     # After D4 augmentation the train/val boundary shifts; use the effective
     # split so train_model's internal split matches (a no-op when not augmenting).
     train_cfg.val_split = eff_val_split
+    # Fresh-noise training: the per-step noise std (physical / image gal_std) is
+    # computed alongside the normalizer, not from the config (a no-op when off).
+    train_cfg.resample_noise_sd = resample_noise_sd
 
     state, train_loss, val_loss, val_loss_per_key = train_cfg.run(
         train_galaxy_images, train_labels, rng_key, psf_images=train_psf_images
