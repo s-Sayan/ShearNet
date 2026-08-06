@@ -1,9 +1,9 @@
 meta:
-  model_name: fourth_validation_best
+  model_name: fourth_validation_best_dropout
   description: "superbit PSF; g1, g2, hlr, flux from catalog; constant noise"
 
 paths:
-  root: /home/adfield/ShearNet/research/unit_test_variations/best_fourth
+  root: /home/adfield/ShearNet/research/unit_test_variations/best_fourth_dropout
   psfex_model_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
   train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
   eval_catalog:  /home/adfield/ShearNet/cosmos_catalog_eval.fits
@@ -46,7 +46,7 @@ model:
   # model stays EXACTLY spin-2 equivariant for every evaluated quantity.
   # Fallback recipe if weight_decay alone can't close the train/val gap:
   # set dropout: 0.15 and dial weight_decay back to ~2.0e-2.
-  dropout: 0.0
+  dropout: 0.15
 
 train:
   seed: 42
@@ -59,7 +59,7 @@ train:
   # control proves lr 1e-4 is fine). Raised from 1.0e-2 -> 4.0e-2 as the first,
   # free lever to match the control's curve. If it underfits, ease toward 2.5e-2;
   # if it still overfits, add model.dropout: 0.15 (see the model block).
-  weight_decay:  4.0e-2
+  weight_decay:  2.0e-2
   patience: 20
   val_split: 0.2
   eval_interval: 1

@@ -226,15 +226,18 @@ def train_model(
     train_labels, val_labels = labels[:split_idx], labels[split_idx:]
 
     # Fresh-noise training: the galaxy stamps arrived noise-free. The validation
-    # split is frozen to a single noise realization (drawn once here) so its loss
-    # is comparable across epochs; the training split is re-noised per batch in
-    # the epoch loop below. Only the galaxy channel is noised (PSF stays clean).
+    # split is frozen to a single noise realization so its loss is comparable
+    # across epochs; the training split is re-noised per batch in the epoch loop
+    # below. Only the galaxy channel is noised (PSF stays clean).
+    #
+    # The frozen val noise is added PER BATCH inside the loop (keyed by the batch
+    # offset, so it is identical every epoch) rather than materializing the whole
+    # validation set as one device array here -- the latter pins ~(N_val, H, W)
+    # floats on the GPU for the entire run, which on a tight card is enough extra
+    # residency to push the D4/attention forward pass into an OOM.
     use_resample_noise = bool(resample_noise) and resample_noise_sd > 0.0
     if use_resample_noise:
         rng_key, val_noise_key = jax.random.split(rng_key)
-        val_galaxy_images = val_galaxy_images + resample_noise_sd * jax.random.normal(
-            val_noise_key, val_galaxy_images.shape
-        )
 
     n_out = len(output_keys)
     if weights is None:
@@ -313,10 +316,24 @@ def train_model(
     # per-step 'dropout' rng and validation switches it off (deterministic=True).
     # When off, apply is called exactly as before (no deterministic/rngs kwargs),
     # so the no-dropout path is unchanged.
+    #
+    # Fresh-noise: the galaxy noise is added INSIDE the jitted step (fused with the
+    # forward/backward as one XLA program) rather than eagerly in the Python loop.
+    # ``use_resample_noise`` is a static closure, so when off no noise op is traced
+    # and the step is byte-for-byte the original; when on, folding it in avoids the
+    # per-batch un-fused kernels + host/device shuffling that otherwise serialize
+    # the pipeline and inflate wall-clock. ``noise_rng`` is None when off.
+    def _noised(gal, noise_rng):
+        if use_resample_noise:
+            return gal + resample_noise_sd * jax.random.normal(noise_rng, gal.shape)
+        return gal
+
     if is_fork:
 
         @jax.jit
-        def _train_one(state, gal, psf, lab, dropout_rng):
+        def _train_one(state, gal, psf, lab, dropout_rng, noise_rng):
+            gal = _noised(gal, noise_rng)
+
             def _objective(params):
                 if use_dropout:
                     preds = state.apply_fn(
@@ -331,7 +348,8 @@ def train_model(
             return state.apply_gradients(grads=grads), loss_val
 
         @jax.jit
-        def _eval_one(state, gal, psf, lab):
+        def _eval_one(state, gal, psf, lab, noise_rng):
+            gal = _noised(gal, noise_rng)
             if use_dropout:
                 preds = state.apply_fn(
                     state.params, gal, psf, output_keys, gap=gap, deterministic=True
@@ -340,16 +358,18 @@ def train_model(
                 preds = state.apply_fn(state.params, gal, psf, output_keys, gap=gap)
             return loss_callable(preds, lab, weights), _per_key_mse(preds, lab)
 
-        def _train_batch(state, gal, psf, lab, dropout_rng):
-            return _train_one(state, gal, psf, lab, dropout_rng)
+        def _train_batch(state, gal, psf, lab, dropout_rng, noise_rng):
+            return _train_one(state, gal, psf, lab, dropout_rng, noise_rng)
 
-        def _eval_batch(state, gal, psf, lab):
-            return _eval_one(state, gal, psf, lab)
+        def _eval_batch(state, gal, psf, lab, noise_rng):
+            return _eval_one(state, gal, psf, lab, noise_rng)
 
     else:
 
         @jax.jit
-        def _train_one(state, gal, lab, dropout_rng):
+        def _train_one(state, gal, lab, dropout_rng, noise_rng):
+            gal = _noised(gal, noise_rng)
+
             def _objective(params):
                 if use_dropout:
                     preds = state.apply_fn(
@@ -364,18 +384,19 @@ def train_model(
             return state.apply_gradients(grads=grads), loss_val
 
         @jax.jit
-        def _eval_one(state, gal, lab):
+        def _eval_one(state, gal, lab, noise_rng):
+            gal = _noised(gal, noise_rng)
             if use_dropout:
                 preds = state.apply_fn(state.params, gal, gap=gap, deterministic=True)
             else:
                 preds = state.apply_fn(state.params, gal, gap=gap)
             return loss_callable(preds, lab, weights), _per_key_mse(preds, lab)
 
-        def _train_batch(state, gal, psf, lab, dropout_rng):
-            return _train_one(state, gal, lab, dropout_rng)
+        def _train_batch(state, gal, psf, lab, dropout_rng, noise_rng):
+            return _train_one(state, gal, lab, dropout_rng, noise_rng)
 
-        def _eval_batch(state, gal, psf, lab):
-            return _eval_one(state, gal, lab)
+        def _eval_batch(state, gal, psf, lab, noise_rng):
+            return _eval_one(state, gal, lab, noise_rng)
 
     for epoch in range(epochs):
         logger.info(f"Epoch {epoch + 1}/{epochs}")
@@ -395,14 +416,13 @@ def train_model(
             batch_psf_images = shuffled_train_psf_images[sl] if is_fork else None
             batch_labels = shuffled_train_labels[sl]
             batch_size_actual = len(batch_galaxy_images)
-            # Fresh-noise training: draw an independent noise realization for this
-            # batch (galaxy channel only) so the same galaxy sees different noise
-            # every epoch -- the network can't memorize a fixed noise pattern.
+            # Fresh-noise training: an independent noise key per batch (galaxy
+            # channel only) so the same galaxy sees different noise every epoch --
+            # the noise itself is drawn inside the jitted step. None when off.
             if use_resample_noise:
-                rng_key, noise_key = jax.random.split(rng_key)
-                batch_galaxy_images = batch_galaxy_images + resample_noise_sd * jax.random.normal(
-                    noise_key, batch_galaxy_images.shape
-                )
+                rng_key, noise_rng = jax.random.split(rng_key)
+            else:
+                noise_rng = None
             # Fresh 'dropout' key per step (None when dropout is off; jit treats
             # None as an empty pytree, so the no-dropout path is unchanged).
             if use_dropout:
@@ -410,7 +430,8 @@ def train_model(
             else:
                 step_dropout_rng = None
             state, loss = _train_batch(
-                state, batch_galaxy_images, batch_psf_images, batch_labels, step_dropout_rng
+                state, batch_galaxy_images, batch_psf_images, batch_labels,
+                step_dropout_rng, noise_rng,
             )
             if use_ema:
                 ema_params = _ema_update(ema_params, state.params)
@@ -431,8 +452,13 @@ def train_model(
                 batch_psf_images = val_psf_images[sl] if is_fork else None
                 batch_labels = val_labels[sl]
                 batch_size_actual = len(batch_galaxy_images)
+                # Frozen per-batch val noise: keyed by the batch offset (not the
+                # epoch), so a given val stamp gets the SAME noise every epoch
+                # (val is never shuffled) -- a comparable validation loss. The
+                # noise is drawn inside the jitted step; None when off.
+                val_noise_rng = jax.random.fold_in(val_noise_key, i) if use_resample_noise else None
                 loss, per_key = _eval_batch(
-                    eval_state, batch_galaxy_images, batch_psf_images, batch_labels
+                    eval_state, batch_galaxy_images, batch_psf_images, batch_labels, val_noise_rng
                 )
                 val_loss += loss * batch_size_actual
                 if per_key is not None:
