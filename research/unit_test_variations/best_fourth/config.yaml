@@ -72,7 +72,7 @@ train:
   # unaffected. Two planned runs:
   #   test A (lever 1 only):  resample_noise: true,  model.dropout: 0.0
   #   test B (levers 1 + 2):  resample_noise: true,  model.dropout: 0.15
-  resample_noise: true
+  resample_noise: false
   plot: true
 
 eval:
