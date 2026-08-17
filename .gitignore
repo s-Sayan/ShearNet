@@ -74,3 +74,5 @@ datasets/
 *.save
 
 paper/
+*.pdf
+*.tex
