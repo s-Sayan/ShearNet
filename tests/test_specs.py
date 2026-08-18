@@ -27,7 +27,7 @@ def test_dataset_spec_from_config(tmp_path, monkeypatch):
     monkeypatch.setenv("SHEARNET_DATA_PATH", str(tmp_path))
     spec = DatasetSpec.from_config(Config())
     assert spec.samples == 10000
-    assert spec.psf_fwhm == 0.25
+    assert spec.psf_fwhm == 0.5
     assert spec.npix == 53  # stamp_size
     assert spec.scale == 0.141  # pixel_size
     assert spec.output_keys == ("g1", "g2")

@@ -110,6 +110,11 @@ class Config:
         "train.normalize_labels": "dataset.normalize_labels",
         "train.nproc": "dataset.nproc",
         "train.compute_metacal": "dataset.compute_metacal",
+        "train.backend": "dataset.backend",
+        "train.generation": "dataset.generation",
+        "image.backend": "dataset.backend",
+        "train.jax_fft_size": "dataset.jax_fft_size",
+        "train.jax_batch_size": "dataset.jax_batch_size",
     }
 
     def _normalize_schema(self) -> None:

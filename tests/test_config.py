@@ -20,7 +20,7 @@ def test_default_config_loads(tmp_path, monkeypatch):
     monkeypatch.setenv("SHEARNET_DATA_PATH", str(tmp_path))
     cfg = Config()
     # The key training actually reads must be present and numeric.
-    assert cfg.get("dataset.psf_fwhm") == 0.25
+    assert cfg.get("dataset.psf_fwhm") == 0.5
     assert cfg.get("model.type") == "cnn"
     # output_keys must be a real list, not a tuple-shaped string.
     assert list(cfg.get("model.output_keys")) == ["g1", "g2"]

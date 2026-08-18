@@ -586,6 +586,107 @@ def _prepare_training_data(config):
     )
 
 
+def _run_inloop_training(config, rng_key, model_dir, save_path):
+    """Train with ``dataset.generation: inloop`` -- no dataset is materialised.
+
+    Mirrors ``_prepare_training_data`` where it must: the label normalizer is
+    fit on the same contiguous training portion, and image standardisation is
+    fit on rendered stamps and then applied *inside* the step (there is nowhere
+    else to apply it, since the stamps never exist outside the step).
+
+    D4 augmentation is not applicable here -- it is an ablation that duplicates
+    a materialised array, and in-loop generation has no array to duplicate.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    from ..core.dataset_jax import render_dtype
+    from ..core.inloop import make_batch_render
+    from ..core.train_inloop import train_model_inloop
+
+    spec = DatasetSpec.from_config(config)
+    batch_size = config.get("training.batch_size")
+    output_keys = tuple(config.get("model.output_keys"))
+
+    if config.get("dataset.d4_augment", False):
+        raise ValueError(
+            "dataset.d4_augment is an array-duplication ablation and has no "
+            "meaning with dataset.generation: inloop (there is no array). Use "
+            "generation: upfront for that ablation."
+        )
+    if not jax.config.jax_enable_x64:
+        # Not fatal -- float32 stamps are fine for training -- but a forgotten
+        # JAX_ENABLE_X64=1 is invisible otherwise, and it is the difference
+        # between a float64 and a float32 renderer for every response term.
+        logger.warning(
+            "JAX_ENABLE_X64 is not set: in-loop rendering will run in float32 "
+            "(render accuracy ~1e-7). Export JAX_ENABLE_X64=1 in setup_env.sh "
+            "for float64; the stamps are cast to float32 before the network, "
+            "so training memory and speed are unchanged either way."
+        )
+    logger.info("in-loop generation: render dtype %s", render_dtype().__name__)
+
+    gen = spec.build_inloop_generator(batch_size)
+
+    # Label normalizer, fit on the same contiguous train portion the trainer
+    # will use, so the scale matches an up-front run with the same seed.
+    val_split = config.get("training.val_split")
+    split_idx = int(gen.n * (1 - val_split))
+    raw_labels = np.asarray(gen.labels(output_keys))
+    if config.get("dataset.normalize_labels", True):
+        norm_params = fit_normalizer(raw_labels[:split_idx])
+    else:
+        norm_params = identity_normalizer(raw_labels)
+
+    # Image normalizer: render a few batches to fit it. Cheap relative to a run,
+    # and it keeps the input scale identical to the up-front path.
+    img_params = None
+    if config.get("dataset.normalize_images", False):
+        probe = make_batch_render(gen, nse_sd=spec.nse_sd)
+        n_probe = min(4, gen.steps_per_epoch)
+        ids = gen.batches(jnp.arange(split_idx))[:n_probe]
+        gals, psfs = [], []
+        for s in range(n_probe):
+            g, p = probe(ids[s], jax.random.fold_in(rng_key, s))
+            gals.append(np.asarray(g))
+            psfs.append(np.asarray(p))
+        img_params = fit_image_normalizer(
+            np.concatenate(gals),
+            np.concatenate(psfs) if config.get("model.process_psf") else None,
+        )
+        logger.info("image normalizer fit on %d rendered stamps",
+                    n_probe * batch_size)
+
+    _save_run_artifacts(config, model_dir, norm_params, img_params)
+
+    return train_model_inloop(
+        gen,
+        rng_key,
+        output_keys=output_keys,
+        label_norm=norm_params,
+        img_norm=img_params,
+        nse_sd=spec.nse_sd,
+        epochs=config.get("training.epochs"),
+        nn=config.get("model.type"),
+        galaxy_type=config.get("model.galaxy.type"),
+        psf_type=config.get("model.psf.type"),
+        fusion=config.get("model.fusion", "concat"),
+        head=config.get("model.head", "gap"),
+        save_path=save_path,
+        model_name=config.get("output.model_name"),
+        val_split=val_split,
+        eval_interval=config.get("training.eval_interval"),
+        patience=config.get("training.patience"),
+        lr=config.get("training.learning_rate"),
+        weight_decay=config.get("training.weight_decay"),
+        gap=config.get("model.gap"),
+        weights=config.get("training.loss_weights"),
+        loss=config.get("training.loss", "mse"),
+        ema_decay=config.get("training.ema_decay", None),
+        dropout=config.get("model.dropout", 0.0),
+    )
+
+
 def _save_run_artifacts(config, model_dir, norm_params, img_params=None):
     """Persist the resolved config (with provenance) and the normalizers.
 
@@ -655,32 +756,40 @@ def main():
 
     get_device()
 
-    (
-        train_galaxy_images,
-        train_psf_images,
-        train_labels,
-        norm_params,
-        img_params,
-        eff_val_split,
-        resample_noise_sd,
-    ) = _prepare_training_data(config)
-
     rng_key = random.PRNGKey(config.get("dataset.seed"))
-
     model_dir = os.path.join(plot_path, model_name)
-    _save_run_artifacts(config, model_dir, norm_params, img_params)
 
-    train_cfg = TrainConfig.from_config(config, save_path=save_path)
-    # After D4 augmentation the train/val boundary shifts; use the effective
-    # split so train_model's internal split matches (a no-op when not augmenting).
-    train_cfg.val_split = eff_val_split
-    # Fresh-noise training: the per-step noise std (physical / image gal_std) is
-    # computed alongside the normalizer, not from the config (a no-op when off).
-    train_cfg.resample_noise_sd = resample_noise_sd
+    if config.get("dataset.generation", "upfront") == "inloop":
+        state, train_loss, val_loss, val_loss_per_key = _run_inloop_training(
+            config, rng_key, model_dir, save_path
+        )
+    else:
+        (
+            train_galaxy_images,
+            train_psf_images,
+            train_labels,
+            norm_params,
+            img_params,
+            eff_val_split,
+            resample_noise_sd,
+        ) = _prepare_training_data(config)
 
-    state, train_loss, val_loss, val_loss_per_key = train_cfg.run(
-        train_galaxy_images, train_labels, rng_key, psf_images=train_psf_images
-    )
+        _save_run_artifacts(config, model_dir, norm_params, img_params)
+
+        train_cfg = TrainConfig.from_config(config, save_path=save_path)
+        # After D4 augmentation the train/val boundary shifts; use the effective
+        # split so train_model's internal split matches (a no-op when not
+        # augmenting).
+        train_cfg.val_split = eff_val_split
+        # Fresh-noise training: the per-step noise std (physical / image
+        # gal_std) is computed alongside the normalizer, not from the config
+        # (a no-op when off).
+        train_cfg.resample_noise_sd = resample_noise_sd
+
+        state, train_loss, val_loss, val_loss_per_key = train_cfg.run(
+            train_galaxy_images, train_labels, rng_key,
+            psf_images=train_psf_images,
+        )
 
     if plot_flag:
         logger.info("Plotting learning curve...")

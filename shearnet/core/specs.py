@@ -41,6 +41,28 @@ class DatasetSpec:
     compute_metacal: bool = False
     add_noise: bool = True
     nproc: Optional[int] = None
+    # -- renderer selection -------------------------------------------------
+    #: ``'galsim'`` (default, unchanged) or ``'jax-galsim'``. The jax-galsim
+    #: backend renders the same stamps through a differentiable, batched
+    #: ``jit(vmap(...))`` path; every per-object random draw is replicated, so
+    #: switching backends changes the renderer and nothing else.
+    backend: str = "galsim"
+    #: Pinned FFT grid for the jax-galsim path. ``jit``/``vmap`` need static
+    #: shapes, so there is no per-object sizing. Validated at Delta-m = -2e-05.
+    jax_fft_size: int = 256
+    #: Objects per batched render. Device memory scales as
+    #: ``batch_size * fft_size**2`` -- raise one only by lowering the other.
+    jax_batch_size: int = 256
+    #: ``'upfront'`` (default) or ``'inloop'``. In-loop rendering happens inside
+    #: the jitted training step; it needs ``backend='jax-galsim'`` and cannot
+    #: produce the ``psf_*`` labels (they require an ngmix fit).
+    generation: str = "upfront"
+
+    #: Keys consumed only by the jax-galsim renderer.
+    _JAX_ONLY = ("jax_fft_size", "jax_batch_size")
+    #: Keys the jax-galsim renderer has no use for (no worker pool, and metacal
+    #: reconvolutions are pointless for a backend built for analytic responses).
+    _GALSIM_ONLY = ("nproc", "compute_metacal")
 
     @classmethod
     def from_config(cls, config) -> "DatasetSpec":
@@ -64,19 +86,89 @@ class DatasetSpec:
             # noise every epoch in train_model, so bake no noise in at gen time.
             add_noise=not config.get("training.resample_noise", False),
             nproc=config.get("dataset.nproc", None),
+            backend=config.get("dataset.backend", "galsim"),
+            jax_fft_size=config.get("dataset.jax_fft_size", 256),
+            jax_batch_size=config.get("dataset.jax_batch_size", 256),
+            generation=config.get("dataset.generation", "upfront"),
         )
 
+    def __post_init__(self):
+        if self.backend not in ("galsim", "jax-galsim"):
+            raise ValueError(
+                f"dataset.backend must be 'galsim' or 'jax-galsim', "
+                f"got {self.backend!r}"
+            )
+        if self.generation not in ("upfront", "inloop"):
+            raise ValueError(
+                f"dataset.generation must be 'upfront' or 'inloop', "
+                f"got {self.generation!r}"
+            )
+        if self.generation == "inloop" and self.backend != "jax-galsim":
+            raise ValueError(
+                "dataset.generation: inloop renders inside the jitted training "
+                "step and therefore requires dataset.backend: jax-galsim "
+                f"(got {self.backend!r})."
+            )
+
     def as_kwargs(self) -> dict:
-        """Return the spec as keyword arguments for ``generate_dataset``."""
-        return asdict(self)
+        """Return the spec as keyword arguments for the selected backend.
+
+        Backend-specific keys are dropped so each renderer sees only arguments
+        it accepts, and ``backend`` itself never reaches the callee.
+        """
+        kwargs = asdict(self)
+        kwargs.pop("backend", None)
+        kwargs.pop("generation", None)
+        drop = self._GALSIM_ONLY if self.backend == "jax-galsim" else self._JAX_ONLY
+        for key in drop:
+            kwargs.pop(key, None)
+        return kwargs
 
     def build(self):
-        """Generate the dataset described by this spec.
+        """Generate the dataset described by this spec, on the chosen backend.
 
-        Equivalent to ``generate_dataset(**spec.as_kwargs())``; lets callers drive
-        simulation from one object instead of a dozen keyword arguments.
+        ``backend='galsim'`` calls :func:`~shearnet.core.dataset.generate_dataset`;
+        ``backend='jax-galsim'`` calls
+        :func:`~shearnet.core.dataset_jax.generate_dataset_jax`, which returns
+        the same shapes. The jax-galsim import is deferred to here so the
+        dependency is only required when the backend is actually selected.
         """
+        if self.generation == "inloop":
+            raise ValueError(
+                "build() materialises a dataset, which dataset.generation: "
+                "inloop deliberately never does -- use build_inloop_generator()."
+            )
+        if self.backend == "jax-galsim":
+            from .dataset_jax import generate_dataset_jax
+
+            return generate_dataset_jax(**self.as_kwargs())
         return generate_dataset(**self.as_kwargs())
+
+    def build_inloop_generator(self, batch_size: int):
+        """Sample the truth table and wrap it for in-loop rendering.
+
+        No stamps are produced here: only the per-object truth (a few tens of MB
+        for 500k objects) plus the device-resident PSFEx bank.
+        """
+        if self.generation != "inloop":
+            raise ValueError(
+                "build_inloop_generator() requires dataset.generation: inloop")
+        from .dataset_jax import JaxRenderConfig
+        from .inloop import InLoopGenerator, sample_truth
+
+        cfg = JaxRenderConfig(
+            npix=self.npix, scale=self.scale, psf_fwhm=self.psf_fwhm,
+            exp=self.exp, fft_size=self.jax_fft_size,
+            batch_size=self.jax_batch_size,
+        )
+        truth = sample_truth(
+            self.samples, cfg, seed=self.seed, nse_sd=self.nse_sd,
+            psf_file_or_dir=self.psf_file_or_dir,
+            hlr_type=self.hlr_type, flux_type=self.flux_type,
+            cosmos_cat_fname=self.cosmos_cat_fname,
+            add_noise=False,           # noise is drawn inside the step
+        )
+        return InLoopGenerator(truth, cfg, batch_size)
 
 
 @dataclass

@@ -421,16 +421,37 @@ def split_combined_images(combined_images, has_psf=False, has_clean=False):
         raise ValueError(f"Unexpected number of channels: {combined_images.shape[-1]}")
 
 
-def _safe_draw(obj, npix, scale):
+def draw_method_for(exp):
+    """Return the GalSim ``drawImage`` method appropriate to the PSF mode.
+
+    ``'auto'`` integrates the profile over the pixel. That is right for an
+    analytic PSF (``exp='ideal'``), which knows nothing about pixels, and wrong
+    for an empirical one: a PSFEx model is fitted to observed stars that are
+    *already* pixelized, so its profile carries the pixel response. Drawing that
+    with ``'auto'`` convolves by the pixel a second time and over-smooths every
+    stamp. GalSim's own docs call this case out.
+
+    Derived from ``exp`` rather than configurable: there is no setting of this
+    that is correct for both PSF modes, so exposing it only offers a way to get
+    it wrong.
+    """
+    return "no_pixel" if exp == "superbit" else "auto"
+
+
+def _safe_draw(obj, npix, scale, method="auto"):
     """Draw ``obj`` onto an ``(npix, npix)`` array.
 
     Attempt a normal (FFT) draw and fall back to slower real-space rendering if
-    the FFT is too large, which can happen for very compact objects.
+    the FFT is too large, which can happen for very compact objects. ``method``
+    comes from :func:`draw_method_for`; the real-space fallback keeps it, since
+    the double-pixel problem is independent of how the convolution is done.
     """
     try:
-        return obj.drawImage(nx=npix, ny=npix, scale=scale).array
+        return obj.drawImage(nx=npix, ny=npix, scale=scale, method=method).array
     except galsim.errors.GalSimFFTSizeError:
-        return obj.drawImage(nx=npix, ny=npix, scale=scale, method="real_space").array
+        return obj.drawImage(
+            nx=npix, ny=npix, scale=scale, method="real_space"
+        ).array
 
 
 def sim_func(
@@ -530,9 +551,13 @@ def sim_func(
     else:
         raise ValueError("For now only supported experiments are 'ideal' or 'superbit'")
 
-    # Draw images
-    obj_im = _safe_draw(obj.withGSParams(gsp), npix, scale)
-    psf_im = _safe_draw(psf.withGSParams(gsp), npix, scale)
+    # Draw images. The empirical (PSFEx) PSF already carries the pixel
+    # response, so it must not be convolved by the pixel again -- see
+    # draw_method_for. Both the galaxy and the PSF stamp use the same method,
+    # or the two channels the network sees would be inconsistently smoothed.
+    draw_method = draw_method_for(exp)
+    obj_im = _safe_draw(obj.withGSParams(gsp), npix, scale, draw_method)
+    psf_im = _safe_draw(psf.withGSParams(gsp), npix, scale, draw_method)
 
     # Metacal (+/- e1/e2) reconvolutions + draws -- skipped unless requested,
     # since plain training never uses them. Identical for ideal/superbit once the
@@ -542,10 +567,10 @@ def sim_func(
         obj_e1_negative = galsim.Convolve([sheared_gal.shear(g1=-0.01, g2=0.0), psf], gsparams=gsp)
         obj_e2_positive = galsim.Convolve([sheared_gal.shear(g1=0.0, g2=0.01), psf], gsparams=gsp)
         obj_e2_negative = galsim.Convolve([sheared_gal.shear(g1=0.0, g2=-0.01), psf], gsparams=gsp)
-        e1_positive_im = _safe_draw(obj_e1_positive.withGSParams(gsp), npix, scale)
-        e1_negative_im = _safe_draw(obj_e1_negative.withGSParams(gsp), npix, scale)
-        e2_positive_im = _safe_draw(obj_e2_positive.withGSParams(gsp), npix, scale)
-        e2_negative_im = _safe_draw(obj_e2_negative.withGSParams(gsp), npix, scale)
+        e1_positive_im = _safe_draw(obj_e1_positive.withGSParams(gsp), npix, scale, draw_method)
+        e1_negative_im = _safe_draw(obj_e1_negative.withGSParams(gsp), npix, scale, draw_method)
+        e2_positive_im = _safe_draw(obj_e2_positive.withGSParams(gsp), npix, scale, draw_method)
+        e2_negative_im = _safe_draw(obj_e2_negative.withGSParams(gsp), npix, scale, draw_method)
 
     # Add noise. With ``add_noise=False`` the returned image is the noise-free
     # galaxy stamp (galaxy (x) PSF, already drawn) -- used by the fresh-noise

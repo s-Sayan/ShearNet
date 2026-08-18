@@ -4,7 +4,11 @@
 # Dataset configuration
 dataset:
   samples: 10000
-  psf_fwhm: 0.25
+  # 0.5" FWHM. At pixel_size 0.141 this is ~3.5 px across; the previous 0.25
+  # default was only ~1.8 px -- undersampled, and the one regime where galsim
+  # and jax-galsim disagree (~5e-3) because of the pixel convolution. Every
+  # unit-test config already sets 0.5 explicitly, so this changes no result.
+  psf_fwhm: 0.5
   exp: "ideal"
   nse_sd: 1.0e-5
   seed: 42
@@ -38,6 +42,42 @@ dataset:
   # Compute + store the 4 metacal (+/- e1/e2) reconvolved images per object.
   # Off by default; training never uses them (they only live in obs metadata).
   compute_metacal: false
+  # Which renderer draws the stamps.
+  #   galsim      -> shearnet.core.dataset (default, unchanged)
+  #   jax-galsim  -> shearnet.core.dataset_jax: differentiable + batched
+  #                  jit(vmap(...)) rendering. Every per-object random draw is
+  #                  replicated from the galsim path (same RandomState(seed=i)
+  #                  consumption order, same UniformDeviate for the PSFEx
+  #                  file/position), so flipping this changes the renderer and
+  #                  nothing else -- it is a true A/B.
+  # exp: superbit needs a jax-galsim with a batchable DES_PSFEx (JAX-GalSim
+  # PR #261). Until it merges, pin the fork by COMMIT SHA, not branch name.
+  backend: "galsim"
+  # --- jax-galsim only (ignored by the galsim backend) ---
+  # Pinned FFT grid. jit/vmap need static shapes, so there is no per-object
+  # sizing and no real_space fallback for compact objects. 256 was validated
+  # against galsim at an equivalent multiplicative bias of -2e-05.
+  jax_fft_size: 256
+  # Objects per batched render. Device memory scales as
+  # batch_size * fft_size**2 -- raise one only by lowering the other. A 512
+  # batch at fft 512 asked for 116 GiB and OOMed on an otherwise-empty GPU.
+  jax_batch_size: 256
+  # When the stamps are made.
+  #   upfront -> generate the whole dataset before training (default; works with
+  #              either backend, and the only mode that can produce the psf_e1 /
+  #              psf_e2 / psf_T labels, which need an ngmix fit)
+  #   inloop  -> render inside the jitted training step. Fresh noise every step
+  #              (a galaxy is never seen twice with the same realisation),
+  #              nothing materialised, and the renderer sits in the autodiff
+  #              graph so the response terms are one JVP away. Requires
+  #              backend: jax-galsim and labels drawn from g1/g2/hlr/flux only.
+  generation: "upfront"
+  # Render precision is NOT a config key: it follows the process-wide
+  # JAX_ENABLE_X64 environment variable, because jax-galsim caches jitted
+  # internals without precision in the cache key and toggling the flag at
+  # runtime makes a later lowering fail. Export JAX_ENABLE_X64=1 in setup_env.sh
+  # for float64 rendering; the in-loop trainer casts stamps to float32 before
+  # the network, so that costs nothing in training memory or speed.
 
 # Model configuration  
 model:
