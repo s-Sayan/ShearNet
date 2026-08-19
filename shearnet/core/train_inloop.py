@@ -43,12 +43,13 @@ from flax.training import train_state
 from ..logging_utils import get_logger
 from .inloop import (
     InLoopGenerator,
+    ResponseRegularization,
     make_fused_eval_step,
     make_fused_train_step,
     normalize_state,
 )
-from .models import build_model, is_fork_model
 from .losses import resolve_loss
+from .models import build_model, is_fork_model
 from .train import save_checkpoint
 
 logger = get_logger(__name__)
@@ -102,6 +103,9 @@ def train_model_inloop(
     ema_decay: Optional[float] = None,
     dropout: float = 0.0,
     trace_psf_shear: bool = False,
+    response: Optional[ResponseRegularization] = None,
+    noise_range=None,
+    noise_condition: bool = False,
 ):
     """Train with stamps generated inside the jitted step.
 
@@ -116,16 +120,31 @@ def train_model_inloop(
         nse_sd: pixel noise std in *image* units (before ``img_norm``).
         trace_psf_shear: keep the PSF-shear transform in the graph so the
             ``R^PSF`` tangent is available. Costs a transform; off by default.
+        response: optional response/orbit loss configuration.  Its component
+            means are logged each epoch; validation remains supervised-only.
+        noise_range: optional per-batch uniform noise range ``(min_sd,max_sd)``.
+        noise_condition: represent inputs in their sampled noise units.
 
     Returns ``(state, train_losses, val_losses, val_losses_per_key)`` -- the
     same tuple :func:`~shearnet.core.train.train_model` returns.
     """
     output_keys = tuple(output_keys)
     n_out = len(output_keys)
+    response = response or ResponseRegularization()
+    if noise_condition and img_norm is not None:
+        raise ValueError("noise conditioning cannot be combined with normalize_images")
+    if response.enabled and not {"g1", "g2"}.issubset(output_keys):
+        raise ValueError("response regularisation requires g1 and g2 output keys")
+    shear_indices = (
+        tuple(output_keys.index(key) for key in ("g1", "g2")) if response.enabled else (0, 1)
+    )
     labels = gen.labels(output_keys)
     if label_norm is not None:
-        labels = (labels - jnp.asarray(label_norm["mean"])) / jnp.asarray(
-            label_norm["std"])
+        labels = (labels - jnp.asarray(label_norm["mean"])) / jnp.asarray(label_norm["std"])
+    if response.enabled and label_norm is not None:
+        gamma_target = jnp.diag(1.0 / jnp.asarray(label_norm["std"])[list(shear_indices)])
+    else:
+        gamma_target = jnp.eye(2)
 
     # Index split. Contiguous, matching the up-front path, so the same seed puts
     # the same objects in validation on both backends.
@@ -143,7 +162,10 @@ def train_model_inloop(
     logger.info(
         "in-loop training: %d objects -> %d train batches + %d val batches "
         "of %d (remainder left out to keep one compilation)",
-        gen.n, steps_per_epoch, val_steps, gen.batch_size,
+        gen.n,
+        steps_per_epoch,
+        val_steps,
+        gen.batch_size,
     )
 
     if weights is None:
@@ -151,11 +173,11 @@ def train_model_inloop(
     else:
         weights = jnp.asarray(weights, dtype=jnp.float32)
         if len(weights) != n_out:
-            raise ValueError(
-                f"loss_weights length {len(weights)} != output_keys length {n_out}")
+            raise ValueError(f"loss_weights length {len(weights)} != output_keys length {n_out}")
 
-    model = build_model(nn, galaxy_type=galaxy_type, psf_type=psf_type,
-                        fusion=fusion, head=head, dropout=dropout)
+    model = build_model(
+        nn, galaxy_type=galaxy_type, psf_type=psf_type, fusion=fusion, head=head, dropout=dropout
+    )
     use_dropout = bool(dropout) and dropout > 0.0
     if use_dropout:
         rng_key, dropout_init_key = jax.random.split(rng_key)
@@ -166,21 +188,19 @@ def train_model_inloop(
     npix = gen.cfg.npix
     dummy = jnp.ones((npix, npix), dtype=jnp.float32)
     if is_fork_model(nn):
-        params = model.init(init_rngs, dummy, dummy,
-                            output_keys=output_keys, gap=gap)
+        params = model.init(init_rngs, dummy, dummy, output_keys=output_keys, gap=gap)
     else:
         params = model.init(init_rngs, dummy, output_keys=output_keys, gap=gap)
 
     total_steps = max(epochs * steps_per_epoch, 1)
     lr_schedule = optax.warmup_cosine_decay_schedule(
-        init_value=0.0, peak_value=lr,
-        warmup_steps=int(0.05 * total_steps), decay_steps=total_steps)
+        init_value=0.0, peak_value=lr, warmup_steps=int(0.05 * total_steps), decay_steps=total_steps
+    )
     tx = optax.chain(
         optax.clip_by_global_norm(1.0),
         optax.adamw(learning_rate=lr_schedule, weight_decay=weight_decay),
     )
-    state = train_state.TrainState.create(
-        apply_fn=model.apply, params=params, tx=tx)
+    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
     # Without this the second step presents `step` as an array rather than a
     # Python int and XLA compiles the whole fused graph a second time.
     state = normalize_state(state)
@@ -188,27 +208,60 @@ def train_model_inloop(
     use_ema = ema_decay is not None
     ema_params = state.params if use_ema else None
     if use_ema:
-        logger.info("Weight EMA enabled (decay=%s); validation and checkpoint "
-                    "use the averaged weights.", ema_decay)
+        logger.info(
+            "Weight EMA enabled (decay=%s); validation and checkpoint " "use the averaged weights.",
+            ema_decay,
+        )
 
         @jax.jit
         def _ema_update(ema, live):
             return jax.tree_util.tree_map(
-                lambda e, p: ema_decay * e + (1.0 - ema_decay) * p, ema, live)
+                lambda e, p: ema_decay * e + (1.0 - ema_decay) * p, ema, live
+            )
 
     loss_callable = resolve_loss(loss)
     forward = _make_forward(model, nn, output_keys, gap, use_dropout)
-    objective = lambda preds, lab: loss_callable(preds, lab, weights)
+
+    def objective(preds, lab):
+        return loss_callable(preds, lab, weights)
 
     train_step = make_fused_train_step(
-        gen, forward, objective, labels, nse_sd,
-        trace_psf_shear=trace_psf_shear, img_norm=img_norm)
+        gen,
+        forward,
+        objective,
+        labels,
+        nse_sd,
+        trace_psf_shear=trace_psf_shear,
+        img_norm=img_norm,
+        response=response,
+        shear_indices=shear_indices,
+        gamma_target=gamma_target,
+        return_metrics=response.enabled,
+        noise_range=noise_range,
+        noise_condition=noise_condition,
+    )
     eval_step = make_fused_eval_step(
-        gen, forward, objective, labels, nse_sd,
-        trace_psf_shear=trace_psf_shear, img_norm=img_norm, per_key=True)
+        gen,
+        forward,
+        objective,
+        labels,
+        nse_sd,
+        trace_psf_shear=trace_psf_shear,
+        img_norm=img_norm,
+        per_key=True,
+        noise_condition=noise_condition,
+    )
+
+    if noise_range is not None:
+        logger.info(
+            "in-loop noise randomization: uniform [%.4g, %.4g]%s",
+            noise_range[0],
+            noise_range[1],
+            " with noise-unit conditioning" if noise_condition else "",
+        )
 
     rng_key, val_noise_key = jax.random.split(rng_key)
-    val_batches = gen.batches(val_ids)          # fixed order -> frozen noise
+    val_batches = gen.batches(val_ids)  # fixed order -> frozen noise
 
     train_losses, val_losses, val_losses_per_key = [], [], []
     best_val_loss = float("inf")
@@ -221,14 +274,31 @@ def train_model_inloop(
         idx_mat = gen.batches(train_ids, key=shuffle_key)
 
         train_loss = 0.0
+        response_sum = jnp.zeros(5)
         for s in range(steps_per_epoch):
             rng_key, noise_key, dropout_key = jax.random.split(rng_key, 3)
-            state, batch_loss = train_step(state, idx_mat[s], noise_key, dropout_key)
+            result = train_step(state, idx_mat[s], noise_key, dropout_key)
+            if response.enabled:
+                state, batch_loss, response_metrics = result
+                response_sum = response_sum + response_metrics
+            else:
+                state, batch_loss = result
             if use_ema:
                 ema_params = _ema_update(ema_params, state.params)
             train_loss += float(batch_loss)
         train_loss /= steps_per_epoch
         train_losses.append(train_loss)
+        if response.enabled:
+            supervised, gamma, psf, complement, orbit = response_sum / steps_per_epoch
+            logger.info(
+                "  response terms: supervised=%.4e Rgamma=%.4e Rpsf=%.4e "
+                "Pperp=%.4e orbit90=%.4e",
+                float(supervised),
+                float(gamma),
+                float(psf),
+                float(complement),
+                float(orbit),
+            )
 
         if (epoch + 1) % eval_interval:
             continue
@@ -240,8 +310,7 @@ def train_model_inloop(
             # Keyed by batch position, not epoch: a given stamp sees the same
             # noise every epoch, so the validation loss is comparable and
             # patience reacts to the model rather than to the draw.
-            l, pk = eval_step(eval_state, val_batches[s],
-                              jax.random.fold_in(val_noise_key, s))
+            l, pk = eval_step(eval_state, val_batches[s], jax.random.fold_in(val_noise_key, s))
             val_loss += float(l)
             per_key_sum = per_key_sum + pk
         val_loss /= val_steps
@@ -249,21 +318,28 @@ def train_model_inloop(
         val_per_key = per_key_sum / val_steps
         val_losses_per_key.append(val_per_key)
         logger.info("Validation Loss: %.4e", val_loss)
-        logger.info("  Per-key validation MSE: %s", ", ".join(
-            f"{k}={float(v):.4e}" for k, v in zip(output_keys, val_per_key)))
+        logger.info(
+            "  Per-key validation MSE: %s",
+            ", ".join(f"{k}={float(v):.4e}" for k, v in zip(output_keys, val_per_key)),
+        )
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
             logger.info("New best validation loss: %.4e", val_loss)
             if save_path:
-                save_checkpoint(eval_state, step=epoch + 1,
-                                checkpoint_dir=save_path,
-                                model_name=model_name, overwrite=True)
+                save_checkpoint(
+                    eval_state,
+                    step=epoch + 1,
+                    checkpoint_dir=save_path,
+                    model_name=model_name,
+                    overwrite=True,
+                )
         else:
             patience_counter += 1
-            logger.info("No improvement in validation loss. Patience: %d/%d",
-                        patience_counter, patience)
+            logger.info(
+                "No improvement in validation loss. Patience: %d/%d", patience_counter, patience
+            )
             if patience_counter >= patience:
                 logger.info("Early stopping triggered.")
                 break

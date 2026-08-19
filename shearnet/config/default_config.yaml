@@ -11,6 +11,10 @@ dataset:
   psf_fwhm: 0.5
   exp: "ideal"
   nse_sd: 1.0e-5
+  # Uniform per-object applied shear for in-loop response training.  This makes
+  # R^PSF local to the actual training shear rather than only g=0.  It affects
+  # jax-galsim only; zero keeps the historical rendered population unchanged.
+  base_shear_range: 0.0
   seed: 42
   stamp_size: 53
   pixel_size: 0.141
@@ -106,6 +110,24 @@ training:
   # Exponential moving average of the weights. null = off (default, no change).
   # Set e.g. 0.999 to validate/checkpoint the averaged weights.
   ema_decay: null
+  # Differentiable in-loop response regularisation.  Every term is zero by
+  # default, so existing training runs are bit-for-bit unchanged.  These are
+  # available only with dataset.backend: jax-galsim and generation: inloop.
+  response:
+    gamma_weight: 0.0       # enforce applied-shear response R^gamma -> I
+    psf_weight: 0.0         # suppress direct PSF-shear response R^PSF
+    complement_weight: 0.0  # Hutchinson penalty outside 8 physical tangents
+    orbit_weight: 0.0       # K=2 PSF-only {P, R90 P} shared-noise consistency
+    every_n_steps: 1        # stagger expensive terms; 1 evaluates every step
+    orbit_degrees: 90.0     # fixed: K=2; a 45-degree orbit is not implemented
+  # In-loop depth augmentation.  Set a positive range to draw one noise level
+  # per training batch.  Conditioning represents both inputs in units of that
+  # draw, so existing architectures see the depth without a new input branch.
+  # It is intentionally incompatible with fixed dataset image normalization.
+  noise:
+    min_sd: null
+    max_sd: null
+    condition: false
 
 # Evaluation configuration
 evaluation:

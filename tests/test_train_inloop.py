@@ -7,8 +7,8 @@ pytest.importorskip("jax_galsim")
 jax = pytest.importorskip("jax")
 import jax.numpy as jnp  # noqa: E402
 
-from shearnet.core.dataset_jax import JaxRenderConfig  # noqa: E402
 from shearnet.core import inloop as inloop_mod  # noqa: E402
+from shearnet.core.dataset_jax import JaxRenderConfig  # noqa: E402
 from shearnet.core.inloop import InLoopGenerator, sample_truth  # noqa: E402
 from shearnet.core.specs import DatasetSpec  # noqa: E402
 from shearnet.core.train_inloop import train_model_inloop  # noqa: E402
@@ -17,8 +17,9 @@ NPIX, SCALE, FWHM = 33, 0.141, 0.5
 
 
 def _gen(n=128, batch=16, exp="ideal"):
-    cfg = JaxRenderConfig(npix=NPIX, scale=SCALE, psf_fwhm=FWHM, exp=exp,
-                          fft_size=256, batch_size=batch)
+    cfg = JaxRenderConfig(
+        npix=NPIX, scale=SCALE, psf_fwhm=FWHM, exp=exp, fft_size=256, batch_size=batch
+    )
     truth = sample_truth(n, cfg, seed=0, nse_sd=12.7, add_noise=False)
     return InLoopGenerator(truth, cfg, batch)
 
@@ -46,8 +47,8 @@ def test_training_runs_and_returns_the_train_model_tuple():
 
 def test_fork_model_path():
     state, train_losses, _, _ = _train(
-        _gen(), nn="fork-like", galaxy_type="research_backed",
-        psf_type="forklens_psf", epochs=2)
+        _gen(), nn="fork-like", galaxy_type="research_backed", psf_type="forklens_psf", epochs=2
+    )
     assert np.all(np.isfinite(train_losses))
 
 
@@ -61,8 +62,9 @@ def test_ema_path_runs_and_returns_averaged_weights():
     state_b, _, _, _ = _train(_gen(), epochs=2, ema_decay=0.9)
     diff = jax.tree_util.tree_reduce(
         lambda acc, x: acc or bool(np.any(np.asarray(x) != 0)),
-        jax.tree_util.tree_map(lambda a, b: np.asarray(a) - np.asarray(b),
-                               state_a.params, state_b.params),
+        jax.tree_util.tree_map(
+            lambda a, b: np.asarray(a) - np.asarray(b), state_a.params, state_b.params
+        ),
         False,
     )
     assert diff, "EMA weights should differ from the live weights"
@@ -151,27 +153,32 @@ def test_spec_defaults_to_upfront():
 def test_spec_inloop_requires_the_jax_backend():
     with pytest.raises(ValueError, match="requires dataset.backend: jax-galsim"):
         DatasetSpec(samples=8, psf_fwhm=FWHM, generation="inloop")
-    DatasetSpec(samples=8, psf_fwhm=FWHM, generation="inloop",
-                backend="jax-galsim")          # valid combination
+    DatasetSpec(
+        samples=8, psf_fwhm=FWHM, generation="inloop", backend="jax-galsim"
+    )  # valid combination
 
 
 def test_spec_rejects_unknown_generation():
     with pytest.raises(ValueError, match="dataset.generation"):
-        DatasetSpec(samples=8, psf_fwhm=FWHM, generation="lazy",
-                    backend="jax-galsim")
+        DatasetSpec(samples=8, psf_fwhm=FWHM, generation="lazy", backend="jax-galsim")
 
 
 def test_spec_build_refuses_to_materialise_for_inloop():
-    spec = DatasetSpec(samples=64, psf_fwhm=FWHM, generation="inloop",
-                       backend="jax-galsim")
+    spec = DatasetSpec(samples=64, psf_fwhm=FWHM, generation="inloop", backend="jax-galsim")
     with pytest.raises(ValueError, match="never does"):
         spec.build()
 
 
 def test_spec_build_inloop_generator():
-    spec = DatasetSpec(samples=64, psf_fwhm=FWHM, npix=NPIX, seed=0,
-                       generation="inloop", backend="jax-galsim",
-                       jax_batch_size=16)
+    spec = DatasetSpec(
+        samples=64,
+        psf_fwhm=FWHM,
+        npix=NPIX,
+        seed=0,
+        generation="inloop",
+        backend="jax-galsim",
+        jax_batch_size=16,
+    )
     gen = spec.build_inloop_generator(16)
     assert gen.n == 64 and gen.batch_size == 16
     assert gen.steps_per_epoch == 4
@@ -188,3 +195,4 @@ def test_config_exposes_generation_default():
 
     cfg = load_default_config()
     assert cfg["dataset"]["generation"] == "upfront"
+    assert cfg["training"]["response"]["orbit_weight"] == 0.0

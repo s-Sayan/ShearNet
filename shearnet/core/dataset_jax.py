@@ -57,7 +57,6 @@ Known differences from GalSim, all deliberate
 
 from __future__ import annotations
 
-import contextlib
 import os
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
@@ -93,12 +92,18 @@ __all__ = [
 #: differentiable handle: build a tangent that is 1.0 on ``base_g1`` and 0
 #: elsewhere and ``jax.jvp`` returns ``dI/dgamma1``.
 PARAM_NAMES: Tuple[str, ...] = (
-    "g1", "g2",            # intrinsic galaxy shape
-    "hlr", "flux",         # size / flux
-    "dx", "dy",            # sub-pixel offset (arcsec)
-    "base_g1", "base_g2",  # APPLIED shear -- the R^gamma handle
-    "psf_g1", "psf_g2",    # PSF shear      -- the R^PSF handle
-    "psf_x", "psf_y",      # PSFEx focal-plane position (pixels)
+    "g1",
+    "g2",  # intrinsic galaxy shape
+    "hlr",
+    "flux",  # size / flux
+    "dx",
+    "dy",  # sub-pixel offset (arcsec)
+    "base_g1",
+    "base_g2",  # APPLIED shear -- the R^gamma handle
+    "psf_g1",
+    "psf_g2",  # PSF shear      -- the R^PSF handle
+    "psf_x",
+    "psf_y",  # PSFEx focal-plane position (pixels)
 )
 
 
@@ -114,8 +119,8 @@ class JaxRenderConfig:
     npix: int = 53
     scale: float = 0.141
     psf_fwhm: float = 0.5
-    gal_type: str = "exp"          # 'exp' | 'gauss'
-    exp: str = "ideal"             # 'ideal' | 'superbit'
+    gal_type: str = "exp"  # 'exp' | 'gauss'
+    exp: str = "ideal"  # 'ideal' | 'superbit'
     fft_size: int = 256
     batch_size: int = 256
 
@@ -185,13 +190,13 @@ def make_wcs():
     ps = p["pixel_scale"]
     fiducial = jgs.ImageF(p["image_xsize"], p["image_ysize"])
     affine = jgs.AffineTransform(
-        np.cos(theta.rad) * ps, -np.sin(theta.rad) * ps,
-        np.sin(theta.rad) * ps, np.cos(theta.rad) * ps,
+        np.cos(theta.rad) * ps,
+        -np.sin(theta.rad) * ps,
+        np.sin(theta.rad) * ps,
+        np.cos(theta.rad) * ps,
         origin=fiducial.true_center,
     )
-    sky = jgs.CelestialCoord(
-        ra=p["center_ra"] * jgs.hours, dec=p["center_dec"] * jgs.degrees
-    )
+    sky = jgs.CelestialCoord(ra=p["center_ra"] * jgs.hours, dec=p["center_dec"] * jgs.degrees)
     return jgs.TanWCS(affine, sky, units=jgs.arcsec)
 
 
@@ -237,7 +242,11 @@ def _stack_psfex(paths):
 # ----------------------------------------------------------------------
 # the differentiable render
 # ----------------------------------------------------------------------
-def make_render_one(cfg: JaxRenderConfig, trace_psf_shear: bool = False):
+def make_render_one(
+    cfg: JaxRenderConfig,
+    trace_psf_shear: bool = False,
+    psf_rotation_degrees: float = 0.0,
+):
     """Return the single-object render ``(params, psf_model) -> (gal, psf)``.
 
     The one place a stamp is defined. :func:`make_render_fn` vmaps it over a
@@ -266,25 +275,32 @@ def make_render_one(cfg: JaxRenderConfig, trace_psf_shear: bool = False):
         gal = gal.shear(g1=p["base_g1"], g2=p["base_g2"])
 
         if superbit:
-            psf = psf_model.getPSF(
-                jgs.PositionD(p["psf_x"], p["psf_y"]), gsparams=gsp
-            )
+            psf = psf_model.getPSF(jgs.PositionD(p["psf_x"], p["psf_y"]), gsparams=gsp)
         else:
             psf = jgs.Gaussian(fwhm=cfg.psf_fwhm, gsparams=gsp)
         if trace_psf_shear:
             psf = psf.shear(g1=p["psf_g1"], g2=p["psf_g2"])
+        if psf_rotation_degrees:
+            # Rotate the profile before sampling so the galaxy remains fixed.
+            psf = psf.rotate(psf_rotation_degrees * jgs.degrees)
 
         obj = jgs.Convolve(gal, psf, gsparams=gsp)
-        gal_im = obj.drawImage(
-            nx=npix, ny=npix, scale=scale, method=method, dtype=dtype).array
-        psf_im = psf.withGSParams(gsp).drawImage(
-            nx=npix, ny=npix, scale=scale, method=method, dtype=dtype).array
+        gal_im = obj.drawImage(nx=npix, ny=npix, scale=scale, method=method, dtype=dtype).array
+        psf_im = (
+            psf.withGSParams(gsp)
+            .drawImage(nx=npix, ny=npix, scale=scale, method=method, dtype=dtype)
+            .array
+        )
         return gal_im, psf_im
 
     return render_one
 
 
-def make_render_fn(cfg: JaxRenderConfig, trace_psf_shear: bool = False):
+def make_render_fn(
+    cfg: JaxRenderConfig,
+    trace_psf_shear: bool = False,
+    psf_rotation_degrees: float = 0.0,
+):
     """Build ``jit(vmap(render_one))``: the differentiable rendering primitive.
 
     Returns a callable ``render(params, psf_batch) -> (gal, psf)`` where
@@ -314,7 +330,7 @@ def make_render_fn(cfg: JaxRenderConfig, trace_psf_shear: bool = False):
     """
     import jax
 
-    render_one = make_render_one(cfg, trace_psf_shear)
+    render_one = make_render_one(cfg, trace_psf_shear, psf_rotation_degrees=psf_rotation_degrees)
     superbit = cfg.exp == "superbit"
 
     if superbit:
@@ -331,8 +347,8 @@ def make_render_fn(cfg: JaxRenderConfig, trace_psf_shear: bool = False):
 class Truth:
     """Per-object draws plus the bookkeeping the renderer needs."""
 
-    params: dict                       # PARAM_NAMES -> (N,) float64
-    psf_files: Optional[list] = None   # (N,) chosen PSFEx paths, superbit only
+    params: dict  # PARAM_NAMES -> (N,) float64
+    psf_files: Optional[list] = None  # (N,) chosen PSFEx paths, superbit only
     noise: Optional[np.ndarray] = None  # (N, npix, npix)
     labels_raw: dict = field(default_factory=dict)
 
@@ -346,6 +362,7 @@ def sample_truth(
     psf_shear_range: float = 0.05,
     base_shear_g1: float = 0.0,
     base_shear_g2: float = 0.0,
+    base_shear_range: float = 0.0,
     psf_file_or_dir: str = PSF_DATA_DIR,
     hlr_type: str = "constant",
     flux_type: str = "constant",
@@ -362,6 +379,9 @@ def sample_truth(
     the renderer and nothing else.
     """
     import galsim  # only for UniformDeviate parity; no rendering happens here
+
+    if base_shear_range < 0.0 or base_shear_range >= 1.0:
+        raise ValueError("base_shear_range must satisfy 0 <= range < 1")
 
     cat = _load_cosmos_cat(seed=seed, cat_path=cosmos_cat_fname)
     g1_list, g2_list = cat["G1"], cat["G2"]
@@ -381,14 +401,13 @@ def sample_truth(
             if not psf_paths:
                 raise FileNotFoundError(f"No PSF files found in {psf_file_or_dir}")
         else:
-            raise FileNotFoundError(
-                f"{psf_file_or_dir} is neither a file nor a directory")
+            raise FileNotFoundError(f"{psf_file_or_dir} is neither a file nor a directory")
 
     p = {k: np.zeros(samples, dtype=np.float64) for k in PARAM_NAMES}
     chosen, noise = [], (np.empty((samples, cfg.npix, cfg.npix)) if add_noise else None)
 
     for i in range(samples):
-        rng = np.random.RandomState(seed=i)          # sim_func: seed=i
+        rng = np.random.RandomState(seed=i)  # sim_func: seed=i
         if apply_psf_shear:
             p["psf_g1"][i] = rng.uniform(-psf_shear_range, psf_shear_range)
             p["psf_g2"][i] = rng.uniform(-psf_shear_range, psf_shear_range)
@@ -400,7 +419,11 @@ def sample_truth(
         p["g1"][i], p["g2"][i] = g1_list[i], g2_list[i]
         p["hlr"][i] = float(hlr_list[i]) if hlr_type == "catalog" else 0.5
         p["flux"][i] = float(flux_list[i]) if flux_type == "catalog" else 1.0
-        p["base_g1"][i], p["base_g2"][i] = base_shear_g1, base_shear_g2
+        if base_shear_range:
+            p["base_g1"][i] = rng.uniform(-base_shear_range, base_shear_range)
+            p["base_g2"][i] = rng.uniform(-base_shear_range, base_shear_range)
+        else:
+            p["base_g1"][i], p["base_g2"][i] = base_shear_g1, base_shear_g2
 
         if psf_paths is not None:
             ud = galsim.UniformDeviate(int(seed) * 1_000_003 + int(i))
@@ -412,8 +435,7 @@ def sample_truth(
         params=p,
         psf_files=(chosen or None),
         noise=noise,
-        labels_raw={"g1": p["g1"], "g2": p["g2"],
-                    "hlr": p["hlr"], "flux": p["flux"]},
+        labels_raw={"g1": p["g1"], "g2": p["g2"], "hlr": p["hlr"], "flux": p["flux"]},
     )
 
 
@@ -445,9 +467,12 @@ def render_truth(truth: Truth, cfg: JaxRenderConfig, trace_psf_shear: bool = Fal
         stop = min(start + bs, n)
         pad = bs - (stop - start)
         sl = slice(start, stop)
-        batch = {k: jnp.asarray(np.concatenate(
-            [v[sl], np.repeat(v[stop - 1:stop], pad)]) if pad else v[sl])
-            for k, v in truth.params.items()}
+        batch = {
+            k: jnp.asarray(
+                np.concatenate([v[sl], np.repeat(v[stop - 1 : stop], pad)]) if pad else v[sl]
+            )
+            for k, v in truth.params.items()
+        }
         psf_batch = None
         if cfg.exp == "superbit":
             files = truth.psf_files[sl] + [truth.psf_files[stop - 1]] * pad
@@ -475,6 +500,7 @@ def generate_dataset_jax(
     psf_shear_range=0.05,
     base_shear_g1=0.0,
     base_shear_g2=0.0,
+    base_shear_range=0.0,
     psf_file_or_dir=PSF_DATA_DIR,
     output_keys=("g1", "g2"),
     hlr_type="constant",
@@ -506,30 +532,46 @@ def generate_dataset_jax(
     _valid = {"g1", "g2", "hlr", "flux", "psf_e1", "psf_e2", "psf_T"}
     requested = set(output_keys)
     if not requested.issubset(_valid):
-        raise ValueError(
-            f"Invalid output_keys: {requested - _valid}. Must be subset of {_valid}.")
+        raise ValueError(f"Invalid output_keys: {requested - _valid}. Must be subset of {_valid}.")
     if hlr_type not in ("catalog", "constant"):
         raise ValueError("hlr can only be 'constant' or 'catalog'")
     if flux_type not in ("catalog", "constant"):
         raise ValueError("flux can only be 'constant' or 'catalog'")
 
     cfg = JaxRenderConfig(
-        npix=npix, scale=scale, psf_fwhm=psf_fwhm, gal_type=type, exp=exp,
-        fft_size=jax_fft_size, batch_size=jax_batch_size,
+        npix=npix,
+        scale=scale,
+        psf_fwhm=psf_fwhm,
+        gal_type=type,
+        exp=exp,
+        fft_size=jax_fft_size,
+        batch_size=jax_batch_size,
     )
 
     truth = sample_truth(
-        samples, cfg, seed=seed, nse_sd=nse_sd,
-        apply_psf_shear=apply_psf_shear, psf_shear_range=psf_shear_range,
-        base_shear_g1=base_shear_g1, base_shear_g2=base_shear_g2,
-        psf_file_or_dir=psf_file_or_dir, hlr_type=hlr_type,
-        flux_type=flux_type, cosmos_cat_fname=cosmos_cat_fname,
+        samples,
+        cfg,
+        seed=seed,
+        nse_sd=nse_sd,
+        apply_psf_shear=apply_psf_shear,
+        psf_shear_range=psf_shear_range,
+        base_shear_g1=base_shear_g1,
+        base_shear_g2=base_shear_g2,
+        base_shear_range=base_shear_range,
+        psf_file_or_dir=psf_file_or_dir,
+        hlr_type=hlr_type,
+        flux_type=flux_type,
+        cosmos_cat_fname=cosmos_cat_fname,
         add_noise=add_noise,
     )
 
     logger.info(
         "jax-galsim generation: %d samples, exp=%s, fft_size=%d, batch=%d, dtype=%s",
-        samples, exp, jax_fft_size, jax_batch_size, render_dtype().__name__,
+        samples,
+        exp,
+        jax_fft_size,
+        jax_batch_size,
+        render_dtype().__name__,
     )
     gal, psf = render_truth(truth, cfg, trace_psf_shear=apply_psf_shear)
 
@@ -560,12 +602,10 @@ def _build_labels(truth: Truth, psf_stamps, output_keys, scale):
         for i in range(n):
             im = psf_stamps[i]
             target = im.max() / 1000.0
-            obs = ngmix.Observation(
-                image=im, weight=np.ones_like(im) / target ** 2, jacobian=jac)
+            obs = ngmix.Observation(image=im, weight=np.ones_like(im) / target**2, jacobian=jac)
             res = get_admoms_ngmix_fit(obs=obs, reduced=True)
             if res["flags"] == 0:
                 e1[i], e2[i], tt[i] = res["e1"], res["e2"], res["T"]
         avail.update({"psf_e1": e1, "psf_e2": e2, "psf_T": tt})
 
-    return np.stack([np.asarray(avail[k], dtype=np.float32)
-                     for k in output_keys], axis=1)
+    return np.stack([np.asarray(avail[k], dtype=np.float32) for k in output_keys], axis=1)

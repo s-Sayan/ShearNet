@@ -13,10 +13,12 @@ import shearnet.core.models
 
 from .. import __version__
 from ..config.config_handler import Config, load_default_config
+from ..core.augment import d4_augment
 from ..core.dataset import split_combined_images
 from ..core.specs import DatasetSpec, TrainConfig
+from ..logging_utils import get_logger
+from ..plotting import plot_learning_curve
 from ..utils.device import get_device
-from ..core.augment import d4_augment
 from ..utils.normalization import (
     fit_image_normalizer,
     fit_normalizer,
@@ -26,9 +28,6 @@ from ..utils.normalization import (
     transform_images,
     transform_labels,
 )
-from ..plotting import plot_learning_curve
-
-from ..logging_utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -518,17 +517,19 @@ def _prepare_training_data(config):
         # ABLATION ONLY: augment the train portion 8x, keep val untouched, and
         # reassemble as [aug_train, val]. eff_val_split is recomputed so
         # train_model's internal fractional split reproduces this exact boundary.
-        gal_tr, psf_tr, lab_tr = galaxy_images[:split_idx], (
-            psf_images[:split_idx] if psf_images is not None else None
-        ), labels[:split_idx]
-        gal_val, psf_val, lab_val = galaxy_images[split_idx:], (
-            psf_images[split_idx:] if psf_images is not None else None
-        ), labels[split_idx:]
+        gal_tr, psf_tr, lab_tr = (
+            galaxy_images[:split_idx],
+            (psf_images[:split_idx] if psf_images is not None else None),
+            labels[:split_idx],
+        )
+        gal_val, psf_val, lab_val = (
+            galaxy_images[split_idx:],
+            (psf_images[split_idx:] if psf_images is not None else None),
+            labels[split_idx:],
+        )
 
         gal_tr, psf_tr, lab_tr = d4_augment(gal_tr, psf_tr, lab_tr, output_keys)
-        logger.info(
-            f"D4 augmentation (ABLATION) on: train {split_idx} -> {len(lab_tr)} stamps."
-        )
+        logger.info(f"D4 augmentation (ABLATION) on: train {split_idx} -> {len(lab_tr)} stamps.")
 
         galaxy_images = np.concatenate([gal_tr, gal_val], axis=0)
         labels = np.concatenate([lab_tr, lab_val], axis=0)
@@ -564,7 +565,7 @@ def _prepare_training_data(config):
             # sqrt(var_clean + nse_sd^2) -- exact in expectation since the added
             # noise is independent and zero-mean -- so the input scale and the
             # saved normalizer match a standard baked-noise run. Mean is unchanged.
-            img_params["gal_std"] = float(np.sqrt(img_params["gal_std"] ** 2 + nse_sd ** 2))
+            img_params["gal_std"] = float(np.sqrt(img_params["gal_std"] ** 2 + nse_sd**2))
         galaxy_images = transform_images(galaxy_images, img_params, channel="gal")
         if psf_images is not None:
             psf_images = transform_images(psf_images, img_params, channel="psf")
@@ -601,12 +602,32 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
     import jax.numpy as jnp
 
     from ..core.dataset_jax import render_dtype
-    from ..core.inloop import make_batch_render
+    from ..core.inloop import ResponseRegularization, make_batch_render
     from ..core.train_inloop import train_model_inloop
 
     spec = DatasetSpec.from_config(config)
     batch_size = config.get("training.batch_size")
     output_keys = tuple(config.get("model.output_keys"))
+    response_cfg = config.get("training.response", {}) or {}
+    response = ResponseRegularization(
+        gamma_weight=response_cfg.get("gamma_weight", 0.0),
+        psf_weight=response_cfg.get("psf_weight", 0.0),
+        complement_weight=response_cfg.get("complement_weight", 0.0),
+        orbit_weight=response_cfg.get("orbit_weight", 0.0),
+        every_n_steps=response_cfg.get("every_n_steps", 1),
+        orbit_degrees=response_cfg.get("orbit_degrees", 90.0),
+    )
+    noise_cfg = config.get("training.noise", {}) or {}
+    noise_min = noise_cfg.get("min_sd")
+    noise_max = noise_cfg.get("max_sd")
+    if (noise_min is None) != (noise_max is None):
+        raise ValueError("training.noise requires both min_sd and max_sd")
+    noise_range = None if noise_min is None else (float(noise_min), float(noise_max))
+    noise_condition = bool(noise_cfg.get("condition", False))
+    if noise_condition and config.get("dataset.normalize_images", False):
+        raise ValueError(
+            "training.noise.condition and dataset.normalize_images cannot both be true"
+        )
 
     if config.get("dataset.d4_augment", False):
         raise ValueError(
@@ -654,8 +675,7 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
             np.concatenate(gals),
             np.concatenate(psfs) if config.get("model.process_psf") else None,
         )
-        logger.info("image normalizer fit on %d rendered stamps",
-                    n_probe * batch_size)
+        logger.info("image normalizer fit on %d rendered stamps", n_probe * batch_size)
 
     _save_run_artifacts(config, model_dir, norm_params, img_params)
 
@@ -684,6 +704,9 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
         loss=config.get("training.loss", "mse"),
         ema_decay=config.get("training.ema_decay", None),
         dropout=config.get("model.dropout", 0.0),
+        response=response,
+        noise_range=noise_range,
+        noise_condition=noise_condition,
     )
 
 
@@ -787,7 +810,9 @@ def main():
         train_cfg.resample_noise_sd = resample_noise_sd
 
         state, train_loss, val_loss, val_loss_per_key = train_cfg.run(
-            train_galaxy_images, train_labels, rng_key,
+            train_galaxy_images,
+            train_labels,
+            rng_key,
             psf_images=train_psf_images,
         )
 

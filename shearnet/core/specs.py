@@ -33,6 +33,9 @@ class DatasetSpec:
     scale: float = 0.141
     return_psf: bool = False
     nse_sd: float = 1e-5
+    # Uniform per-object applied shear used by the differentiable response
+    # losses.  Zero preserves the historic zero-shear training population.
+    base_shear_range: float = 0.0
     psf_file_or_dir: Optional[str] = None
     output_keys: Tuple[str, ...] = ("g1", "g2")
     hlr_type: str = "constant"
@@ -59,7 +62,7 @@ class DatasetSpec:
     generation: str = "upfront"
 
     #: Keys consumed only by the jax-galsim renderer.
-    _JAX_ONLY = ("jax_fft_size", "jax_batch_size")
+    _JAX_ONLY = ("jax_fft_size", "jax_batch_size", "base_shear_range")
     #: Keys the jax-galsim renderer has no use for (no worker pool, and metacal
     #: reconvolutions are pointless for a backend built for analytic responses).
     _GALSIM_ONLY = ("nproc", "compute_metacal")
@@ -76,6 +79,7 @@ class DatasetSpec:
             scale=config.get("dataset.pixel_size"),
             return_psf=config.get("model.process_psf"),
             nse_sd=config.get("dataset.nse_sd"),
+            base_shear_range=config.get("dataset.base_shear_range", 0.0),
             psf_file_or_dir=config.get("dataset.psfex_model_file"),
             output_keys=tuple(config.get("model.output_keys")),
             hlr_type=config.get("dataset.hlr_type"),
@@ -95,13 +99,11 @@ class DatasetSpec:
     def __post_init__(self):
         if self.backend not in ("galsim", "jax-galsim"):
             raise ValueError(
-                f"dataset.backend must be 'galsim' or 'jax-galsim', "
-                f"got {self.backend!r}"
+                f"dataset.backend must be 'galsim' or 'jax-galsim', " f"got {self.backend!r}"
             )
         if self.generation not in ("upfront", "inloop"):
             raise ValueError(
-                f"dataset.generation must be 'upfront' or 'inloop', "
-                f"got {self.generation!r}"
+                f"dataset.generation must be 'upfront' or 'inloop', " f"got {self.generation!r}"
             )
         if self.generation == "inloop" and self.backend != "jax-galsim":
             raise ValueError(
@@ -151,22 +153,29 @@ class DatasetSpec:
         for 500k objects) plus the device-resident PSFEx bank.
         """
         if self.generation != "inloop":
-            raise ValueError(
-                "build_inloop_generator() requires dataset.generation: inloop")
+            raise ValueError("build_inloop_generator() requires dataset.generation: inloop")
         from .dataset_jax import JaxRenderConfig
         from .inloop import InLoopGenerator, sample_truth
 
         cfg = JaxRenderConfig(
-            npix=self.npix, scale=self.scale, psf_fwhm=self.psf_fwhm,
-            exp=self.exp, fft_size=self.jax_fft_size,
+            npix=self.npix,
+            scale=self.scale,
+            psf_fwhm=self.psf_fwhm,
+            exp=self.exp,
+            fft_size=self.jax_fft_size,
             batch_size=self.jax_batch_size,
         )
         truth = sample_truth(
-            self.samples, cfg, seed=self.seed, nse_sd=self.nse_sd,
+            self.samples,
+            cfg,
+            seed=self.seed,
+            nse_sd=self.nse_sd,
+            base_shear_range=self.base_shear_range,
             psf_file_or_dir=self.psf_file_or_dir,
-            hlr_type=self.hlr_type, flux_type=self.flux_type,
+            hlr_type=self.hlr_type,
+            flux_type=self.flux_type,
             cosmos_cat_fname=self.cosmos_cat_fname,
-            add_noise=False,           # noise is drawn inside the step
+            add_noise=False,  # noise is drawn inside the step
         )
         return InLoopGenerator(truth, cfg, batch_size)
 
