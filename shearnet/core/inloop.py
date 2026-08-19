@@ -71,6 +71,7 @@ from .dataset_jax import (
     make_render_one,
     sample_truth,
 )
+from .shear_algebra import compose_shear
 
 logger = get_logger(__name__)
 
@@ -80,9 +81,14 @@ __all__ = [
     "make_batch_render",
     "make_fused_train_step",
     "make_fused_eval_step",
+    "make_response_report",
+    "format_response_report",
+    "RESPONSE_REPORT_FIELDS",
     "normalize_state",
     "compilation_report",
     "ResponseRegularization",
+    "RESPONSE_TERMS",
+    "PROTECTED_PARAMS",
 ]
 
 #: Labels derivable without an ngmix fit. ``psf_e1``/``psf_e2``/``psf_T`` need
@@ -90,34 +96,181 @@ __all__ = [
 INLOOP_LABEL_KEYS = ("g1", "g2", "hlr", "flux")
 
 
+#: Response loss components, in the order they appear in the metrics vector.
+RESPONSE_TERMS = ("gamma", "psf", "shift", "complement", "orbit")
+
+#: Simulator parameters whose image tangents span the physically realisable
+#: directions. Anything orthogonal to their span is noise, and that complement
+#: is what ``complement_weight`` penalises. ``psf_x``/``psf_y`` are appended for
+#: ``exp='superbit'`` only, where moving on the focal plane changes the PSF.
+#:
+#: ``g1``/``g2`` are here as well as ``base_g1``/``base_g2``: the intrinsic and
+#: applied shears give *different* image tangents (an infinitesimal shear of the
+#: round profile pushed through the finite intrinsic shear is not an
+#: infinitesimal shear of the already-sheared profile), and leaving the
+#: intrinsic pair out would put the network's own supervised signal partly in
+#: the penalised complement. The two pairs are strongly overlapping, so the
+#: projection uses a thresholded pseudo-inverse rather than a solve.
+PROTECTED_PARAMS = (
+    "g1",
+    "g2",
+    "base_g1",
+    "base_g2",
+    "hlr",
+    "flux",
+    "dx",
+    "dy",
+    "psf_g1",
+    "psf_g2",
+)
+
+
 @dataclass(frozen=True)
 class ResponseRegularization:
     """Opt-in differentiable response losses for an in-loop training step.
 
-    ``gamma_weight`` drives the applied-shear response to identity,
-    ``psf_weight`` suppresses the PSF-shear response, and
-    ``complement_weight`` suppresses a Hutchinson probe outside the eight
-    physical image tangents.  ``orbit_weight`` compares a simulator rerender
-    using a 90-degree rotated PSF with the original render under shared noise.
-    This is a simulator consistency loss, not a D4 input transformation.
+    Every weight defaults to zero, so an unconfigured run is the plain fused
+    step. Each term is a statement about the *derivative* of the estimator, which
+    only exists as a training signal because the renderer is inside the graph:
+
+    * ``gamma_weight`` pushes the applied-shear response ``R^gamma`` towards its
+      target (see ``gamma_target``).
+    * ``psf_weight`` pushes the PSF-shear response ``R^PSF`` to zero. Zero is
+      the exactly-correct target: the PSF is known, so a perfect estimator's
+      answer does not move when the PSF is sheared.
+    * ``shift_weight`` pushes the translation response to zero -- where the
+      object sits in the stamp must not change its shape estimate.
+    * ``complement_weight`` penalises ``||J P_perp||_F^2`` via a one-sample
+      Hutchinson probe: the estimator's sensitivity to image directions no
+      simulator parameter can produce. That complement is pure noise, so this is
+      bias-safe variance reduction -- it does not touch the response on the
+      protected subspace and therefore cannot, on its own, de-bias anything.
+    * ``orbit_weight`` renders the same galaxy against a rotated PSF under the
+      *same* noise realisation and penalises the spread of the prediction across
+      that orbit. Note this rotates the **PSF alone, with the galaxy held
+      fixed**, by re-rendering from the profile; it is a simulator consistency
+      constraint, not a D4 transformation of the input images, and it is not
+      expressible as an architectural symmetry.
+
+    Attributes:
+        orbit_k: size of the PSF orbit. ``2`` uses ``{P, R_90 P}``, which
+            cancels the whole linear (spin-2) PSF leakage because
+            ``eps^PSF -> -eps^PSF`` under a 90-degree rotation. ``4`` uses
+            ``{0, 45, 90, 135}`` degrees, which additionally cancels the spin-4
+            term ``eps^2 conj(gamma)`` because ``sum exp(4 i theta) = 0`` over
+            those angles. K=4 costs three extra renders and forward passes per
+            step; measure the ``cos 4 phi`` residual before paying for it.
+        gamma_target: ``'analytic'`` (default) targets the exact per-object
+            response of the *label*, ``d eps_obs / d gamma``, obtained by
+            differentiating :func:`~shearnet.core.shear_algebra.compose_shear`.
+            That is ``1 - eps^2`` in complex form, not the identity -- the
+            identity is only correct after averaging over an isotropic shape
+            distribution. ``'identity'`` targets ``I`` and is the right choice
+            only if you intend an ensemble-level constraint.
+        every_n_steps: evaluate the response terms every N optimiser steps. The
+            graph is compiled either way (both branches of the ``lax.cond`` are
+            traced); only the runtime is saved.
+
+    A caveat worth stating once: under noise the Bayes-optimal estimator has a
+    *shrunk* response, so forcing ``R^gamma`` to its noiseless value trades
+    variance for bias by construction. ``complement_weight`` is the term with no
+    such trade; ``gamma_weight`` is a deliberate choice, not a free lunch.
     """
 
     gamma_weight: float = 0.0
     psf_weight: float = 0.0
+    shift_weight: float = 0.0
     complement_weight: float = 0.0
     orbit_weight: float = 0.0
     every_n_steps: int = 1
-    orbit_degrees: float = 90.0
+    orbit_k: int = 2
+    gamma_target: str = "analytic"
 
     def __post_init__(self):
         if self.every_n_steps < 1:
             raise ValueError("response every_n_steps must be at least one")
-        if self.orbit_weight and self.orbit_degrees != 90.0:
-            raise ValueError("the implemented PSF orbit is K=2 and requires 90 degrees")
+        if self.orbit_k not in (2, 4):
+            raise ValueError(f"response orbit_k must be 2 or 4, got {self.orbit_k!r}")
+        if self.gamma_target not in ("analytic", "identity"):
+            raise ValueError(
+                f"response gamma_target must be 'analytic' or 'identity', "
+                f"got {self.gamma_target!r}"
+            )
+
+    #: Recognised ``training.response`` keys. ``report`` is consumed by the
+    #: caller rather than this object, but it is listed so a config carrying it
+    #: is not rejected.
+    _CONFIG_KEYS = (
+        "gamma_weight",
+        "psf_weight",
+        "shift_weight",
+        "complement_weight",
+        "orbit_weight",
+        "every_n_steps",
+        "orbit_k",
+        "gamma_target",
+        "report",
+    )
+
+    @classmethod
+    def from_config(cls, mapping):
+        """Build from a ``training.response`` block, rejecting unknown keys.
+
+        A misspelled weight would otherwise leave that term at zero and train
+        happily -- an ablation that silently ran the control.
+        """
+        mapping = dict(mapping or {})
+        unknown = set(mapping) - set(cls._CONFIG_KEYS)
+        if unknown:
+            raise ValueError(
+                f"unknown training.response keys: {sorted(unknown)}; "
+                f"expected a subset of {list(cls._CONFIG_KEYS)}"
+            )
+        mapping.pop("report", None)
+        return cls(**mapping)
+
+    @property
+    def weights(self):
+        """The five term weights, ordered as :data:`RESPONSE_TERMS`."""
+        return (
+            float(self.gamma_weight),
+            float(self.psf_weight),
+            float(self.shift_weight),
+            float(self.complement_weight),
+            float(self.orbit_weight),
+        )
 
     @property
     def enabled(self):
-        return any((self.gamma_weight, self.psf_weight, self.complement_weight, self.orbit_weight))
+        return any(self.weights)
+
+    @property
+    def orbit_angles(self):
+        """Non-identity PSF rotation angles, in degrees."""
+        return tuple(180.0 * k / self.orbit_k for k in range(1, self.orbit_k))
+
+
+def noise_schedule_from_config(mapping):
+    """Parse a ``training.noise`` block into ``(noise_range, condition)``.
+
+    ``noise_range`` is ``None`` for the fixed-depth default. Both bounds are
+    required together: half a range is a typo, not a configuration.
+    """
+    mapping = dict(mapping or {})
+    unknown = set(mapping) - {"min_sd", "max_sd", "condition"}
+    if unknown:
+        raise ValueError(f"unknown training.noise keys: {sorted(unknown)}")
+    lo, hi = mapping.get("min_sd"), mapping.get("max_sd")
+    if (lo is None) != (hi is None):
+        raise ValueError("training.noise requires both min_sd and max_sd, or neither")
+    noise_range = None if lo is None else (float(lo), float(hi))
+    condition = bool(mapping.get("condition", False))
+    if condition and noise_range is None:
+        raise ValueError(
+            "training.noise.condition expresses the inputs in units of the "
+            "sampled noise, which needs training.noise.min_sd/max_sd"
+        )
+    return noise_range, condition
 
 
 # ----------------------------------------------------------------------
@@ -347,6 +500,89 @@ def make_batch_render(
     return jax.jit(go)
 
 
+def _protected_names(cfg: JaxRenderConfig):
+    """Protected tangent directions for this render configuration."""
+    if cfg.exp == "superbit":
+        # Focal-plane position is a real degree of freedom only when the PSF
+        # actually varies across the field.
+        return PROTECTED_PARAMS + ("psf_x", "psf_y")
+    return PROTECTED_PARAMS
+
+
+def _check_orbit_is_meaningful(gen: InLoopGenerator):
+    """Refuse an orbit term that a circular PSF makes identically zero.
+
+    Rotating an isotropic PSF is the identity, so with ``exp='ideal'`` and no
+    PSF shear the orbit term is exactly 0 for every model and every step. It
+    would look configured, cost three extra renders at K=4, and constrain
+    nothing. Fail loudly instead: this is the class of thing that silently
+    invalidates an ablation.
+    """
+    import numpy as np
+
+    if gen.cfg.exp != "ideal":
+        return  # a PSFEx model is anisotropic by nature
+    sheared = (
+        float(np.max(np.abs(np.asarray(gen.params["psf_g1"])))) > 0.0
+        or float(np.max(np.abs(np.asarray(gen.params["psf_g2"])))) > 0.0
+    )
+    if not sheared:
+        raise ValueError(
+            "response.orbit_weight is set but the PSF is a circular Gaussian "
+            "(exp='ideal' with no PSF shear), so rotating it is the identity "
+            "and the orbit term is identically zero. Set dataset.apply_psf_shear "
+            "or use exp='superbit'."
+        )
+
+
+def _project_out(basis, z, rtol=1e-6):
+    """Remove the component of ``z`` inside the row space of ``basis``.
+
+    ``basis`` is ``(B, S, D)`` and ``z`` is ``(B, D)``; returns ``(B, D)``.
+
+    The Gram matrix is genuinely rank deficient -- the intrinsic and applied
+    shear tangents nearly coincide, and a zero tangent (``psf_g1`` with the PSF
+    shear untraced) contributes an exactly zero row -- so this uses a symmetric
+    eigendecomposition with a relative threshold rather than ``linalg.solve``.
+    A ridge would have to be tuned against the wildly different column norms of
+    a flux tangent and a sub-pixel shift tangent; a thresholded pseudo-inverse
+    does not.
+    """
+    import jax.numpy as jnp
+
+    gram = jnp.einsum("bsd,btd->bst", basis, basis)
+    evals, evecs = jnp.linalg.eigh(gram)
+    tol = rtol * jnp.max(evals, axis=-1, keepdims=True)
+    keep = evals > tol
+    inv = jnp.where(keep, 1.0 / jnp.where(keep, evals, 1.0), 0.0)
+    rhs = jnp.einsum("bsd,bd->bs", basis, z)
+    coeff = jnp.einsum("bij,bj,blj,bl->bi", evecs, inv, evecs, rhs)
+    return z - jnp.einsum("bsd,bs->bd", basis, coeff)
+
+
+def _principal_cosine(a, b):
+    """Largest principal cosine between two 2-planes, per object.
+
+    ``a`` and ``b`` are ``(B, 2, D)`` stacks of (not necessarily orthonormal)
+    spanning vectors. Returns ``(B,)``. This is the geometry behind the
+    noise-amplification trade: where the applied-shear and PSF-shear tangents
+    are nearly parallel, driving ``R^PSF`` to zero has to fight ``R^gamma``, and
+    the variance goes somewhere.
+    """
+    import jax.numpy as jnp
+
+    def _orthonormalize(m):
+        gram = jnp.einsum("bsd,btd->bst", m, m)
+        evals, evecs = jnp.linalg.eigh(gram)
+        keep = evals > 1e-12 * jnp.max(evals, axis=-1, keepdims=True)
+        inv_sqrt = jnp.where(keep, 1.0 / jnp.sqrt(jnp.where(keep, evals, 1.0)), 0.0)
+        whiten = jnp.einsum("bij,bj,blj->bil", evecs, inv_sqrt, evecs)
+        return jnp.einsum("bij,bjd->bid", whiten, m)
+
+    overlap = jnp.einsum("bsd,btd->bst", _orthonormalize(a), _orthonormalize(b))
+    return jnp.linalg.svd(overlap, compute_uv=False)[:, 0]
+
+
 def make_fused_train_step(
     gen: InLoopGenerator,
     forward: Callable,
@@ -359,7 +595,7 @@ def make_fused_train_step(
     img_norm=None,
     response: Optional[ResponseRegularization] = None,
     shear_indices=(0, 1),
-    gamma_target=None,
+    label_scale=None,
     return_metrics: bool = False,
     noise_range=None,
     noise_condition: bool = False,
@@ -380,20 +616,26 @@ def make_fused_train_step(
         donate_state: donate the optimiser state buffers. Saves a copy of the
             parameters per step; only safe if the caller never reuses the old
             state object, which the loop below does not.
-        response: optional differentiable response regularisation.  It is
+        response: optional differentiable response regularisation. It is
             evaluated only every ``response.every_n_steps`` optimiser steps.
         shear_indices: locations of ``g1`` and ``g2`` in the model output.
-        gamma_target: desired 2x2 applied-shear response in network-output
-            units.  Label normalization therefore changes its diagonal.
-        return_metrics: also return the five loss components for epoch logging.
+        label_scale: ``(2,)`` standard deviation the shear labels were divided
+            by. Response targets are expressed in *network-output* units, so a
+            normalised run needs them divided by the same scale. ``None`` means
+            unnormalised labels.
+        return_metrics: also return the per-component loss vector for logging:
+            ``[supervised, *RESPONSE_TERMS, active]``, where ``active`` is 1.0
+            on steps the response terms were evaluated and 0.0 otherwise, so the
+            caller can average the terms over the steps that produced them.
         noise_range: optional ``(min_sd, max_sd)`` sampled uniformly once per
-            training batch.  ``None`` uses the historic fixed ``nse_sd``.
+            training batch. ``None`` uses the historic fixed ``nse_sd``.
         noise_condition: express the galaxy and PSF inputs in sampled-noise
-            units.  This conditions existing architectures on depth without
+            units. This conditions existing architectures on depth without
             changing their input signatures; it requires positive noise.
 
     Returns:
-        ``step(state, idx, noise_key, dropout_key) -> (state, loss)``.
+        ``step(state, idx, noise_key, dropout_key) -> (state, loss)``, or
+        ``(state, loss, metrics)`` when ``return_metrics``.
     """
     import jax
     import jax.numpy as jnp
@@ -404,20 +646,28 @@ def make_fused_train_step(
     if response.enabled and len(shear_indices) != 2:
         raise ValueError("response regularisation requires g1 and g2 output indices")
     shear_indices = tuple(shear_indices)
-    if gamma_target is None:
-        gamma_target = jnp.eye(2, dtype=net_dtype)
-    else:
-        gamma_target = jnp.asarray(gamma_target, dtype=net_dtype)
+    inv_label_scale = (
+        jnp.ones(2, net_dtype) if label_scale is None else 1.0 / jnp.asarray(label_scale, net_dtype)
+    )
 
-    # Response tangents in the protected subspace.  The first four describe
-    # galaxy shear/size/flux, the next two PSF shear, and the last two shifts.
-    protected_names = ("base_g1", "base_g2", "hlr", "flux", "psf_g1", "psf_g2", "dx", "dy")
-    needs_psf_tangent = response.psf_weight or response.complement_weight
+    protected_names = _protected_names(gen.cfg)
+    # The PSF-shear transform has to be in the graph for its tangent to exist at
+    # all: without it psf_g1/psf_g2 are unused inputs and the JVP is exactly zero
+    # -- a term that looks satisfied while measuring nothing.
+    needs_psf_tangent = bool(response.psf_weight or response.complement_weight)
+    if response.orbit_weight:
+        # The orbit needs an anisotropic PSF, so the shear transform goes into
+        # the graph whether or not the caller asked for it.
+        _check_orbit_is_meaningful(gen)
+        needs_psf_tangent = True
     render_batch = _make_render_batch(gen.cfg, trace_psf_shear or needs_psf_tangent, net_dtype)
-    orbit_render_batch = (
-        _make_render_batch(gen.cfg, trace_psf_shear, net_dtype, response.orbit_degrees)
+    orbit_render_batches = (
+        [
+            _make_render_batch(gen.cfg, trace_psf_shear or needs_psf_tangent, net_dtype, angle)
+            for angle in response.orbit_angles
+        ]
         if response.orbit_weight
-        else None
+        else []
     )
     superbit = gen.cfg.exp == "superbit"
     if noise_range is None:
@@ -451,6 +701,34 @@ def make_fused_train_step(
     def _normalize_noiseless(gal, psf):
         return _apply_img_norm(gal, psf, img_norm, net_dtype)
 
+    def gamma_target(p):
+        """The ``(B, 2, 2)`` target for ``R^gamma``, in network-output units.
+
+        ``'analytic'`` differentiates the label itself: the observed shape is
+        ``(eps + gamma) / (1 + conj(gamma) eps)``, whose derivative is
+        ``1 - eps^2`` in complex form. Averaged over an isotropic shape
+        distribution ``<eps^2> = 0`` and this reduces to the identity, which is
+        exactly why ``'identity'`` is defensible as an ensemble target and wrong
+        as a per-object one.
+
+        Both are then divided by the label scale, because the network predicts
+        normalised labels and its response is in those units.
+        """
+        scale = inv_label_scale[None, :, None]
+        if response.gamma_target == "identity":
+            return jnp.broadcast_to(jnp.eye(2, dtype=net_dtype), (1, 2, 2)) * scale
+
+        def label_shear(q):
+            o1, o2 = compose_shear(q["g1"], q["g2"], q["base_g1"], q["base_g2"])
+            return jnp.stack([o1, o2], axis=-1)
+
+        _, label_jvp = jax.linearize(label_shear, p)
+        target = jnp.stack(
+            [label_jvp(_unit_tangent(p, "base_g1")), label_jvp(_unit_tangent(p, "base_g2"))],
+            axis=-1,
+        )
+        return target.astype(net_dtype) * scale
+
     def step(state, idx, noise_key, dropout_key):
         p = {key: value[idx] for key, value in gen.params.items()}
         models = _selected_models(idx)
@@ -464,9 +742,11 @@ def make_fused_train_step(
         lab = labels_all[idx]
 
         def objective(params):
-            supervised = loss_fn(forward(params, gal, psf, dropout_key), lab)
+            preds = forward(params, gal, psf, dropout_key)
+            supervised = loss_fn(preds, lab)
             if not response.enabled:
-                return supervised, jnp.array([supervised, 0.0, 0.0, 0.0, 0.0])
+                idle = jnp.zeros(len(RESPONSE_TERMS) + 2, net_dtype)
+                return supervised, idle.at[0].set(supervised.astype(net_dtype))
 
             def response_terms(_):
                 def predict_from_params(q):
@@ -479,38 +759,53 @@ def make_fused_train_step(
                 def image_from_params(q):
                     return _normalize_noiseless(*render_batch(q, models))
 
+                # One linearisation, reused for every direction. jax.jvp per
+                # direction would re-render the whole batch once per tangent --
+                # up to twelve renders a step for the complement basis alone.
+                need_output_jvp = bool(
+                    response.gamma_weight or response.psf_weight or response.shift_weight
+                )
+                predict_jvp = jax.linearize(predict_from_params, p)[1] if need_output_jvp else None
+
                 def output_jvp(name):
-                    return jax.jvp(predict_from_params, (p,), (_unit_tangent(p, name),))[1][
-                        :, shear_indices
-                    ]
+                    return predict_jvp(_unit_tangent(p, name))[:, shear_indices]
+
+                def response_matrix(name1, name2):
+                    """``R[a, b] = d output_a / d param_b`` for the named pair."""
+                    return jnp.stack([output_jvp(name1), output_jvp(name2)], axis=-1)
 
                 if response.gamma_weight:
-                    gamma = jnp.stack([output_jvp("base_g1"), output_jvp("base_g2")], axis=-1)
-                    gamma_loss = jnp.mean((gamma - gamma_target[None, :, :]) ** 2)
+                    gamma = response_matrix("base_g1", "base_g2")
+                    gamma_loss = jnp.mean((gamma - gamma_target(p)) ** 2)
                 else:
                     gamma_loss = jnp.array(0.0, net_dtype)
 
                 if response.psf_weight:
-                    psf_response = jnp.stack([output_jvp("psf_g1"), output_jvp("psf_g2")], axis=-1)
-                    psf_loss = jnp.mean(psf_response**2)
+                    psf_loss = jnp.mean(response_matrix("psf_g1", "psf_g2") ** 2)
                 else:
                     psf_loss = jnp.array(0.0, net_dtype)
 
-                # Project a Gaussian image-space probe away from the eight
-                # physical tangents.  This is the one-sample Hutchinson
-                # estimator of ||J P_perp||_F^2, evaluated per object so no
-                # object's tangent basis leaks into another's projection.
+                if response.shift_weight:
+                    shift_loss = jnp.mean(response_matrix("dx", "dy") ** 2)
+                else:
+                    shift_loss = jnp.array(0.0, net_dtype)
+
+                # A Gaussian image-space probe projected away from the physical
+                # tangents: the one-sample Hutchinson estimator of
+                # ||J P_perp||_F^2. Done per object, so no object's tangent
+                # basis leaks into another's projection.
                 if response.complement_weight:
-                    image_tangents = [
-                        jax.jvp(image_from_params, (p,), (_unit_tangent(p, name),))[1]
-                        for name in protected_names
-                    ]
-                    dgal = jnp.stack([pair[0] for pair in image_tangents], axis=1)
-                    dpsf = jnp.stack([pair[1] for pair in image_tangents], axis=1)
+                    _, image_jvp = jax.linearize(image_from_params, p)
+                    tangents = [image_jvp(_unit_tangent(p, name)) for name in protected_names]
+                    nrows = len(protected_names)
                     basis = jnp.concatenate(
                         [
-                            dgal.reshape(dgal.shape[0], len(protected_names), -1),
-                            dpsf.reshape(dpsf.shape[0], len(protected_names), -1),
+                            jnp.stack([t[0] for t in tangents], axis=1).reshape(
+                                gal.shape[0], nrows, -1
+                            ),
+                            jnp.stack([t[1] for t in tangents], axis=1).reshape(
+                                psf.shape[0], nrows, -1
+                            ),
                         ],
                         axis=-1,
                     )
@@ -520,54 +815,59 @@ def make_fused_train_step(
                     z = jnp.concatenate(
                         [zgal.reshape(zgal.shape[0], -1), zpsf.reshape(zpsf.shape[0], -1)], axis=-1
                     )
-                    gram = jnp.einsum("bsd,btd->bst", basis, basis)
-                    scale = jnp.mean(jnp.diagonal(gram, axis1=-2, axis2=-1), axis=-1)
-                    gram = gram + (1e-6 * scale + 1e-12)[:, None, None] * jnp.eye(8)
-                    rhs = jnp.einsum("bsd,bd->bs", basis, z)[..., None]
-                    coeff = jnp.linalg.solve(gram, rhs)[..., 0]
-                    z_perp = z - jnp.einsum("bsd,bs->bd", basis, coeff)
+                    z_perp = _project_out(basis, z)
                     split = gal.shape[1] * gal.shape[2]
-                    zgal_perp = z_perp[:, :split].reshape(gal.shape)
-                    zpsf_perp = z_perp[:, split:].reshape(psf.shape)
                     complement_jvp = jax.jvp(
                         lambda g, r: forward(params, g, r, dropout_key),
                         (gal, psf),
-                        (zgal_perp, zpsf_perp),
+                        (
+                            z_perp[:, :split].reshape(gal.shape),
+                            z_perp[:, split:].reshape(psf.shape),
+                        ),
                     )[1][:, shear_indices]
                     complement_loss = jnp.mean(complement_jvp**2)
                 else:
                     complement_loss = jnp.array(0.0, net_dtype)
 
-                if orbit_render_batch is None:
+                if not orbit_render_batches:
                     orbit_loss = jnp.array(0.0, net_dtype)
                 else:
-                    orbit_gal, orbit_psf = _normalize_with_noise(
-                        *orbit_render_batch(p, models), noise, noise_sd
-                    )
-                    orbit_loss = jnp.mean(
-                        (
-                            forward(params, gal, psf, dropout_key)[:, shear_indices]
-                            - forward(params, orbit_gal, orbit_psf, dropout_key)[:, shear_indices]
-                        )
-                        ** 2
-                    )
+                    # Same galaxy, same noise realisation, rotated PSF. The
+                    # spread of the prediction across the orbit is what a
+                    # PSF-leakage term contributes and a correct estimate does
+                    # not, so penalise the variance rather than one difference:
+                    # it treats every orbit member alike and generalises to K=4.
+                    members = [preds[:, shear_indices]] + [
+                        forward(
+                            params,
+                            *_normalize_with_noise(*rb(p, models), noise, noise_sd),
+                            dropout_key,
+                        )[:, shear_indices]
+                        for rb in orbit_render_batches
+                    ]
+                    stacked = jnp.stack(members, axis=0)
+                    orbit_loss = jnp.mean((stacked - jnp.mean(stacked, axis=0)) ** 2)
 
-                return jnp.array([gamma_loss, psf_loss, complement_loss, orbit_loss])
+                return jnp.stack(
+                    [gamma_loss, psf_loss, shift_loss, complement_loss, orbit_loss]
+                ).astype(net_dtype)
 
             active = (state.step % response.every_n_steps) == 0
             terms = jax.lax.cond(
                 active,
                 response_terms,
-                lambda _: jnp.zeros(4, dtype=net_dtype),
+                lambda _: jnp.zeros(len(RESPONSE_TERMS), dtype=net_dtype),
                 operand=None,
             )
-            total = supervised + (
-                response.gamma_weight * terms[0]
-                + response.psf_weight * terms[1]
-                + response.complement_weight * terms[2]
-                + response.orbit_weight * terms[3]
+            total = supervised + sum(w * t for w, t in zip(response.weights, terms) if w)
+            metrics = jnp.concatenate(
+                [
+                    jnp.reshape(supervised.astype(net_dtype), (1,)),
+                    terms,
+                    jnp.reshape(active.astype(net_dtype), (1,)),
+                ]
             )
-            return total, jnp.concatenate([jnp.array([supervised]), terms])
+            return total, metrics
 
         (loss, metrics), grads = jax.value_and_grad(objective, has_aux=True)(state.params)
         state = state.apply_gradients(grads=grads)
@@ -614,6 +914,173 @@ def make_fused_eval_step(
         return loss
 
     return jax.jit(step)
+
+
+# ----------------------------------------------------------------------
+# response diagnostics
+# ----------------------------------------------------------------------
+#: Field order of the array :func:`make_response_report` returns.
+RESPONSE_REPORT_FIELDS = (
+    "R_gamma_11",
+    "R_gamma_12",
+    "R_gamma_21",
+    "R_gamma_22",
+    "R_gamma_target_11",
+    "R_gamma_target_22",
+    "R_psf_11",
+    "R_psf_12",
+    "R_psf_21",
+    "R_psf_22",
+    "R_shift_x",
+    "R_shift_y",
+    "cos_gamma_psf",
+    "pred_var_g1",
+    "pred_var_g2",
+)
+
+
+def make_response_report(
+    gen: InLoopGenerator,
+    forward: Callable,
+    nse_sd: float,
+    net_dtype=None,
+    img_norm=None,
+    shear_indices=(0, 1),
+    label_scale=None,
+    noise_condition: bool = False,
+):
+    """Build a jitted ``(params, idx, noise_key) -> (report, per_object_cos)``.
+
+    Validation MSE is the wrong selection criterion for a response-trained
+    model: a network can lower it while its ``R^gamma`` drifts and its PSF
+    leakage grows, because both are properties of the *derivative* and the loss
+    only sees the value. This measures the derivatives directly.
+
+    ``report`` is a vector of :data:`RESPONSE_REPORT_FIELDS`, batch-averaged:
+    the full 2x2 ``R^gamma`` (off-diagonals included -- they are where residual
+    leakage shows up), the diagonal of the analytic target for comparison, the
+    full 2x2 ``R^PSF``, the translation response, the mean principal cosine
+    between the applied-shear and PSF-shear image tangents, and the prediction
+    variance across the batch.
+
+    ``per_object_cos`` is the ``(B,)`` tangent alignment, returned separately so
+    the caller can bin ``m`` and the additive bias by it and quantify the
+    noise-amplification trade rather than assume it.
+
+    The PSF-shear transform is always traced here regardless of the training
+    configuration: measuring ``R^PSF`` requires the handle to exist, and an
+    untraced PSF shear would report an exactly-zero leakage that means nothing.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    if net_dtype is None:
+        net_dtype = jnp.float32
+    shear_indices = tuple(shear_indices)
+    inv_label_scale = (
+        jnp.ones(2, net_dtype) if label_scale is None else 1.0 / jnp.asarray(label_scale, net_dtype)
+    )
+    render_batch = _make_render_batch(gen.cfg, True, net_dtype)
+    superbit = gen.cfg.exp == "superbit"
+    sd = float(nse_sd)
+    if noise_condition and sd <= 0.0:
+        raise ValueError("noise conditioning requires a positive nse_sd")
+
+    def report(params, idx, noise_key):
+        p = {k: v[idx] for k, v in gen.params.items()}
+        models = None
+        if superbit:
+            models = jax.tree_util.tree_map(lambda a: a[gen.psf_idx[idx]], gen.psf_bank)
+
+        def _prepare(g, r, noise):
+            g = g + noise
+            if noise_condition:
+                g, r = g / sd, r / sd
+            return _apply_img_norm(g, r, img_norm, net_dtype)
+
+        noise = jnp.asarray(sd, net_dtype) * jax.random.normal(
+            noise_key, (idx.shape[0], gen.cfg.npix, gen.cfg.npix), net_dtype
+        )
+
+        def predict(q):
+            return forward(params, *_prepare(*render_batch(q, models), noise), None)
+
+        def image(q):
+            return _apply_img_norm(*render_batch(q, models), img_norm, net_dtype)
+
+        unit = lambda name: {  # noqa: E731 -- one-line tangent builder
+            k: (jnp.ones_like(v) if k == name else jnp.zeros_like(v)) for k, v in p.items()
+        }
+        preds, predict_jvp = jax.linearize(predict, p)
+
+        def matrix(a, b):
+            return jnp.stack(
+                [predict_jvp(unit(a))[:, shear_indices], predict_jvp(unit(b))[:, shear_indices]],
+                axis=-1,
+            )
+
+        r_gamma = jnp.mean(matrix("base_g1", "base_g2"), axis=0)
+        r_psf = jnp.mean(matrix("psf_g1", "psf_g2"), axis=0)
+        # Translation response has no sign convention worth averaging (it is
+        # zero in the mean for a symmetric population even when large), so
+        # report the RMS over both outputs.
+        r_shift = jnp.sqrt(jnp.mean(matrix("dx", "dy") ** 2, axis=(0, 1)))
+
+        def label_shear(q):
+            a, b = compose_shear(q["g1"], q["g2"], q["base_g1"], q["base_g2"])
+            return jnp.stack([a, b], axis=-1)
+
+        _, label_jvp = jax.linearize(label_shear, p)
+        target = (
+            jnp.stack([label_jvp(unit("base_g1")), label_jvp(unit("base_g2"))], axis=-1).astype(
+                net_dtype
+            )
+            * inv_label_scale[None, :, None]
+        )
+        target = jnp.mean(target, axis=0)
+
+        _, image_jvp = jax.linearize(image, p)
+
+        def flat_tangent(name):
+            dg, dr = image_jvp(unit(name))
+            return jnp.concatenate(
+                [dg.reshape(dg.shape[0], -1), dr.reshape(dr.shape[0], -1)], axis=-1
+            )
+
+        v_gamma = jnp.stack([flat_tangent("base_g1"), flat_tangent("base_g2")], axis=1)
+        v_psf = jnp.stack([flat_tangent("psf_g1"), flat_tangent("psf_g2")], axis=1)
+        cos = _principal_cosine(v_gamma, v_psf)
+
+        pred_var = jnp.var(preds[:, shear_indices], axis=0)
+        flat = jnp.concatenate(
+            [
+                r_gamma.reshape(-1),
+                jnp.diagonal(target),
+                r_psf.reshape(-1),
+                r_shift,
+                jnp.reshape(jnp.mean(cos), (1,)),
+                pred_var,
+            ]
+        )
+        return flat, cos
+
+    return jax.jit(report)
+
+
+def format_response_report(values):
+    """One-line human-readable form of a :func:`make_response_report` vector."""
+    import numpy as np
+
+    v = np.asarray(values, dtype=np.float64)
+    fields = dict(zip(RESPONSE_REPORT_FIELDS, v))
+    return (
+        "Rgamma=[[{R_gamma_11:+.4f} {R_gamma_12:+.4f}] [{R_gamma_21:+.4f} {R_gamma_22:+.4f}]] "
+        "target_diag=[{R_gamma_target_11:+.4f} {R_gamma_target_22:+.4f}] "
+        "Rpsf=[[{R_psf_11:+.2e} {R_psf_12:+.2e}] [{R_psf_21:+.2e} {R_psf_22:+.2e}]] "
+        "Rshift=[{R_shift_x:.2e} {R_shift_y:.2e}] "
+        "cos(vg,vpsf)={cos_gamma_psf:.3f} "
+        "var(pred)=[{pred_var_g1:.3e} {pred_var_g2:.3e}]"
+    ).format(**fields)
 
 
 # ----------------------------------------------------------------------

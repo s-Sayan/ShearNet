@@ -9,18 +9,23 @@ import jax.numpy as jnp  # noqa: E402
 
 from shearnet.core import inloop as inloop_mod  # noqa: E402
 from shearnet.core.dataset_jax import JaxRenderConfig  # noqa: E402
-from shearnet.core.inloop import InLoopGenerator, sample_truth  # noqa: E402
+from shearnet.core.inloop import (  # noqa: E402
+    InLoopGenerator,
+    ResponseRegularization,
+    noise_schedule_from_config,
+    sample_truth,
+)
 from shearnet.core.specs import DatasetSpec  # noqa: E402
 from shearnet.core.train_inloop import train_model_inloop  # noqa: E402
 
 NPIX, SCALE, FWHM = 33, 0.141, 0.5
 
 
-def _gen(n=128, batch=16, exp="ideal"):
+def _gen(n=128, batch=16, exp="ideal", **truth_kw):
     cfg = JaxRenderConfig(
         npix=NPIX, scale=SCALE, psf_fwhm=FWHM, exp=exp, fft_size=256, batch_size=batch
     )
-    truth = sample_truth(n, cfg, seed=0, nse_sd=12.7, add_noise=False)
+    truth = sample_truth(n, cfg, seed=0, nse_sd=12.7, add_noise=False, **truth_kw)
     return InLoopGenerator(truth, cfg, batch)
 
 
@@ -196,3 +201,112 @@ def test_config_exposes_generation_default():
     cfg = load_default_config()
     assert cfg["dataset"]["generation"] == "upfront"
     assert cfg["training"]["response"]["orbit_weight"] == 0.0
+
+
+# ----------------------------------------------------------------------
+# response regularisation through the driver
+# ----------------------------------------------------------------------
+def test_response_training_runs_and_still_compiles_once(monkeypatch):
+    """Enabling every response term must not cost a second executable."""
+    captured = {}
+    real_train = inloop_mod.make_fused_train_step
+
+    def spy(*a, **kw):
+        captured["train"] = real_train(*a, **kw)
+        return captured["train"]
+
+    monkeypatch.setattr("shearnet.core.train_inloop.make_fused_train_step", spy)
+    gen = _gen(n=64, batch=16, apply_psf_shear=True)
+    _, train_losses, _, _ = _train(
+        gen,
+        epochs=3,
+        response=ResponseRegularization(
+            gamma_weight=1e-3,
+            psf_weight=1e-3,
+            shift_weight=1e-3,
+            complement_weight=1e-3,
+            orbit_weight=1e-3,
+        ),
+    )
+    assert np.all(np.isfinite(train_losses))
+    assert captured["train"]._cache_size() == 1
+
+
+def test_response_requires_the_shear_output_keys():
+    with pytest.raises(ValueError, match="requires g1 and g2"):
+        _train(
+            _gen(), output_keys=("hlr", "flux"), response=ResponseRegularization(gamma_weight=1.0)
+        )
+
+
+def test_response_finds_the_shear_keys_wherever_they_sit():
+    """shear_indices must follow output_keys, not assume positions 0 and 1."""
+    seen = {}
+    real = inloop_mod.make_fused_train_step
+
+    def spy(*a, **kw):
+        seen["shear_indices"] = kw["shear_indices"]
+        return real(*a, **kw)
+
+    gen = _gen(n=64, batch=16, apply_psf_shear=True)
+    import unittest.mock as mock
+
+    with mock.patch("shearnet.core.train_inloop.make_fused_train_step", spy):
+        _train(
+            gen,
+            epochs=1,
+            output_keys=("hlr", "flux", "g1", "g2"),
+            response=ResponseRegularization(psf_weight=1e-3),
+        )
+    assert seen["shear_indices"] == (2, 3)
+
+
+def test_noise_range_validation_is_evaluated_at_the_midpoint():
+    seen = {}
+    real = inloop_mod.make_fused_eval_step
+
+    def spy(gen, forward, loss_fn, labels, nse_sd, **kw):
+        seen["nse_sd"] = nse_sd
+        return real(gen, forward, loss_fn, labels, nse_sd, **kw)
+
+    import unittest.mock as mock
+
+    with mock.patch("shearnet.core.train_inloop.make_fused_eval_step", spy):
+        _train(_gen(), epochs=1, noise_range=(5.0, 15.0))
+    assert seen["nse_sd"] == pytest.approx(10.0)
+
+
+def test_noise_conditioning_rejects_image_normalization():
+    with pytest.raises(ValueError, match="noise conditioning"):
+        _train(_gen(), epochs=1, noise_condition=True, img_norm={"gal_mean": 0.0, "gal_std": 1.0})
+
+
+# ----------------------------------------------------------------------
+# config-block parsing
+# ----------------------------------------------------------------------
+def test_response_block_rejects_a_misspelled_weight():
+    """An unrecognised key would leave the term at zero and run the control."""
+    with pytest.raises(ValueError, match="unknown training.response keys"):
+        ResponseRegularization.from_config({"psf_wieght": 0.1})
+    parsed = ResponseRegularization.from_config({"psf_weight": 0.1, "orbit_k": 4, "report": True})
+    assert parsed.psf_weight == 0.1 and parsed.orbit_k == 4
+    assert ResponseRegularization.from_config(None) == ResponseRegularization()
+
+
+def test_noise_block_parsing():
+    assert noise_schedule_from_config({}) == (None, False)
+    assert noise_schedule_from_config({"min_sd": 1, "max_sd": 3}) == ((1.0, 3.0), False)
+    with pytest.raises(ValueError, match="both min_sd and max_sd"):
+        noise_schedule_from_config({"min_sd": 1})
+    with pytest.raises(ValueError, match="unknown training.noise keys"):
+        noise_schedule_from_config({"minimum_sd": 1})
+    with pytest.raises(ValueError, match="condition"):
+        noise_schedule_from_config({"condition": True})
+
+
+def test_default_config_response_block_parses():
+    from shearnet.config.config_handler import load_default_config
+
+    cfg = load_default_config()
+    assert not ResponseRegularization.from_config(cfg["training"]["response"]).enabled
+    assert noise_schedule_from_config(cfg["training"]["noise"]) == (None, False)

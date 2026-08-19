@@ -371,13 +371,17 @@ def train_model(
             gal = _noised(gal, noise_rng)
 
             def _objective(params):
+                # output_keys sizes the head's output Dense, so it must be passed
+                # on apply as well as on init -- single-branch models included, or
+                # the head falls back to its 2-key default and the parameter
+                # shapes disagree for any run with more than two output keys.
                 if use_dropout:
                     preds = state.apply_fn(
-                        params, gal, gap=gap,
+                        params, gal, output_keys=output_keys, gap=gap,
                         deterministic=False, rngs={"dropout": dropout_rng},
                     )
                 else:
-                    preds = state.apply_fn(params, gal, gap=gap)
+                    preds = state.apply_fn(params, gal, output_keys=output_keys, gap=gap)
                 return loss_callable(preds, lab, weights)
 
             loss_val, grads = jax.value_and_grad(_objective)(state.params)
@@ -387,9 +391,11 @@ def train_model(
         def _eval_one(state, gal, lab, noise_rng):
             gal = _noised(gal, noise_rng)
             if use_dropout:
-                preds = state.apply_fn(state.params, gal, gap=gap, deterministic=True)
+                preds = state.apply_fn(
+                    state.params, gal, output_keys=output_keys, gap=gap, deterministic=True
+                )
             else:
-                preds = state.apply_fn(state.params, gal, gap=gap)
+                preds = state.apply_fn(state.params, gal, output_keys=output_keys, gap=gap)
             return loss_callable(preds, lab, weights), _per_key_mse(preds, lab)
 
         def _train_batch(state, gal, psf, lab, dropout_rng, noise_rng):
@@ -468,8 +474,11 @@ def train_model(
             val_losses.append(val_loss)
             logger.info(f"Validation Loss: {val_loss:.4e}")
 
-            # Per-key validation MSE is only tracked for the fork-like model.
-            if is_fork:
+            # Per-key validation MSE. Both paths already compute it; it used to
+            # be discarded for single-branch models, which meant the saved loss
+            # file silently changed shape with the architecture and the in-loop
+            # driver disagreed with this one.
+            if per_key is not None:
                 val_per_key = val_per_key_sum / total_samples
                 val_losses_per_key.append(val_per_key)
                 per_key_str = ", ".join(

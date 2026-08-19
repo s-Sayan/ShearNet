@@ -11,9 +11,12 @@ dataset:
   psf_fwhm: 0.5
   exp: "ideal"
   nse_sd: 1.0e-5
-  # Uniform per-object applied shear for in-loop response training.  This makes
-  # R^PSF local to the actual training shear rather than only g=0.  It affects
-  # jax-galsim only; zero keeps the historical rendered population unchanged.
+  # Half-width of a uniform per-object APPLIED shear, drawn on top of the
+  # intrinsic catalog shape. This makes the response terms local to the actual
+  # training shear rather than only to g = 0. The g1/g2 labels are the *observed*
+  # shape (intrinsic composed with the applied shear), so a nonzero value here
+  # changes the label as well as the stamp. jax-galsim only; zero reproduces the
+  # historical population exactly.
   base_shear_range: 0.0
   seed: 42
   stamp_size: 53
@@ -114,12 +117,28 @@ training:
   # default, so existing training runs are bit-for-bit unchanged.  These are
   # available only with dataset.backend: jax-galsim and generation: inloop.
   response:
-    gamma_weight: 0.0       # enforce applied-shear response R^gamma -> I
-    psf_weight: 0.0         # suppress direct PSF-shear response R^PSF
-    complement_weight: 0.0  # Hutchinson penalty outside 8 physical tangents
-    orbit_weight: 0.0       # K=2 PSF-only {P, R90 P} shared-noise consistency
+    gamma_weight: 0.0       # drive R^gamma to its target (see gamma_target)
+    psf_weight: 0.0         # drive the PSF-shear response R^PSF to zero
+    shift_weight: 0.0       # drive the translation response to zero
+    complement_weight: 0.0  # Hutchinson penalty outside the physical tangents
+    orbit_weight: 0.0       # PSF-only orbit consistency under shared noise
     every_n_steps: 1        # stagger expensive terms; 1 evaluates every step
-    orbit_degrees: 90.0     # fixed: K=2; a 45-degree orbit is not implemented
+    # Size of the PSF orbit. 2 = {P, R90 P}, which cancels the whole linear
+    # (spin-2) PSF leakage since eps^PSF -> -eps^PSF at 90 degrees. 4 =
+    # {0,45,90,135} degrees, which additionally cancels the spin-4 term
+    # eps^2 conj(gamma) because sum exp(4 i theta) vanishes over those angles.
+    # K=4 costs three extra renders + forwards per step: measure the cos(4 phi)
+    # residual first and only pay for it if it is material.
+    orbit_k: 2
+    # analytic -> per-object d eps_obs / d gamma = 1 - eps^2, the exact response
+    #             of the label, obtained by differentiating the shear composition
+    # identity -> the ensemble target I, correct only after averaging over an
+    #             isotropic shape distribution
+    gamma_target: "analytic"
+    # Log the measured response matrices at every validation pass. null = on
+    # whenever any weight above is nonzero. Validation MSE cannot see a drifting
+    # R^gamma or a growing PSF leakage, so this is the actual selection signal.
+    report: null
   # In-loop depth augmentation.  Set a positive range to draw one noise level
   # per training batch.  Conditioning represents both inputs in units of that
   # draw, so existing architectures see the depth without a new input branch.

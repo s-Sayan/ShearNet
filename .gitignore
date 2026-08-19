@@ -23,6 +23,7 @@ wheels/
 *.egg
 MANIFEST
 *.bundle
+*.patch
 
 # Testing
 .pytest_cache/

@@ -602,31 +602,23 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
     import jax.numpy as jnp
 
     from ..core.dataset_jax import render_dtype
-    from ..core.inloop import ResponseRegularization, make_batch_render
+    from ..core.inloop import (
+        ResponseRegularization,
+        make_batch_render,
+        noise_schedule_from_config,
+    )
     from ..core.train_inloop import train_model_inloop
 
     spec = DatasetSpec.from_config(config)
     batch_size = config.get("training.batch_size")
     output_keys = tuple(config.get("model.output_keys"))
-    response_cfg = config.get("training.response", {}) or {}
-    response = ResponseRegularization(
-        gamma_weight=response_cfg.get("gamma_weight", 0.0),
-        psf_weight=response_cfg.get("psf_weight", 0.0),
-        complement_weight=response_cfg.get("complement_weight", 0.0),
-        orbit_weight=response_cfg.get("orbit_weight", 0.0),
-        every_n_steps=response_cfg.get("every_n_steps", 1),
-        orbit_degrees=response_cfg.get("orbit_degrees", 90.0),
-    )
-    noise_cfg = config.get("training.noise", {}) or {}
-    noise_min = noise_cfg.get("min_sd")
-    noise_max = noise_cfg.get("max_sd")
-    if (noise_min is None) != (noise_max is None):
-        raise ValueError("training.noise requires both min_sd and max_sd")
-    noise_range = None if noise_min is None else (float(noise_min), float(noise_max))
-    noise_condition = bool(noise_cfg.get("condition", False))
+    response = ResponseRegularization.from_config(config.get("training.response", {}))
+    response_report = (config.get("training.response", {}) or {}).get("report", None)
+    noise_range, noise_condition = noise_schedule_from_config(config.get("training.noise", {}))
     if noise_condition and config.get("dataset.normalize_images", False):
         raise ValueError(
-            "training.noise.condition and dataset.normalize_images cannot both be true"
+            "training.noise.condition and dataset.normalize_images are two "
+            "incompatible ways to set the input scale; enable at most one."
         )
 
     if config.get("dataset.d4_augment", False):
@@ -707,6 +699,12 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
         response=response,
         noise_range=noise_range,
         noise_condition=noise_condition,
+        response_report=response_report,
+        # dataset.apply_psf_shear draws a per-object PSF shear into the truth
+        # table; without this the renderer would never apply it, and the run
+        # would silently train on round PSFs. (The response terms switch the
+        # transform on for themselves regardless -- they need the tangent.)
+        trace_psf_shear=config.get("dataset.apply_psf_shear", False),
     )
 
 

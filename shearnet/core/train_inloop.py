@@ -42,10 +42,13 @@ from flax.training import train_state
 
 from ..logging_utils import get_logger
 from .inloop import (
+    RESPONSE_TERMS,
     InLoopGenerator,
     ResponseRegularization,
+    format_response_report,
     make_fused_eval_step,
     make_fused_train_step,
+    make_response_report,
     normalize_state,
 )
 from .losses import resolve_loss
@@ -106,6 +109,7 @@ def train_model_inloop(
     response: Optional[ResponseRegularization] = None,
     noise_range=None,
     noise_condition: bool = False,
+    response_report: Optional[bool] = None,
 ):
     """Train with stamps generated inside the jitted step.
 
@@ -120,10 +124,17 @@ def train_model_inloop(
         nse_sd: pixel noise std in *image* units (before ``img_norm``).
         trace_psf_shear: keep the PSF-shear transform in the graph so the
             ``R^PSF`` tangent is available. Costs a transform; off by default.
-        response: optional response/orbit loss configuration.  Its component
+        response: optional response/orbit loss configuration. Its component
             means are logged each epoch; validation remains supervised-only.
         noise_range: optional per-batch uniform noise range ``(min_sd,max_sd)``.
+            Validation is evaluated at the midpoint of the range, so the
+            validation loss is a fixed-depth number comparable across epochs.
         noise_condition: represent inputs in their sampled noise units.
+        response_report: log the measured response matrices at every validation
+            pass. Defaults to on whenever ``response`` is active -- validation
+            MSE cannot see a drifting ``R^gamma`` or a growing PSF leakage, so
+            training with response terms and only watching the loss is flying
+            blind. It costs one extra jitted call per eval.
 
     Returns ``(state, train_losses, val_losses, val_losses_per_key)`` -- the
     same tuple :func:`~shearnet.core.train.train_model` returns.
@@ -141,10 +152,13 @@ def train_model_inloop(
     labels = gen.labels(output_keys)
     if label_norm is not None:
         labels = (labels - jnp.asarray(label_norm["mean"])) / jnp.asarray(label_norm["std"])
-    if response.enabled and label_norm is not None:
-        gamma_target = jnp.diag(1.0 / jnp.asarray(label_norm["std"])[list(shear_indices)])
-    else:
-        gamma_target = jnp.eye(2)
+    # The network predicts normalised labels, so every response target has to be
+    # divided by the same scale before it can be compared to a measured JVP.
+    label_scale = (
+        jnp.asarray(label_norm["std"])[jnp.asarray(shear_indices)]
+        if label_norm is not None
+        else None
+    )
 
     # Index split. Contiguous, matching the up-front path, so the same seed puts
     # the same objects in validation on both backends.
@@ -235,17 +249,21 @@ def train_model_inloop(
         img_norm=img_norm,
         response=response,
         shear_indices=shear_indices,
-        gamma_target=gamma_target,
+        label_scale=label_scale,
         return_metrics=response.enabled,
         noise_range=noise_range,
         noise_condition=noise_condition,
     )
+    # Validation runs at a single fixed depth even when training randomises it:
+    # a validation loss drawn at a random depth every epoch is not comparable
+    # across epochs, and early stopping would react to the draw.
+    eval_nse_sd = nse_sd if noise_range is None else 0.5 * (noise_range[0] + noise_range[1])
     eval_step = make_fused_eval_step(
         gen,
         forward,
         objective,
         labels,
-        nse_sd,
+        eval_nse_sd,
         trace_psf_shear=trace_psf_shear,
         img_norm=img_norm,
         per_key=True,
@@ -254,10 +272,25 @@ def train_model_inloop(
 
     if noise_range is not None:
         logger.info(
-            "in-loop noise randomization: uniform [%.4g, %.4g]%s",
+            "in-loop noise randomization: uniform [%.4g, %.4g]%s; validation at %.4g",
             noise_range[0],
             noise_range[1],
             " with noise-unit conditioning" if noise_condition else "",
+            eval_nse_sd,
+        )
+
+    if response_report is None:
+        response_report = response.enabled
+    report_step = None
+    if response_report:
+        report_step = make_response_report(
+            gen,
+            forward,
+            eval_nse_sd,
+            img_norm=img_norm,
+            shear_indices=shear_indices,
+            label_scale=label_scale,
+            noise_condition=noise_condition,
         )
 
     rng_key, val_noise_key = jax.random.split(rng_key)
@@ -274,7 +307,8 @@ def train_model_inloop(
         idx_mat = gen.batches(train_ids, key=shuffle_key)
 
         train_loss = 0.0
-        response_sum = jnp.zeros(5)
+        # [supervised, *RESPONSE_TERMS, n_active]
+        response_sum = jnp.zeros(len(RESPONSE_TERMS) + 2)
         for s in range(steps_per_epoch):
             rng_key, noise_key, dropout_key = jax.random.split(rng_key, 3)
             result = train_step(state, idx_mat[s], noise_key, dropout_key)
@@ -289,15 +323,19 @@ def train_model_inloop(
         train_loss /= steps_per_epoch
         train_losses.append(train_loss)
         if response.enabled:
-            supervised, gamma, psf, complement, orbit = response_sum / steps_per_epoch
+            # The response terms are only evaluated on active steps, so divide
+            # them by that count -- averaging over every step would report a
+            # value every_n_steps times too small and look like convergence.
+            n_active = max(float(response_sum[-1]), 1.0)
             logger.info(
-                "  response terms: supervised=%.4e Rgamma=%.4e Rpsf=%.4e "
-                "Pperp=%.4e orbit90=%.4e",
-                float(supervised),
-                float(gamma),
-                float(psf),
-                float(complement),
-                float(orbit),
+                "  response terms: supervised=%.4e %s (%d/%d active steps)",
+                float(response_sum[0]) / steps_per_epoch,
+                " ".join(
+                    f"{name}={float(response_sum[i + 1]) / n_active:.4e}"
+                    for i, name in enumerate(RESPONSE_TERMS)
+                ),
+                int(n_active),
+                steps_per_epoch,
             )
 
         if (epoch + 1) % eval_interval:
@@ -322,6 +360,11 @@ def train_model_inloop(
             "  Per-key validation MSE: %s",
             ", ".join(f"{k}={float(v):.4e}" for k, v in zip(output_keys, val_per_key)),
         )
+        if report_step is not None:
+            values, _ = report_step(
+                eval_state.params, val_batches[0], jax.random.fold_in(val_noise_key, 0)
+            )
+            logger.info("  %s", format_response_report(values))
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss

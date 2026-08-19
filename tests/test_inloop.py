@@ -16,13 +16,20 @@ from shearnet.core.dataset_jax import (  # noqa: E402
     sample_truth,
 )
 from shearnet.core.inloop import (  # noqa: E402
+    PROTECTED_PARAMS,
+    RESPONSE_REPORT_FIELDS,
+    RESPONSE_TERMS,
     InLoopGenerator,
     ResponseRegularization,
+    _project_out,
+    _protected_names,
     build_generator,
     compilation_report,
+    format_response_report,
     make_batch_render,
     make_fused_eval_step,
     make_fused_train_step,
+    make_response_report,
     normalize_state,
 )
 
@@ -44,9 +51,9 @@ class _Tiny(fnn.Module):
         return fnn.Dense(4)(x.reshape(x.shape[0], -1))
 
 
-def _harness(exp="ideal", n=32, batch=8):
+def _harness(exp="ideal", n=32, batch=8, apply_psf_shear=False):
     cfg = _cfg(exp, batch)
-    gen = build_generator(n, cfg, batch, seed=0)
+    gen = build_generator(n, cfg, batch, seed=0, apply_psf_shear=apply_psf_shear)
     model = _Tiny()
     params = model.init(
         jax.random.PRNGKey(0), jnp.zeros((1, NPIX, NPIX)), jnp.zeros((1, NPIX, NPIX))
@@ -269,10 +276,11 @@ def test_gradients_flow_through_the_fused_step():
 # ----------------------------------------------------------------------
 def test_response_regularisation_runs_all_terms_and_returns_metrics():
     """The combined JVP/orbit path is finite and updates the model."""
-    gen, state, forward, loss_fn, labels = _harness(n=16, batch=8)
+    gen, state, forward, loss_fn, labels = _harness(n=16, batch=8, apply_psf_shear=True)
     response = ResponseRegularization(
         gamma_weight=0.1,
         psf_weight=0.1,
+        shift_weight=0.1,
         complement_weight=0.1,
         orbit_weight=0.1,
     )
@@ -290,9 +298,15 @@ def test_response_regularisation_runs_all_terms_and_returns_metrics():
     old = normalize_state(state)
     new, loss, metrics = step(old, idx, jax.random.PRNGKey(1), jax.random.PRNGKey(2))
     assert np.isfinite(float(loss))
-    assert np.asarray(metrics).shape == (5,)
+    # [supervised, *RESPONSE_TERMS, active]
+    assert np.asarray(metrics).shape == (len(RESPONSE_TERMS) + 2,)
     assert np.all(np.isfinite(np.asarray(metrics)))
     assert float(metrics[0]) > 0.0
+    assert float(metrics[-1]) == 1.0
+    # every term must actually contribute; a silently-zero term is a term that
+    # is measuring nothing (an untraced PSF shear does exactly that)
+    for name, value in zip(RESPONSE_TERMS, np.asarray(metrics)[1:-1]):
+        assert float(value) > 0.0, f"{name} term is identically zero"
     moved = jax.tree_util.tree_reduce(
         lambda acc, x: acc or bool(np.any(np.asarray(x) != 0)),
         jax.tree_util.tree_map(lambda a, b: np.asarray(a) - np.asarray(b), new.params, old.params),
@@ -302,7 +316,7 @@ def test_response_regularisation_runs_all_terms_and_returns_metrics():
 
 
 def test_response_regularisation_can_be_staggered():
-    gen, state, forward, loss_fn, labels = _harness(n=16, batch=8)
+    gen, state, forward, loss_fn, labels = _harness(n=16, batch=8, apply_psf_shear=True)
     response = ResponseRegularization(orbit_weight=1.0, every_n_steps=2)
     step = make_fused_train_step(
         gen,
@@ -318,10 +332,157 @@ def test_response_regularisation_can_be_staggered():
     state = normalize_state(state)
     state, _, first = step(state, idx, jax.random.PRNGKey(1), jax.random.PRNGKey(2))
     _, _, second = step(state, idx, jax.random.PRNGKey(3), jax.random.PRNGKey(4))
-    assert float(first[4]) >= 0.0
-    assert float(second[1:].sum()) == 0.0
+    assert float(first[-1]) == 1.0
+    assert float(second[-1]) == 0.0
+    assert float(second[1:-1].sum()) == 0.0
 
 
-def test_response_regularisation_rejects_non_k2_orbit():
-    with pytest.raises(ValueError, match="K=2"):
-        ResponseRegularization(orbit_weight=1.0, orbit_degrees=45.0)
+def test_response_config_validation():
+    with pytest.raises(ValueError, match="orbit_k"):
+        ResponseRegularization(orbit_weight=1.0, orbit_k=3)
+    with pytest.raises(ValueError, match="gamma_target"):
+        ResponseRegularization(gamma_weight=1.0, gamma_target="ensemble")
+    with pytest.raises(ValueError, match="every_n_steps"):
+        ResponseRegularization(gamma_weight=1.0, every_n_steps=0)
+    assert ResponseRegularization().orbit_angles == (90.0,)
+    assert ResponseRegularization(orbit_k=4).orbit_angles == (45.0, 90.0, 135.0)
+    assert not ResponseRegularization().enabled
+    assert ResponseRegularization(shift_weight=1e-3).enabled
+
+
+@pytest.mark.parametrize("orbit_k", [2, 4])
+def test_orbit_term_vanishes_only_for_an_orbit_invariant_estimator(orbit_k):
+    """The term measures the spread of the prediction across the PSF orbit.
+
+    A constant estimator is orbit-invariant by construction and must score
+    exactly zero; note that a merely *PSF-channel-blind* model would not, because
+    rotating the PSF also changes the convolved galaxy stamp.
+    """
+    gen, state, _, loss_fn, labels = _harness(n=8, batch=8, apply_psf_shear=True)
+
+    def constant(params, gal, psf, dropout_key):
+        del psf, dropout_key
+        return jnp.zeros((gal.shape[0], 4), gal.dtype) + jnp.sum(
+            jax.tree_util.tree_leaves(params)[0]
+        )
+
+    response = ResponseRegularization(orbit_weight=1.0, orbit_k=orbit_k)
+    step = make_fused_train_step(
+        gen, constant, loss_fn, labels, 0.0, response=response, return_metrics=True
+    )
+    _, _, metrics = step(
+        normalize_state(state), jnp.arange(8), jax.random.PRNGKey(0), jax.random.PRNGKey(1)
+    )
+    assert float(np.asarray(metrics)[1 + RESPONSE_TERMS.index("orbit")]) == 0.0
+
+
+@pytest.mark.parametrize("orbit_k", [2, 4])
+def test_orbit_actually_rotates_the_psf(orbit_k):
+    """Guard the mechanism, not just the number: the orbit must re-render."""
+    from shearnet.core.inloop import _make_render_batch
+
+    gen = build_generator(4, _cfg(batch=4), 4, seed=0, apply_psf_shear=True)
+    ref = _make_render_batch(gen.cfg, True, jnp.float32)
+    p = {k: v[jnp.arange(4)] for k, v in gen.params.items()}
+    base_gal, base_psf = ref(p)
+    for angle in ResponseRegularization(orbit_k=orbit_k).orbit_angles:
+        rot = _make_render_batch(gen.cfg, True, jnp.float32, angle)
+        gal, psf = rot(p)
+        # the PSF stamp moved, and so did the convolved galaxy
+        assert not np.allclose(np.asarray(psf), np.asarray(base_psf), atol=1e-9)
+        assert not np.allclose(np.asarray(gal), np.asarray(base_gal), atol=1e-9)
+    # flux is conserved by a rotation
+    assert float(jnp.sum(psf)) == pytest.approx(float(jnp.sum(base_psf)), rel=1e-4)
+
+
+def test_orbit_term_is_nonzero_for_a_psf_sensitive_model():
+    gen, state, forward, loss_fn, labels = _harness(n=8, batch=8, apply_psf_shear=True)
+    step = make_fused_train_step(
+        gen,
+        forward,
+        loss_fn,
+        labels,
+        0.0,
+        response=ResponseRegularization(orbit_weight=1.0),
+        return_metrics=True,
+    )
+    _, _, metrics = step(
+        normalize_state(state), jnp.arange(8), jax.random.PRNGKey(0), jax.random.PRNGKey(1)
+    )
+    assert float(np.asarray(metrics)[1 + RESPONSE_TERMS.index("orbit")]) > 0.0
+
+
+def test_protected_subspace_includes_the_intrinsic_shape():
+    """The supervised signal must not sit in the penalised complement.
+
+    ``g1``/``g2`` are simulator parameters, so their image tangents are physical.
+    Leaving them out of the protected basis would have the complement penalty
+    fight the very sensitivity the supervised loss is training for.
+    """
+    assert {"g1", "g2"}.issubset(PROTECTED_PARAMS)
+    assert {"base_g1", "base_g2", "psf_g1", "psf_g2", "dx", "dy"}.issubset(PROTECTED_PARAMS)
+    ideal = _protected_names(_cfg("ideal"))
+    superbit = _protected_names(_cfg("superbit"))
+    assert "psf_x" not in ideal  # a fixed analytic PSF does not move
+    assert {"psf_x", "psf_y"}.issubset(superbit)
+
+
+def test_projection_removes_the_protected_directions_exactly():
+    """A rank-deficient basis must still give an exact projection."""
+    key = jax.random.PRNGKey(0)
+    b, s, d = 3, 5, 40
+    basis = jax.random.normal(key, (b, s, d))
+    # duplicate a row and zero another: exactly the degeneracies the physical
+    # basis has (intrinsic vs applied shear; an untraced PSF shear)
+    basis = basis.at[:, 1].set(basis[:, 0]).at[:, 4].set(0.0)
+    z = jax.random.normal(jax.random.PRNGKey(1), (b, d))
+    z_perp = _project_out(basis, z)
+    overlap = jnp.einsum("bsd,bd->bs", basis, z_perp)
+    assert float(jnp.max(jnp.abs(overlap))) < 1e-3
+    # and it is a projection: applying it twice changes nothing
+    assert np.allclose(np.asarray(_project_out(basis, z_perp)), np.asarray(z_perp), atol=1e-4)
+
+
+def test_analytic_gamma_target_beats_identity_for_a_sheared_population():
+    """The label response is 1 - eps^2, which is not the identity per object."""
+    from shearnet.core.shear_algebra import compose_shear
+
+    e1, e2 = 0.3, 0.2
+    step = 1e-6
+    d1 = (compose_shear(e1, e2, step, 0.0)[0] - compose_shear(e1, e2, -step, 0.0)[0]) / (2 * step)
+    # d(o1)/d(gamma1) = 1 - Re(eps^2) = 1 - (e1^2 - e2^2)
+    assert d1 == pytest.approx(1.0 - (e1**2 - e2**2), rel=1e-4)
+    # and the composition is exactly the identity at zero applied shear
+    assert compose_shear(e1, e2, 0.0, 0.0) == (e1, e2)
+
+
+def test_response_report_measures_the_expected_derivatives():
+    """A linear-in-image model has a response the report must recover."""
+    gen, state, forward, _, _ = _harness(n=8, batch=8, apply_psf_shear=True)
+    report = make_response_report(gen, forward, 0.0, shear_indices=(0, 1))
+    values, cos = report(state.params, jnp.arange(8), jax.random.PRNGKey(0))
+    values = np.asarray(values)
+    assert values.shape == (len(RESPONSE_REPORT_FIELDS),)
+    assert np.all(np.isfinite(values))
+    fields = dict(zip(RESPONSE_REPORT_FIELDS, values))
+    # the analytic target diagonal is 1 - Re(eps^2) ~ 1 for a shape catalogue
+    assert 0.8 < fields["R_gamma_target_11"] < 1.2
+    # R^PSF is only measurable because the report always traces the PSF shear
+    assert abs(fields["R_psf_11"]) > 0.0
+    assert np.asarray(cos).shape == (8,)
+    assert np.all((np.asarray(cos) >= -1e-6) & (np.asarray(cos) <= 1.0 + 1e-6))
+    assert "Rgamma" in format_response_report(values)
+
+
+def test_orbit_term_refuses_a_circular_psf():
+    """A round PSF makes the orbit a no-op; that must fail, not pass silently."""
+    gen, state, forward, loss_fn, labels = _harness(n=8, batch=8)
+    with pytest.raises(ValueError, match="identically zero"):
+        make_fused_train_step(
+            gen,
+            forward,
+            loss_fn,
+            labels,
+            0.0,
+            response=ResponseRegularization(orbit_weight=1.0),
+        )

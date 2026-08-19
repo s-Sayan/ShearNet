@@ -36,6 +36,12 @@ class DatasetSpec:
     # Uniform per-object applied shear used by the differentiable response
     # losses.  Zero preserves the historic zero-shear training population.
     base_shear_range: float = 0.0
+    # Random per-object PSF shear. ``cli.evaluate`` has always honoured
+    # ``dataset.apply_psf_shear``; the training path dropped it on the floor
+    # because the spec had no field for it, so a config asking for a sheared-PSF
+    # population trained on round PSFs and evaluated on sheared ones.
+    apply_psf_shear: bool = False
+    psf_shear_range: float = 0.05
     psf_file_or_dir: Optional[str] = None
     output_keys: Tuple[str, ...] = ("g1", "g2")
     hlr_type: str = "constant"
@@ -80,6 +86,8 @@ class DatasetSpec:
             return_psf=config.get("model.process_psf"),
             nse_sd=config.get("dataset.nse_sd"),
             base_shear_range=config.get("dataset.base_shear_range", 0.0),
+            apply_psf_shear=config.get("dataset.apply_psf_shear", False),
+            psf_shear_range=config.get("dataset.psf_shear_range", 0.05),
             psf_file_or_dir=config.get("dataset.psfex_model_file"),
             output_keys=tuple(config.get("model.output_keys")),
             hlr_type=config.get("dataset.hlr_type"),
@@ -171,6 +179,8 @@ class DatasetSpec:
             seed=self.seed,
             nse_sd=self.nse_sd,
             base_shear_range=self.base_shear_range,
+            apply_psf_shear=self.apply_psf_shear,
+            psf_shear_range=self.psf_shear_range,
             psf_file_or_dir=self.psf_file_or_dir,
             hlr_type=self.hlr_type,
             flux_type=self.flux_type,

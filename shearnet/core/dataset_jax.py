@@ -74,6 +74,7 @@ from .dataset import (
     search_psf_files,
 )
 from .moments import get_admoms_ngmix_fit
+from .shear_algebra import compose_shear
 
 logger = get_logger(__name__)
 
@@ -431,11 +432,17 @@ def sample_truth(
             p["psf_y"][i] = MARGIN + (WCS_PARAMS["image_ysize"] - 2 * MARGIN) * ud()
             chosen.append(psf_paths[int(len(psf_paths) * ud())])
 
+    # The label is the shape of the object that was actually drawn: intrinsic
+    # shape composed with the applied shear, matching sim_func. Exactly
+    # (p["g1"], p["g2"]) when no applied shear is requested, which is every
+    # historical run.
+    obs_g1, obs_g2 = compose_shear(p["g1"], p["g2"], p["base_g1"], p["base_g2"])
+
     return Truth(
         params=p,
         psf_files=(chosen or None),
         noise=noise,
-        labels_raw={"g1": p["g1"], "g2": p["g2"], "hlr": p["hlr"], "flux": p["flux"]},
+        labels_raw={"g1": obs_g1, "g2": obs_g2, "hlr": p["hlr"], "flux": p["flux"]},
     )
 
 

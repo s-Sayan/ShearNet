@@ -1,0 +1,96 @@
+# In-loop generation with differentiable response regularisation.
+#
+# The control for the Tier-2 ablation: run this once with every response weight
+# at 0.0, then turn them on one at a time (gamma -> psf -> shift -> complement
+# -> orbit) at a matched training budget and compare m, c, the logged response
+# matrices, and prediction variance. Nothing here needs a materialised dataset;
+# the stamps exist only inside the jitted step.
+#
+# Requires JAX_ENABLE_X64=1 in the environment for float64 rendering (the
+# stamps are cast to float32 before the network, so it costs nothing in
+# training memory or speed) and a jax-galsim with a batchable DES_PSFEx if you
+# switch exp to superbit.
+
+dataset:
+  samples: 200000
+  psf_fwhm: 0.5
+  exp: "ideal"
+  nse_sd: 1.0e-3
+  seed: 42
+  stamp_size: 53
+  pixel_size: 0.141
+  # The orbit term needs an anisotropic PSF -- rotating a circular Gaussian is
+  # the identity, and the trainer refuses the configuration rather than
+  # optimising a term that is identically zero.
+  apply_psf_shear: true
+  psf_shear_range: 0.05
+  # A nonzero applied shear makes the response terms local to the shear the
+  # network is actually trained on rather than only to g = 0. The g1/g2 labels
+  # follow: they are the observed shape, intrinsic composed with this shear.
+  base_shear_range: 0.02
+  backend: "jax-galsim"
+  generation: "inloop"
+  jax_fft_size: 256
+  jax_batch_size: 256
+  normalize_labels: true
+  normalize_images: false
+
+model:
+  process_psf: true
+  type: "d4-fork-like"
+  galaxy:
+    type: "d4cnn"
+  psf:
+    type: "d4cnn"
+  fusion: "transformer"
+  output_keys: ['g1', 'g2', 'hlr', 'flux']
+
+training:
+  epochs: 200
+  batch_size: 256          # must equal dataset.jax_batch_size for in-loop
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4
+  patience: 20
+  val_split: 0.2
+  eval_interval: 1
+  loss: "mse"
+  response:
+    # Start every weight at 0.0 for the control run, then enable one at a time.
+    # These magnitudes are a starting point, not a tuned result: pick them so
+    # each term's logged value is comparable to the supervised loss, not orders
+    # above it.
+    gamma_weight: 0.0        # try 1.0e-2
+    psf_weight: 0.0          # try 1.0e-1
+    shift_weight: 0.0        # try 1.0e-2
+    complement_weight: 0.0   # try 1.0e-3 -- the only bias-safe term
+    orbit_weight: 0.0        # try 1.0e-2
+    # The expensive terms (complement, orbit at K=4) do not need to run every
+    # step; raising this is the first thing to try if the step time hurts.
+    every_n_steps: 1
+    orbit_k: 2
+    gamma_target: "analytic"
+    report: true             # log the measured R matrices at every validation
+  # Depth augmentation. Leave null for a fixed-depth run; set a range to train
+  # across depths, and turn on conditioning to hand the network the depth by
+  # expressing both inputs in units of the sampled noise. Conditioning is
+  # mutually exclusive with dataset.normalize_images.
+  noise:
+    min_sd: null
+    max_sd: null
+    condition: false
+
+evaluation:
+  test_samples: 20000
+  seed: 58
+
+output:
+  model_name: "response_inloop"
+
+plotting:
+  plot: true
+
+comparison:
+  mcal: true
+  ngmix: true
+  psf_model: "gauss"
+  gal_model: "gauss"

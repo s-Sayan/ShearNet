@@ -16,6 +16,7 @@ from astropy.io import fits
 from tqdm import tqdm
 
 from .moments import get_admoms_ngmix_fit
+from .shear_algebra import compose_shear
 from .wcs import create_wcs_from_params
 
 from ..logging_utils import get_logger
@@ -166,9 +167,14 @@ def _generate_one(task, cfg):
     else:
         image = obj_obs.image
 
+    # The label is the shape of the object that was actually drawn: intrinsic
+    # shape composed with the applied shear. A no-op (exactly, not to rounding)
+    # for the default base_shear_g1 = base_shear_g2 = 0.
+    obs_g1, obs_g2 = compose_shear(g1, g2, cfg["base_shear_g1"], cfg["base_shear_g2"])
+
     available = {
-        "g1": g1,
-        "g2": g2,
+        "g1": obs_g1,
+        "g2": obs_g2,
         "hlr": hlr,
         "flux": flux,
         "psf_e1": obj_obs.psf.meta["e1"],
