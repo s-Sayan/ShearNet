@@ -65,6 +65,8 @@ import numpy as np
 
 from ..logging_utils import get_logger
 from .dataset import (
+    CONSTANT_FLUX,
+    CONSTANT_HLR,
     MARGIN,
     PSF_DATA_DIR,
     WCS_PARAMS,
@@ -418,8 +420,8 @@ def sample_truth(
             noise[i] = rng.normal(size=(cfg.npix, cfg.npix), scale=nse_sd)
 
         p["g1"][i], p["g2"][i] = g1_list[i], g2_list[i]
-        p["hlr"][i] = float(hlr_list[i]) if hlr_type == "catalog" else 0.5
-        p["flux"][i] = float(flux_list[i]) if flux_type == "catalog" else 1.0
+        p["hlr"][i] = float(hlr_list[i]) if hlr_type == "catalog" else CONSTANT_HLR
+        p["flux"][i] = float(flux_list[i]) if flux_type == "catalog" else CONSTANT_FLUX
         if base_shear_range:
             p["base_g1"][i] = rng.uniform(-base_shear_range, base_shear_range)
             p["base_g2"][i] = rng.uniform(-base_shear_range, base_shear_range)

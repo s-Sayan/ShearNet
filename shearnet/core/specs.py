@@ -90,8 +90,13 @@ class DatasetSpec:
             psf_shear_range=config.get("dataset.psf_shear_range", 0.05),
             psf_file_or_dir=config.get("dataset.psfex_model_file"),
             output_keys=tuple(config.get("model.output_keys")),
-            hlr_type=config.get("dataset.hlr_type"),
-            flux_type=config.get("dataset.flux_type"),
+            # Fall back to the dataclass defaults rather than to None: the
+            # packaged default config does not carry these keys (only the
+            # unit-test schema's galaxy.* block maps onto them), and passing
+            # None straight through made generate_dataset reject its own
+            # defaults.
+            hlr_type=config.get("dataset.hlr_type", "constant"),
+            flux_type=config.get("dataset.flux_type", "constant"),
             cosmos_cat_fname=config.get("catalog.cosmos_cat_fname"),
             compute_metacal=config.get("dataset.compute_metacal", False),
             # Fresh-noise training generates noise-free stamps here and re-draws
@@ -219,6 +224,9 @@ class TrainConfig:
     loss: str = "mse"
     ema_decay: Optional[float] = None
     dropout: float = 0.0
+    #: Channel widths of the ``d4cnn`` backbone inside ``d4-fork-like``. None
+    #: keeps the default (16, 32); Lin et al. (2026) use five layers at base 32.
+    branch_features: Optional[list] = field(default=None)
     resample_noise: bool = False
     # Per-step noise std in *model-input* units (physical nse_sd / image gal_std).
     # Not read from config -- computed in cli.train and injected before run().
@@ -248,6 +256,7 @@ class TrainConfig:
             loss=config.get("training.loss", "mse"),
             ema_decay=config.get("training.ema_decay", None),
             dropout=config.get("model.dropout", 0.0),
+            branch_features=config.get("model.branch_features", None),
             resample_noise=config.get("training.resample_noise", False),
         )
 

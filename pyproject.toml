@@ -54,6 +54,14 @@ dev = [
     "ipdb>=0.13",  # interactive debugger used by research scripts (research/shear_bias/**/main.py)
     "jupyter>=1.0",
 ]
+
+# AnaCal supplies the FPFS reference estimator for the research benchmarks and
+# nothing else, so it stays optional. Pinned at >=0.8: the harness calls
+# anacal.fpfs.process_image with a forced `detection` catalogue and reads the
+# fpfs1_de*_dg* response columns, and neither is guaranteed on earlier releases.
+calibration = [
+    "anacal>=0.8",
+]
 [project.urls]
 Homepage = "https://github.com/s-Sayan/ShearNet"
 Repository = "https://github.com/s-Sayan/ShearNet.git"
@@ -68,6 +76,11 @@ exclude = ["research*", "tests*", "notebooks*"]
 
 [tool.setuptools.package-data]
 shearnet = ["config/*.yaml", "py.typed"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: benchmark-harness tests that fit ngmix models (tens of seconds)",
+]
 
 [tool.black]
 line-length = 100

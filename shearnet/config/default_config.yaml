@@ -19,6 +19,10 @@ dataset:
   # historical population exactly.
   base_shear_range: 0.0
   seed: 42
+  # constant -> hlr 0.5 / flux 12258.97 for every object; catalog -> the HLR and
+  # FLUX columns of the COSMOS catalog below.
+  hlr_type: "constant"
+  flux_type: "constant"
   stamp_size: 53
   pixel_size: 0.141
   apply_psf_shear: false

@@ -498,6 +498,73 @@ def mp_fit_one_single(
     return data_list, resdict_list
 
 
+def build_runners(rng, psf_model="gauss", gal_model="gauss", ntry=20, Tguess=None):
+    """Construct the ngmix PSF/galaxy runners used by every fit in this module.
+
+    Factored out of :func:`mp_fit_one_single` so a plain (non-metacal) shape fit
+    and the metacal fit are guaranteed to use the *same* fitter, guesser and
+    tolerances. If they drifted apart, a comparison between an ngmix baseline
+    calibrated by metacal and the same baseline calibrated by a renderer
+    response would be measuring the fitter, not the calibration.
+    """
+    lm_pars = {"maxfev": 2000, "xtol": 5.0e-5, "ftol": 5.0e-5}
+    psf_lm_pars = {"maxfev": 4000, "xtol": 5.0e-5, "ftol": 5.0e-5}
+    prior = _get_priors(rng.randint(0, 2**31 - 1) if hasattr(rng, "randint") else 0)
+
+    fitter = ngmix.fitting.Fitter(model=gal_model, prior=prior, fit_pars=lm_pars)
+    guesser = ngmix.guessers.TPSFFluxAndPriorGuesser(rng=rng, T=Tguess, prior=prior)
+
+    if "em" in psf_model:
+        psf_fitter = ngmix.em.EMFitter(maxiter=50000, tol=1.0e-6)
+        psf_guesser = ngmix.guessers.GMixPSFGuesser(rng=rng, ngauss=get_em_ngauss(psf_model))
+    elif "coellip" in psf_model:
+        ngauss = get_coellip_ngauss(psf_model)
+        psf_fitter = ngmix.fitting.CoellipFitter(ngauss=ngauss, fit_pars=psf_lm_pars)
+        psf_guesser = ngmix.guessers.CoellipPSFGuesser(rng=rng, ngauss=ngauss)
+    elif psf_model == "gauss":
+        psf_fitter = ngmix.fitting.Fitter(model="gauss", fit_pars=psf_lm_pars)
+        psf_guesser = ngmix.guessers.SimplePSFGuesser(rng=rng)
+    else:
+        raise ValueError("psf_model must be one of emn, coellipn, or gauss")
+
+    psf_runner = ngmix.runners.PSFRunner(fitter=psf_fitter, guesser=psf_guesser, ntry=ntry)
+    runner = ngmix.runners.Runner(fitter=fitter, guesser=guesser, ntry=ntry)
+    return runner, psf_runner
+
+
+def fit_shapes(obslist, seed=42, psf_model="gauss", gal_model="gauss"):
+    """Fit each observation once, with no metacal, returning ``(e, flags)``.
+
+    This is the measurement half of ngmix on its own: it is what the shared
+    renderer-response protocol differentiates, so that the ngmix baseline can be
+    calibrated the same way the network and FPFS are and the three numbers mean
+    the same thing.
+
+    Returns ``(N, 2)`` ellipticities (NaN where the fit failed) and an ``(N,)``
+    failure mask.
+    """
+    rng = np.random.RandomState(seed)
+    Tguess = 4 * obslist[0]._jacobian.get_scale() ** 2
+    runner, psf_runner = build_runners(rng, psf_model=psf_model, gal_model=gal_model, Tguess=Tguess)
+    e = np.full((len(obslist), 2), np.nan)
+    flags = np.ones(len(obslist), dtype=bool)
+    for i, obs in enumerate(obslist):
+        try:
+            psf_runner.go(obs=obs.psf)
+            res = runner.go(obs=obs)
+        except Exception as exc:
+            logger.debug("ngmix shape fit failed on object %d: %s", i, exc)
+            continue
+        if res.get("flags", 1) != 0:
+            continue
+        value = res.get("e", res.get("g"))
+        if value is None or not np.all(np.isfinite(value)):
+            continue
+        e[i] = value
+        flags[i] = False
+    return e, flags
+
+
 def get_memory_usage(obj):
     """Print the memory usage (MB) of each attribute of an object, and the total."""
     from pympler import asizeof

@@ -110,6 +110,7 @@ def train_model_inloop(
     noise_range=None,
     noise_condition: bool = False,
     response_report: Optional[bool] = None,
+    branch_features=None,
 ):
     """Train with stamps generated inside the jitted step.
 
@@ -124,6 +125,8 @@ def train_model_inloop(
         nse_sd: pixel noise std in *image* units (before ``img_norm``).
         trace_psf_shear: keep the PSF-shear transform in the graph so the
             ``R^PSF`` tangent is available. Costs a transform; off by default.
+        branch_features: channel widths of the ``d4cnn`` backbone inside
+            ``d4-fork-like`` (``None`` keeps the default).
         response: optional response/orbit loss configuration. Its component
             means are logged each epoch; validation remains supervised-only.
         noise_range: optional per-batch uniform noise range ``(min_sd,max_sd)``.
@@ -190,7 +193,13 @@ def train_model_inloop(
             raise ValueError(f"loss_weights length {len(weights)} != output_keys length {n_out}")
 
     model = build_model(
-        nn, galaxy_type=galaxy_type, psf_type=psf_type, fusion=fusion, head=head, dropout=dropout
+        nn,
+        galaxy_type=galaxy_type,
+        psf_type=psf_type,
+        fusion=fusion,
+        head=head,
+        dropout=dropout,
+        branch_features=branch_features,
     )
     use_dropout = bool(dropout) and dropout > 0.0
     if use_dropout:

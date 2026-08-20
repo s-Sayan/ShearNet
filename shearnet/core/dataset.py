@@ -15,11 +15,10 @@ import numpy as np
 from astropy.io import fits
 from tqdm import tqdm
 
+from ..logging_utils import get_logger
 from .moments import get_admoms_ngmix_fit
 from .shear_algebra import compose_shear
 from .wcs import create_wcs_from_params
-
-from ..logging_utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -52,6 +51,13 @@ WCS_PARAMS = {
 
 MARGIN = 200  # Margins that I wanna use for PSF Rendering
 
+# Values used when hlr_type / flux_type is 'constant'. Defined here and imported
+# by the jax-galsim backend rather than repeated: they had drifted to hlr 0.5 /
+# flux 1.0 there, so the same config produced stamps 12259x fainter on one
+# backend than the other -- a different S/N regime, not a different renderer.
+CONSTANT_HLR = 0.5
+CONSTANT_FLUX = 12258.97
+
 # Directory holding the empirical PSFEx PSF files used for the ``superbit``
 # experiment. Defaults to the SuperBIT PSFs bundled with the repository, but can
 # be overridden with the ``SHEARNET_PSF_DIR`` environment variable to point at a
@@ -61,19 +67,23 @@ PSF_DATA_DIR = os.environ.get(
     os.path.join(SHEARNET_ROOT, "psf_data", "emp_psfs_best", "psfex-output"),
 )
 
-_cosmos_cat_cache = None
+# Keyed on (resolved path, seed): a process that renders a training population
+# and then a benchmark population must not be handed the training catalog for
+# the second call. A single unkeyed slot silently did exactly that, which is
+# the one failure mode that makes a held-out benchmark not held out.
+_cosmos_cat_cache = {}
 
 
 def _load_cosmos_cat(seed=42, cat_path=None):
     """Lazy-load the COSMOS catalog, with a random fallback for CI."""
-    global _cosmos_cat_cache
-    if _cosmos_cat_cache is not None:
-        return _cosmos_cat_cache
+    key = (os.path.abspath(cat_path) if cat_path else None, int(seed))
+    if key in _cosmos_cat_cache:
+        return _cosmos_cat_cache[key]
 
     if cat_path is not None and os.path.exists(cat_path):
         with fits.open(cat_path) as hdul:
-            _cosmos_cat_cache = hdul[1].data
-        return _cosmos_cat_cache
+            _cosmos_cat_cache[key] = hdul[1].data
+        return _cosmos_cat_cache[key]
 
     logger.warning(
         "WARNING: cosmos_catalog_train.fits not found. "
@@ -105,8 +115,8 @@ def _load_cosmos_cat(seed=42, cat_path=None):
         def __getitem__(self, key):
             return getattr(self, key)
 
-    _cosmos_cat_cache = _SyntheticCat()
-    return _cosmos_cat_cache
+    _cosmos_cat_cache[key] = _SyntheticCat()
+    return _cosmos_cat_cache[key]
 
 
 def _worker_init():
@@ -313,20 +323,31 @@ def generate_dataset(
     do_admom = bool(_requested & {"psf_e1", "psf_e2", "psf_T"})
 
     cfg = {
-        "psf_fwhm": psf_fwhm, "nse_sd": nse_sd, "type": type, "npix": npix, "scale": scale,
-        "seed": seed, "exp": exp, "apply_psf_shear": apply_psf_shear,
-        "psf_shear_range": psf_shear_range, "psf_files": psf_files,
-        "base_shear_g1": base_shear_g1, "base_shear_g2": base_shear_g2,
-        "return_psf": return_psf, "return_obs": return_obs, "output_keys": tuple(output_keys),
-        "compute_metacal": compute_metacal, "compute_psf_admom": do_admom,
+        "psf_fwhm": psf_fwhm,
+        "nse_sd": nse_sd,
+        "type": type,
+        "npix": npix,
+        "scale": scale,
+        "seed": seed,
+        "exp": exp,
+        "apply_psf_shear": apply_psf_shear,
+        "psf_shear_range": psf_shear_range,
+        "psf_files": psf_files,
+        "base_shear_g1": base_shear_g1,
+        "base_shear_g2": base_shear_g2,
+        "return_psf": return_psf,
+        "return_obs": return_obs,
+        "output_keys": tuple(output_keys),
+        "compute_metacal": compute_metacal,
+        "compute_psf_admom": do_admom,
         "add_noise": add_noise,
     }
 
     def _hlr(i):
-        return float(hlr_list[i]) if hlr_type == "catalog" else 0.5
+        return float(hlr_list[i]) if hlr_type == "catalog" else CONSTANT_HLR
 
     def _flux(i):
-        return float(flux_list[i]) if flux_type == "catalog" else 12258.97
+        return float(flux_list[i]) if flux_type == "catalog" else CONSTANT_FLUX
 
     tasks = [(i, float(g1_list[i]), float(g2_list[i]), _hlr(i), _flux(i)) for i in range(samples)]
 
@@ -360,8 +381,12 @@ def generate_dataset(
         try:
             with ctx.Pool(processes=nproc, initializer=_worker_init) as pool:
                 results = list(
-                    tqdm(pool.imap(worker, tasks, chunksize=chunk),
-                         total=samples, disable=_disable, mininterval=10)
+                    tqdm(
+                        pool.imap(worker, tasks, chunksize=chunk),
+                        total=samples,
+                        disable=_disable,
+                        mininterval=10,
+                    )
                 )
         finally:
             if _prev_platforms is None:
@@ -455,9 +480,7 @@ def _safe_draw(obj, npix, scale, method="auto"):
     try:
         return obj.drawImage(nx=npix, ny=npix, scale=scale, method=method).array
     except galsim.errors.GalSimFFTSizeError:
-        return obj.drawImage(
-            nx=npix, ny=npix, scale=scale, method="real_space"
-        ).array
+        return obj.drawImage(nx=npix, ny=npix, scale=scale, method="real_space").array
 
 
 def sim_func(

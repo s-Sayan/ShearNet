@@ -1,0 +1,57 @@
+# ForkLens baseline: the two-branch galaxy/PSF architecture, no equivariance
+# and no response terms. This is the control the other two are read against.
+#
+# Calibrated POST HOC, like every model in this comparison: the benchmark
+# measures de/dgamma by re-rendering the scene and dividing it out. Nothing in
+# training here knows about calibration. (Lin et al. 2026 calibrate D4CNN post
+# hoc too -- see the note in d4cnn.yaml -- so all three entries share one
+# calibration stage.)
+
+# ---------------------------------------------------------------------------
+# Matched-baseline dataset block. IDENTICAL in every configs/baselines/*.yaml:
+# if these three sections differ between two runs, the comparison measures the
+# simulation rather than the architecture. Change them together or not at all.
+# ---------------------------------------------------------------------------
+dataset:
+  samples: 200000
+  seed: 42
+  psf_fwhm: 0.5
+  exp: "ideal"
+  nse_sd: 1.0e-3
+  stamp_size: 53
+  pixel_size: 0.141
+  hlr_type: "constant"
+  flux_type: "constant"
+  apply_psf_shear: true
+  psf_shear_range: 0.05
+  base_shear_range: 0.0
+  backend: "jax-galsim"
+  generation: "upfront"
+  jax_fft_size: 256
+  jax_batch_size: 256
+  normalize_labels: true
+  normalize_images: false
+
+training:
+  epochs: 200
+  batch_size: 256
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4
+  patience: 20
+  val_split: 0.2
+  eval_interval: 1
+  loss: "mse"
+
+model:
+  process_psf: true
+  type: "fork-like"
+  galaxy:
+    type: "research_backed"
+  psf:
+    type: "forklens_psf"
+  fusion: "concat"
+  output_keys: ['g1', 'g2', 'hlr', 'flux']
+  gap: false
+
+output:
+  model_name: "baseline_forklens"

@@ -922,9 +922,9 @@ class D4ForkLike(nn.Module):
     psf_features: tuple = (16, 32)
     d_model: int = 64
     num_heads: int = 4
-    head: str = "gap"          # 'gap' (fixed Gaussian window) | 'attention'
-    num_pool_heads: int = 4    # number of attention pooling maps (head='attention')
-    dropout: float = 0.0       # spatial-dropout rate for a 'research_backed' branch
+    head: str = "gap"  # 'gap' (fixed Gaussian window) | 'attention'
+    num_pool_heads: int = 4  # number of attention pooling maps (head='attention')
+    dropout: float = 0.0  # spatial-dropout rate for a 'research_backed' branch
 
     def _branch_map(self, branch, features, x, deterministic):
         """Run the chosen spatial backbone over the orbit and return its map.
@@ -944,12 +944,9 @@ class D4ForkLike(nn.Module):
                 x, deterministic=deterministic, return_spatial=True
             )
         if branch == "forklens_psf":
-            return ForkLensPSFNet()(
-                x, deterministic=deterministic, return_spatial=True
-            )
+            return ForkLensPSFNet()(x, deterministic=deterministic, return_spatial=True)
         raise ValueError(
-            f"Unknown D4 branch {branch!r}; choose from "
-            f"{sorted(D4_BRANCH_BACKBONES)}"
+            f"Unknown D4 branch {branch!r}; choose from " f"{sorted(D4_BRANCH_BACKBONES)}"
         )
 
     def _fuse(self, galaxy_map, psf_map, deterministic):
@@ -961,9 +958,7 @@ class D4ForkLike(nn.Module):
         # 'concat': summarise the PSF as a global descriptor and broadcast it
         # onto every galaxy spatial location, keeping the galaxy spatial frame.
         psf_global = jnp.mean(psf_map, axis=(1, 2), keepdims=True)
-        psf_global = jnp.broadcast_to(
-            psf_global, galaxy_map.shape[:3] + (psf_map.shape[-1],)
-        )
+        psf_global = jnp.broadcast_to(psf_global, galaxy_map.shape[:3] + (psf_map.shape[-1],))
         return jnp.concatenate([galaxy_map, psf_global], axis=-1)
 
     @nn.compact
@@ -990,7 +985,9 @@ class D4ForkLike(nn.Module):
         # Galaxy branch is created first, then PSF (preserves 'd4cnn' checkpoint
         # param naming). Any square-map backbone stays exactly spin-2 equivariant
         # once wrapped in the Reynolds average below.
-        gal_maps = self._branch_map(self.galaxy_branch, self.galaxy_features, gal_orbit, deterministic)
+        gal_maps = self._branch_map(
+            self.galaxy_branch, self.galaxy_features, gal_orbit, deterministic
+        )
         psf_maps = self._branch_map(self.psf_branch, self.psf_features, psf_orbit, deterministic)
         fused = self._fuse(gal_maps, psf_maps, deterministic)  # (8*batch, H, W, C)
 
@@ -1020,13 +1017,14 @@ class D4ForkLike(nn.Module):
             # rotate with the maps and a spatial sum is rotation-invariant).
             K = self.num_pool_heads
             ctx = nn.gelu(nn.Dense(self.d_model, name="pool_ctx")(psi_inv))
-            logits = nn.Dense(K, name="pool_logits")(ctx)          # (B, H, W, K)
+            logits = nn.Dense(K, name="pool_logits")(ctx)  # (B, H, W, K)
             attn = jax.nn.softmax(logits.reshape(batch, H * W, K), axis=1)
             attn = attn.reshape(batch, H, W, K)
 
             def _pool(psi):
                 # (B,H,W,C) weighted by (B,H,W,K) -> (B, K*C)
                 return jnp.einsum("bhwc,bhwk->bkc", psi, attn).reshape(batch, -1)
+
         else:
             # 'gap': original single fixed D4-symmetric Gaussian window + GAP.
             window = _d4_gaussian_window(H)[None, :, :, None]
@@ -1124,7 +1122,15 @@ def is_fork_model(nn):
     return nn in FORK_MODELS
 
 
-def build_model(nn, galaxy_type="cnn", psf_type="cnn", fusion="concat", head="gap", dropout=0.0):
+def build_model(
+    nn,
+    galaxy_type="cnn",
+    psf_type="cnn",
+    fusion="concat",
+    head="gap",
+    dropout=0.0,
+    branch_features=None,
+):
     """Instantiate a top-level architecture from its ``nn`` name.
 
     The two-branch ``fork-like`` and ``d4-fork-like`` models are constructed
@@ -1150,6 +1156,7 @@ def build_model(nn, galaxy_type="cnn", psf_type="cnn", fusion="concat", head="ga
     if nn == "fork-like":
         return ForkLike(galaxy_model_type=galaxy_type, psf_model_type=psf_type, fusion=fusion)
     if nn == "d4-fork-like":
+
         def _d4_branch(t):
             # ``build_model``'s generic default is 'cnn'; treat that (and None)
             # as the smooth 'd4cnn' backbone so bare d4-fork-like construction
@@ -1157,10 +1164,17 @@ def build_model(nn, galaxy_type="cnn", psf_type="cnn", fusion="concat", head="ga
             # through; a typo passes through too and raises in ``_branch_map``.
             return "d4cnn" if t in (None, "cnn") else t
 
+        # branch_features sizes the d4cnn backbone. Lin et al. (2026) use five
+        # layers at base width 32; the default here is the two-layer (16, 32)
+        # proof-of-concept, so a baseline meant to reproduce their numbers has
+        # to say so rather than inherit a smaller network silently.
+        widths = tuple(branch_features) if branch_features else (16, 32)
         return D4ForkLike(
             fusion=fusion,
             galaxy_branch=_d4_branch(galaxy_type),
             psf_branch=_d4_branch(psf_type),
+            galaxy_features=widths,
+            psf_features=widths,
             head=head or "gap",
             dropout=dropout or 0.0,
         )

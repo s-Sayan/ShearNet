@@ -1,0 +1,94 @@
+# D4CNN x AnaCal baseline -- Lin, Li, Li, Cao, Liu & Wang (2026), arXiv:2603.19046.
+#
+# CALIBRATION IS POST HOC, settled by the paper. Section 2.1.2 and Figure 1:
+# the response is the model gradient from backpropagation contracted with the
+# ANALYTIC pixel shear response of the re-smoothed image (their Eq. 13-14),
+#
+#     R_ij = (de_i / df_h) . (df_h / dgamma_j),     gamma_i = e_i / R_i,
+#
+# applied to the trained model at measurement time. The training loss is plain
+# Huber (delta = 1e-3); nothing in it knows about calibration. So this baseline
+# is trained normally and calibrated by the benchmark, exactly like every other
+# entry in the comparison.
+#
+# ------------------------------------------------------------------------
+# THE INPUT DOMAIN IS NOT THE SAME AS SHEARNET'S -- read before comparing.
+# ------------------------------------------------------------------------
+# Their network sees f_h(x), the AnaCal linear observable of their Eq. 3:
+# deconvolve by the PSF, subtract a noise field deconvolved by the 90-degree
+# rotated PSF, re-smooth with a Gaussian. It is PSF-homogenised BEFORE the
+# network -- which is why their model needs no PSF branch, and why its PSF
+# leakage is small almost by construction. ShearNet takes the observed stamp
+# and the PSF stamp and is never deconvolved.
+#
+# So "D4CNN on ShearNet inputs" (what this config trains) and "the D4CNN of the
+# paper" are different models, and only the first is a fair architecture-only
+# comparison. shearnet.methods.anacal.resmooth implements their Eq. 3 if you
+# want the second; wiring it as a training input transform is not done here,
+# because a half-applied transform (eval only) is worse than none.
+#
+# Also not matched: they train on the DC1 catalogue through xlens with LSST
+# 10-year coadd depth, 64x64 stamps, orthogonal galaxy pairs, and brightness
+# normalisation for bright galaxies. The dataset block below is ShearNet's, and
+# is byte-identical to configs/baselines/forklens.yaml so the two models differ
+# only in architecture.
+
+# ---------------------------------------------------------------------------
+# Matched-baseline dataset block. IDENTICAL in every configs/baselines/*.yaml:
+# if these sections differ between two runs, the comparison measures the
+# simulation rather than the architecture. Change them together or not at all.
+# ---------------------------------------------------------------------------
+dataset:
+  samples: 200000
+  seed: 42
+  psf_fwhm: 0.5
+  exp: "ideal"
+  nse_sd: 1.0e-3
+  stamp_size: 53
+  pixel_size: 0.141
+  hlr_type: "constant"
+  flux_type: "constant"
+  apply_psf_shear: true
+  psf_shear_range: 0.05
+  base_shear_range: 0.0
+  backend: "jax-galsim"
+  generation: "upfront"
+  jax_fft_size: 256
+  jax_batch_size: 256
+  normalize_labels: true
+  normalize_images: false
+
+model:
+  process_psf: true
+  type: "d4-fork-like"
+  galaxy:
+    type: "d4cnn"
+  psf:
+    type: "d4cnn"
+  # Paper Table 1: five layers, base channel width 32, 3x3 kernels. The package
+  # default is the two-layer (16, 32) proof of concept, so this has to be said
+  # explicitly or the baseline is quietly a smaller network.
+  branch_features: [32, 32, 32, 32, 32]
+  fusion: "transformer"
+  head: "gap"
+  output_keys: ['g1', 'g2', 'hlr', 'flux']
+  gap: false
+
+# Paper Table 1, as closely as this trainer allows. Two knowing differences:
+# their scheduler is ReduceLROnPlateau (factor 0.316, patience 5) with early
+# stopping at lr < 1e-5, where this trainer uses warmup + cosine decay and
+# patience on the validation loss; and their batch is 500 over a 10,000-galaxy
+# training set, which at ShearNet's sample count would be a very different
+# number of steps.
+training:
+  epochs: 200
+  batch_size: 256
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4
+  patience: 20
+  val_split: 0.2
+  eval_interval: 1
+  loss: "huber"       # paper: Huber with delta = 1e-3
+
+output:
+  model_name: "baseline_d4cnn"

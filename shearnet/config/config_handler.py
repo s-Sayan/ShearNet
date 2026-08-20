@@ -115,6 +115,11 @@ class Config:
         "image.backend": "dataset.backend",
         "train.jax_fft_size": "dataset.jax_fft_size",
         "train.jax_batch_size": "dataset.jax_batch_size",
+        "train.base_shear_range": "dataset.base_shear_range",
+        "train.apply_psf_shear": "dataset.apply_psf_shear",
+        "train.psf_shear_range": "dataset.psf_shear_range",
+        "train.response": "training.response",
+        "train.noise": "training.noise",
     }
 
     def _normalize_schema(self) -> None:

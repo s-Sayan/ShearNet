@@ -48,7 +48,14 @@ def loss_fn(state, params, images, labels, gap, weights, return_per_key=False):
 
 
 def fork_loss_fn(
-    state, params, galaxy_images, psf_images, labels, output_keys, gap, weights,
+    state,
+    params,
+    galaxy_images,
+    psf_images,
+    labels,
+    output_keys,
+    gap,
+    weights,
     return_per_key=False,
 ):
     """Weighted MSE loss for the two-branch ``fork-like`` model.
@@ -144,6 +151,7 @@ def train_model(
     dropout=0.0,
     resample_noise=False,
     resample_noise_sd=0.0,
+    branch_features=None,
 ):
     """Train a ShearNet model with validation and early stopping.
 
@@ -186,6 +194,9 @@ def train_model(
             weights with this decay (e.g. ``0.999``) and use the averaged
             weights for validation *and* for the saved checkpoint. When ``None``
             (default) training is exactly as before -- no EMA is maintained.
+        branch_features: channel widths of the ``d4cnn`` backbone inside
+            ``d4-fork-like``. ``None`` keeps the default ``(16, 32)``; Lin et al.
+            (2026) use five layers at base width 32.
         dropout: Spatial-dropout rate for the ``research_backed`` backbone (used
             as a ``d4-fork-like`` branch or the single-branch model). ``0.0``
             (default) adds no dropout and leaves training byte-for-byte as before;
@@ -249,7 +260,13 @@ def train_model(
         ), f"loss_weights length {len(weights)} != output_keys length {n_out}"
 
     model = build_model(
-        nn, galaxy_type=galaxy_type, psf_type=psf_type, fusion=fusion, head=head, dropout=dropout
+        nn,
+        galaxy_type=galaxy_type,
+        psf_type=psf_type,
+        fusion=fusion,
+        head=head,
+        dropout=dropout,
+        branch_features=branch_features,
     )
 
     # Dropout is opt-in (rate > 0). Only then does the model contain an
@@ -292,8 +309,10 @@ def train_model(
     use_ema = ema_decay is not None
     ema_params = state.params if use_ema else None
     if use_ema:
-        logger.info(f"Weight EMA enabled (decay={ema_decay}); "
-                    "validation and checkpoint use the averaged weights.")
+        logger.info(
+            f"Weight EMA enabled (decay={ema_decay}); "
+            "validation and checkpoint use the averaged weights."
+        )
 
         @jax.jit
         def _ema_update(ema, live):
@@ -337,8 +356,13 @@ def train_model(
             def _objective(params):
                 if use_dropout:
                     preds = state.apply_fn(
-                        params, gal, psf, output_keys, gap=gap,
-                        deterministic=False, rngs={"dropout": dropout_rng},
+                        params,
+                        gal,
+                        psf,
+                        output_keys,
+                        gap=gap,
+                        deterministic=False,
+                        rngs={"dropout": dropout_rng},
                     )
                 else:
                     preds = state.apply_fn(params, gal, psf, output_keys, gap=gap)
@@ -377,8 +401,12 @@ def train_model(
                 # shapes disagree for any run with more than two output keys.
                 if use_dropout:
                     preds = state.apply_fn(
-                        params, gal, output_keys=output_keys, gap=gap,
-                        deterministic=False, rngs={"dropout": dropout_rng},
+                        params,
+                        gal,
+                        output_keys=output_keys,
+                        gap=gap,
+                        deterministic=False,
+                        rngs={"dropout": dropout_rng},
                     )
                 else:
                     preds = state.apply_fn(params, gal, output_keys=output_keys, gap=gap)
@@ -436,8 +464,12 @@ def train_model(
             else:
                 step_dropout_rng = None
             state, loss = _train_batch(
-                state, batch_galaxy_images, batch_psf_images, batch_labels,
-                step_dropout_rng, noise_rng,
+                state,
+                batch_galaxy_images,
+                batch_psf_images,
+                batch_labels,
+                step_dropout_rng,
+                noise_rng,
             )
             if use_ema:
                 ema_params = _ema_update(ema_params, state.params)
@@ -501,8 +533,7 @@ def train_model(
             else:
                 patience_counter += 1
                 logger.info(
-                    "No improvement in validation loss. "
-                    f"Patience: {patience_counter}/{patience}"
+                    "No improvement in validation loss. " f"Patience: {patience_counter}/{patience}"
                 )
 
             if patience_counter >= patience:

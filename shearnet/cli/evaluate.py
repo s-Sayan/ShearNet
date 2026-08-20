@@ -179,6 +179,7 @@ def load_model(config, gal_images, psf_images):
         psf_type=config["psf_type"],
         fusion=config.get("fusion", "concat"),
         head=config.get("head", "gap"),
+        branch_features=config.get("branch_features", None),
     )
 
     output_keys = tuple(config["output_keys"])

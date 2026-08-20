@@ -696,6 +696,7 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
         loss=config.get("training.loss", "mse"),
         ema_decay=config.get("training.ema_decay", None),
         dropout=config.get("model.dropout", 0.0),
+        branch_features=config.get("model.branch_features", None),
         response=response,
         noise_range=noise_range,
         noise_condition=noise_condition,
