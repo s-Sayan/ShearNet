@@ -1,0 +1,78 @@
+# The comparison: every estimator on the realistic SuperBIT task.
+#
+# WHY THIS IS THE ARCHITECTURE-ONLY COMPARISON, not a reproduction of
+# Lin et al. (2026). Their D4CNN eats f_h -- the PSF-deconvolved, re-smoothed
+# AnaCal linear observable (their Eq. 3) -- under an explicitly stated
+# idealisation: "we assume a perfectly known PSF" (Sec. 5), with PSF model
+# error deferred to future work as an additive bias alpha * e_PSF,
+# alpha ~ 0.01-0.05.
+#
+# SuperBIT does not hand you a perfectly known PSF. It hands you a PSFEx model
+# fitted to already-pixelised stars, varying across the focal plane, which is
+# why this repo draws superbit stamps with method='no_pixel' -- the fitted
+# profile already carries the pixel response. Dividing by p(k) in that setting
+# amplifies exactly the modes where the PSF model is least trustworthy, and the
+# resulting bias belongs to the deconvolution, not to the estimator.
+#
+# So on this task the input contract IS the scientific question. A deployed
+# SuperBIT pipeline receives the observed stamp and a PSFEx model; it does not
+# receive a clean deconvolved image. Feeding every estimator the observed stamp
+# is therefore the deployment-relevant comparison, and the one this config runs.
+# The f_h reproduction (shearnet.methods.anacal.resmooth implements Eq. 3) is a
+# separate, LSST-like experiment -- worth doing, but it answers a different
+# question and must not be mixed into this table.
+
+meta:
+  model_name: REPLACE_ME          # the trained run to benchmark
+
+paths:
+  root: REPLACE_ME                # where results are written
+  psfex_model_file: psf_data/emp_psfs_best/psfex-output
+  train_catalog: REPLACE_ME
+  eval_catalog:  REPLACE_ME       # MUST differ from train_catalog
+
+eval:
+  seed: 150                       # must differ from the training dataset.seed
+  n_obs: 20000                    # see the note on precision below
+  gal_model: gauss
+
+  bias:
+    # All three measured under one response protocol; ngmix additionally
+    # reports metacal and FPFS additionally reports AnaCal's analytic de/dg,
+    # so the protocol carries two independent checks.
+    estimators: [shearnet, ngmix, fpfs]
+    metacal: true
+    fpfs_cross_check: true
+    # 0.52 arcsec is the ideal-PSF default. On SuperBIT PSFEx PSFs a 64-object
+    # scan put |m| < 4e-3 for anything >= 0.45, with the smallest error bar at
+    # 0.80 (larger smoothing, lower response, less noise). Scan it properly on
+    # the first production run rather than inheriting this number.
+    fpfs_sigma_shapelets: 0.52
+    shear_true: 0.02
+    component: 0
+    metacal_step: 0.01
+    n_jackknife: 20
+    c_convention: shearnet        # 'lin2026' to sit next to their Eq. 23
+    resample: jackknife           # 'bootstrap' to match their 20x bootstrap
+    output: benchmarking/m/superbit_comparison.npz
+
+  leakage:
+    # R^PSF is measured by finite-differencing the PSF shear, which needs the
+    # jax-galsim backend's explicit psf_g1/psf_g2 parameters.
+    estimators: [shearnet, fpfs]
+    fpfs_sigma_shapelets: 0.52
+    n_jackknife: 20
+    psf_response_step: 0.01
+    output: benchmarking/psf_leakage/superbit_comparison.npz
+
+  timing:
+    n_warmup: 20
+    shearnet_batch_size: 512
+    output: timing/superbit_comparison.npz
+
+# PRECISION. A 64-object SuperBIT run gave sigma(m) ~ 2e-2, so sigma(m) scales
+# as ~0.16 / sqrt(N). For |m| < 1e-3 you need N ~ 2.6e4 as a floor and ~1e5+ to
+# say it convincingly. COST: the SuperBIT renderer is ~40 ms/stamp on one core
+# and dominates (FPFS is ~4.5 ms); a bias run costs 10 population renders
+# regardless of estimator count, so N = 1e5 is ~11 core-hours -- set
+# dataset.nproc on the training config to parallelise the render.

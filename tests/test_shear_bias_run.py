@@ -122,6 +122,31 @@ def test_bias_task_reports_every_estimator_with_errors(trained_run):
     # FPFS on a known applied shear should land near zero even at N=16, because
     # the pair-matched estimator cancels shape noise.
     assert abs(result["fpfs_m"]) < 0.05, result["fpfs_m"]
+    assert result["exp"] == "ideal"
+
+
+def test_every_estimator_shares_one_response_pass(trained_run, monkeypatch):
+    """The +/- re-renders are identical across estimators; render them once.
+
+    Rendering per estimator multiplies the dominant cost by the number of table
+    columns. At SuperBIT's ~40 ms/stamp that is the difference between a 36 and
+    a 142 core-hour run.
+    """
+    import shearnet.benchmarking as bm
+
+    benchmark, training = trained_run
+    calls = {"n": 0}
+    real = bm.TrainingMatchedRenderer.render
+
+    def counting(self, *a, **kw):
+        calls["n"] += 1
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(bm.TrainingMatchedRenderer, "render", counting)
+    harness._run_bias(benchmark, training, ("shearnet", "fpfs"))
+    # 2 populations (via shear_pair) + 2 axes x 2 signs x 2 populations = 10,
+    # independent of how many estimators are in the table.
+    assert calls["n"] == 10, calls["n"]
 
 
 def test_bias_task_writes_a_readable_result(trained_run, tmp_path):

@@ -142,50 +142,61 @@ def _flatten(prefix: str, bias, extra=None) -> dict:
 # ----------------------------------------------------------------------
 # per-estimator measurement
 # ----------------------------------------------------------------------
-def _shearnet_shapes(predictor, renderer, stamps, *, samples, seed, shear, component, step):
-    """Network ellipticity plus its renderer response, on the measured population."""
-    measure = predictor.shear_measure()
-    e = measure(stamps.galaxy_images, stamps.psf_images)
-    base = [0.0, 0.0]
-    base[component] = shear
-    dedg = renderer_shear_response(
-        renderer.response_renderer(
-            samples, seed=seed, base_shear_g1=base[0], base_shear_g2=base[1]
-        ),
-        measure,
-        step=step,
-    )
-    return ShapeMeasurement(e=e, dedg=dedg)
+def _measure_callables(renderer, estimators, *, seed, psf_model, gal_model, fpfs_kw, predictor):
+    """``{name: measure(galaxy, psf) -> (N, 2)}`` for the requested estimators.
 
-
-def _ngmix_shapes(renderer, stamps, *, samples, seed, shear, component, step, psf_model, gal_model):
-    """ngmix ellipticity with the *same* renderer response protocol."""
+    One callable per estimator, so the shared response pass can hand every one
+    of them the same rendered stamps instead of each re-rendering the
+    population for itself.
+    """
     from shearnet.methods.ngmix import fit_shapes
 
-    def measure(galaxy, psf):
-        obs = renderer.observations_from_stamps(galaxy, psf)
-        return fit_shapes(obs, seed=seed, psf_model=psf_model, gal_model=gal_model)[0]
+    measures = {}
+    if "shearnet" in estimators:
+        measures["shearnet"] = predictor.shear_measure()
+    if "ngmix" in estimators:
 
-    e, flags = fit_shapes(
-        (
-            stamps.observations
-            if stamps.observations is not None
-            else renderer.observations_from_stamps(stamps.galaxy_images, stamps.psf_images)
-        ),
-        seed=seed,
-        psf_model=psf_model,
-        gal_model=gal_model,
-    )
-    base = [0.0, 0.0]
-    base[component] = shear
-    dedg = renderer_shear_response(
-        renderer.response_renderer(
-            samples, seed=seed, base_shear_g1=base[0], base_shear_g2=base[1]
-        ),
-        measure,
-        step=step,
-    )
-    return ShapeMeasurement(e=e, dedg=dedg, flags=flags)
+        def ngmix_measure(galaxy, psf):
+            obs = renderer.observations_from_stamps(galaxy, psf)
+            return fit_shapes(obs, seed=seed, psf_model=psf_model, gal_model=gal_model)[0]
+
+        measures["ngmix"] = ngmix_measure
+    if "fpfs" in estimators:
+
+        def fpfs_measure(galaxy, psf):
+            return fpfs_shapes(measure_fpfs(galaxy, psf, **fpfs_kw)).e
+
+        measures["fpfs"] = fpfs_measure
+    return measures
+
+
+def _shared_shear_responses(renderer, measures, *, samples, seed, base_shear, step):
+    """``de/dgamma`` for every estimator, rendering each offset exactly ONCE.
+
+    The four re-renders that make up a central difference are identical across
+    estimators -- only the measurement differs -- so rendering them per
+    estimator multiplies the dominant cost by the number of columns in the
+    table. At SuperBIT's ~40 ms/stamp that is the difference between 36 and 142
+    core-hours for a 400k run, which is the difference between running the
+    comparison and not.
+
+    Returns ``{name: (N, 2, 2)}`` with ``[:, a, b] = de_a / dgamma_b``.
+    """
+    columns = {name: [None, None] for name in measures}
+    for axis in (0, 1):
+        measured = {name: {} for name in measures}
+        for sign in (1.0, -1.0):
+            offset = list(base_shear)
+            offset[axis] += sign * step
+            stamps = renderer.render(
+                samples, seed=seed, base_shear_g1=offset[0], base_shear_g2=offset[1]
+            )
+            for name, measure in measures.items():
+                value = np.asarray(measure(stamps.galaxy_images, stamps.psf_images), dtype=float)
+                measured[name][sign] = value[:, :2]
+        for name in measures:
+            columns[name][axis] = (measured[name][1.0] - measured[name][-1.0]) / (2.0 * step)
+    return {name: np.stack(cols, axis=-1) for name, cols in columns.items()}
 
 
 def _ngmix_metacal_shapes(observations, *, seed, psf_model, gal_model, step):
@@ -220,18 +231,6 @@ def _ngmix_metacal_shapes(observations, *, seed, psf_model, gal_model, step):
     return ShapeMeasurement(e=e, dedg=dedg, flags=flags)
 
 
-def _fpfs_shapes(stamps, *, pixel_scale, noise_sd, sigma_shapelets):
-    """FPFS with AnaCal's own analytic response."""
-    catalogue = measure_fpfs(
-        stamps.galaxy_images,
-        stamps.psf_images,
-        pixel_scale=pixel_scale,
-        noise_variance=max(noise_sd, 1e-12) ** 2,
-        sigma_shapelets=sigma_shapelets,
-    )
-    return fpfs_shapes(catalogue)
-
-
 # ----------------------------------------------------------------------
 # tasks
 # ----------------------------------------------------------------------
@@ -246,16 +245,27 @@ def _run_bias(benchmark: Config, training: Config, estimators) -> dict:
     njac = int(section.get("n_jackknife", 20))
     psf_model = section.get("psf_model", "gauss")
     gal_model = _eval(benchmark, "gal_model", "gauss")
+    c_convention = section.get("c_convention", "shearnet")
+    resample = section.get("resample", "jackknife")
     needs_obs = "ngmix" in estimators
+    noise_sd = _noise_sd(training)
+    fpfs_kw = dict(
+        pixel_scale=renderer.spec.scale,
+        noise_variance=max(noise_sd, 1e-12) ** 2,
+        sigma_shapelets=float(section.get("fpfs_sigma_shapelets", 0.52)),
+    )
 
     logger.info(
-        "bias benchmark: %d objects, seed %d, shear %+.4f on g%d, backend %s, generation %s",
+        "bias benchmark: %d objects, seed %d, shear %+.4f on g%d, backend %s, "
+        "generation %s, exp %s, estimators %s",
         samples,
         seed,
         shear,
         component + 1,
         renderer.spec.backend,
         renderer.spec.generation,
+        renderer.spec.exp,
+        list(estimators),
     )
     plus, minus = renderer.shear_pair(
         samples, seed=seed, shear=shear, component=component, observations=needs_obs
@@ -263,126 +273,108 @@ def _run_bias(benchmark: Config, training: Config, estimators) -> dict:
     if plus.psf_images is None:
         raise RuntimeError("Training-matched benchmarks require the PSF channel")
 
+    predictor = (
+        SavedModelPredictor(_model_name(benchmark), config=training)
+        if "shearnet" in estimators
+        else None
+    )
+    measures = _measure_callables(
+        renderer,
+        estimators,
+        seed=seed,
+        psf_model=psf_model,
+        gal_model=gal_model,
+        fpfs_kw=fpfs_kw,
+        predictor=predictor,
+    )
+
     result = {
         "backend": renderer.spec.backend,
         "generation": renderer.spec.generation,
+        "exp": renderer.spec.exp,
         "seed": seed,
         "samples": samples,
         "shear_true": shear,
         "component": component,
         "response_step": step,
+        "c_convention": c_convention,
+        "resample": resample,
         "estimators": np.asarray(list(estimators), dtype="U16"),
     }
     # Stratify on measured flux, which is what the paper's binned tables use.
-    flux = np.sum(plus.galaxy_images, axis=(1, 2))
-    common = dict(component=component, njac=njac, bin_values=flux)
+    common = dict(
+        component=component,
+        njac=njac,
+        c_convention=c_convention,
+        resample=resample,
+        bin_values=np.sum(plus.galaxy_images, axis=(1, 2)),
+    )
 
-    if "shearnet" in estimators:
-        predictor = SavedModelPredictor(_model_name(benchmark), config=training)
-        kw = dict(samples=samples, seed=seed, component=component, step=step)
+    # One response pass per population, shared by every estimator.
+    shapes = {name: {} for name in measures}
+    for label, stamps, sign in (("plus", plus, 1.0), ("minus", minus, -1.0)):
+        base = [0.0, 0.0]
+        base[component] = sign * shear
+        values = {
+            name: np.asarray(measure(stamps.galaxy_images, stamps.psf_images), dtype=float)[:, :2]
+            for name, measure in measures.items()
+        }
+        responses = _shared_shear_responses(
+            renderer, measures, samples=samples, seed=seed, base_shear=base, step=step
+        )
+        for name in measures:
+            flags = ~np.isfinite(values[name]).all(axis=1)
+            shapes[name][label] = ShapeMeasurement(
+                e=values[name], dedg=responses[name], flags=flags
+            )
+
+    for name in measures:
         result.update(
             _flatten(
-                "shearnet",
-                paired_bias(
-                    _shearnet_shapes(predictor, renderer, plus, shear=shear, **kw),
-                    _shearnet_shapes(predictor, renderer, minus, shear=-shear, **kw),
-                    shear,
-                    **common,
-                ),
+                name, paired_bias(shapes[name]["plus"], shapes[name]["minus"], shear, **common)
             )
         )
 
-    if "ngmix" in estimators:
-        kw = dict(
-            samples=samples,
-            seed=seed,
-            component=component,
-            step=step,
-            psf_model=psf_model,
-            gal_model=gal_model,
-        )
+    # FPFS additionally carries AnaCal's own analytic de/dg. Reporting it beside
+    # the shared protocol is a free cross-check on the protocol itself: the two
+    # must agree, and if they do not every other column is suspect.
+    if "fpfs" in estimators and section.get("fpfs_cross_check", True):
+        analytic = {}
+        for label, stamps in (("plus", plus), ("minus", minus)):
+            analytic[label] = fpfs_shapes(
+                measure_fpfs(stamps.galaxy_images, stamps.psf_images, **fpfs_kw)
+            )
         result.update(
             _flatten(
-                "ngmix",
-                paired_bias(
-                    _ngmix_shapes(renderer, plus, shear=shear, **kw),
-                    _ngmix_shapes(renderer, minus, shear=-shear, **kw),
-                    shear,
-                    **common,
-                ),
+                "fpfs_analytic",
+                paired_bias(analytic["plus"], analytic["minus"], shear, **common),
             )
         )
-        if section.get("metacal", True):
-            result.update(
-                _flatten(
-                    "ngmix_metacal",
-                    paired_bias(
-                        _ngmix_metacal_shapes(
-                            plus.observations,
-                            seed=seed + 1,
-                            psf_model=psf_model,
-                            gal_model=gal_model,
-                            step=step,
-                        ),
-                        _ngmix_metacal_shapes(
-                            minus.observations,
-                            seed=seed + 2,
-                            psf_model=psf_model,
-                            gal_model=gal_model,
-                            step=step,
-                        ),
-                        shear,
-                        **common,
+
+    if "ngmix" in estimators and section.get("metacal", True):
+        result.update(
+            _flatten(
+                "ngmix_metacal",
+                paired_bias(
+                    _ngmix_metacal_shapes(
+                        plus.observations,
+                        seed=seed + 1,
+                        psf_model=psf_model,
+                        gal_model=gal_model,
+                        step=step,
                     ),
-                )
-            )
-
-    if "fpfs" in estimators:
-        sigma = float(section.get("fpfs_sigma_shapelets", 0.52))
-        noise_sd = _noise_sd(training)
-        kw = dict(pixel_scale=renderer.spec.scale, noise_sd=noise_sd, sigma_shapelets=sigma)
-        result.update(
-            _flatten(
-                "fpfs",
-                paired_bias(_fpfs_shapes(plus, **kw), _fpfs_shapes(minus, **kw), shear, **common),
+                    _ngmix_metacal_shapes(
+                        minus.observations,
+                        seed=seed + 2,
+                        psf_model=psf_model,
+                        gal_model=gal_model,
+                        step=step,
+                    ),
+                    shear,
+                    **common,
+                ),
             )
         )
-        if section.get("fpfs_cross_check", True):
-            # The same FPFS ellipticities, calibrated by the renderer protocol
-            # instead of AnaCal's analytic response. The two must agree; if they
-            # do not, the protocol is wrong and every other column is suspect.
-            def fpfs_measure(galaxy, psf):
-                return fpfs_shapes(
-                    measure_fpfs(
-                        galaxy,
-                        psf,
-                        pixel_scale=renderer.spec.scale,
-                        noise_variance=max(noise_sd, 1e-12) ** 2,
-                        sigma_shapelets=sigma,
-                    )
-                ).e
-
-            cross = []
-            for stamps, sign in ((plus, 1.0), (minus, -1.0)):
-                offset = [0.0, 0.0]
-                offset[component] = sign * shear
-                cross.append(
-                    ShapeMeasurement(
-                        e=_fpfs_shapes(stamps, **kw).e,
-                        dedg=renderer_shear_response(
-                            renderer.response_renderer(
-                                samples,
-                                seed=seed,
-                                base_shear_g1=offset[0],
-                                base_shear_g2=offset[1],
-                            ),
-                            fpfs_measure,
-                            step=step,
-                        ),
-                    )
-                )
-            result.update(_flatten("fpfs_renderer_response", paired_bias(*cross, shear, **common)))
-
     return result
 
 
