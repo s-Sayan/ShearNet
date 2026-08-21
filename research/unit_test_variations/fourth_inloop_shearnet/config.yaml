@@ -1,0 +1,122 @@
+meta:
+  model_name: fourth_inloop_shearnet
+  description: "D4 ShearNet with in-loop rendering, depth resampling, and response losses"
+
+paths:
+  root: /home/adfield/ShearNet/research/unit_test_variations/fourth_inloop_shearnet
+  psfex_model_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
+  train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
+  eval_catalog: /home/adfield/ShearNet/cosmos_catalog_eval.fits
+  checkpoint_dir: null
+  plot_dir: null
+
+image:
+  stamp_size: 53
+  pixel_scale: 0.141
+  noise_sd: 12.719674
+  normalize_images: true
+
+psf:
+  mode: superbit
+  gaussian_fwhm: 0.5
+  stamp_size: 53
+  noise: 1.0e-6
+
+galaxy:
+  hlr_type: catalog
+  flux_type: catalog
+  hlr: catalog
+  flux: catalog
+
+model:
+  architecture: d4-fork-like
+  process_psf: true
+  fusion: transformer
+  head: attention
+  # The smooth branches retain differentiability for the response losses.
+  galaxy_branch: d4cnn
+  psf_branch: d4cnn
+  branch_features: [32, 32, 32, 32, 32]
+  output_keys: [g1, g2, hlr, flux]
+  gap: true
+  dropout: 0.0
+
+train:
+  seed: 42
+  samples: 300000
+  epochs: 60
+  # This is both the render and optimizer batch size in the fused step.
+  batch_size: 128
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-2
+  patience: 10
+  val_split: 0.2
+  eval_interval: 1
+  loss_weights: [1.0, 1.0, 1.0, 1.0]
+  ema_decay: 0.999
+  plot: true
+
+  backend: jax-galsim
+  generation: inloop
+  jax_fft_size: 256
+  jax_batch_size: 128
+
+  response:
+    gamma_weight: 1.0e-2
+    psf_weight: 1.0e-1
+    shift_weight: 1.0e-2
+    # The complement is the protected-subspace penalty: it damps directions
+    # orthogonal to all physical image tangents without changing those tangents.
+    complement_weight: 1.0e-3
+    # Re-rendering only the PSF at 90 degrees is a simulator constraint. It is
+    # distinct from the joint D4 symmetry implemented by the architecture.
+    orbit_weight: 1.0e-2
+    every_n_steps: 2
+    orbit_k: 2
+    gamma_target: analytic
+    report: true
+
+  noise:
+    min_sd: null
+    max_sd: null
+    condition: false
+
+eval:
+  # Different from train.seed and paired with the separate evaluation catalog.
+  seed: 150
+  n_obs: 200000
+  include_shearnet: true
+  gal_model: gauss
+
+  bias:
+    estimators: [shearnet, ngmix, fpfs]
+    metacal: true
+    fpfs_cross_check: true
+    fpfs_sigma_shapelets: 0.52
+    c_convention: shearnet
+    resample: jackknife
+    component: 0
+    psf_model: gauss
+    n_jackknife: 20
+    shear_true: 0.01
+    psf_response: metacal
+    psf_response_step: 0.01
+    shearnet_batch_size: 256
+    output: benchmarking/m/matched_bias.npz
+
+  leakage:
+    estimators: [shearnet, fpfs]
+    fpfs_sigma_shapelets: 0.52
+    n_jackknife: 20
+    psf_model: em5
+    psf_response: metacal
+    psf_response_step: 0.01
+    shearnet_batch_size: 256
+    output: benchmarking/psf_leakage/matched_leakage.npz
+
+  timing:
+    psf_model: em5
+    n_warmup: 20
+    shearnet_batch_size: 512
+    nproc: null
+    output: timing/matched_timing.npz
