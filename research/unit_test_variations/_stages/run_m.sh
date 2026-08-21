@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:rtx_pro_6000_b:1
 #SBATCH --cpus-per-task=18
-#SBATCH --time=08:00:00
+#SBATCH --time=12:00:00
 #SBATCH --mem=96G
 
 # Generic m stage for research/unit_test_variations/<name>/config.yaml.

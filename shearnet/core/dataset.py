@@ -16,6 +16,7 @@ from astropy.io import fits
 from tqdm import tqdm
 
 from ..logging_utils import get_logger
+from ..parallel import resolve_nproc
 from .moments import get_admoms_ngmix_fit
 from .shear_algebra import compose_shear
 from .wcs import create_wcs_from_params
@@ -351,12 +352,9 @@ def generate_dataset(
 
     tasks = [(i, float(g1_list[i]), float(g2_list[i]), _hlr(i), _flux(i)) for i in range(samples)]
 
-    if nproc is None:
-        # Auto: respect the SLURM allocation, NOT the node's total cores
-        # (os.cpu_count would oversubscribe a shared node).
-        nproc = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
-    # Never spawn more workers than there are stamps (matters for tiny runs).
-    nproc = max(1, min(int(nproc), len(tasks)))
+    # Auto: the SLURM allocation, never the node's total cores; and never more
+    # workers than there are stamps.
+    nproc = resolve_nproc(nproc, n_tasks=len(tasks))
 
     _disable = not sys.stderr.isatty()
     worker = functools.partial(_generate_one, cfg=cfg)

@@ -46,6 +46,7 @@ from shearnet.benchmarking import (
 )
 from shearnet.config.config_handler import Config
 from shearnet.logging_utils import get_logger
+from shearnet.parallel import resolve_nproc
 from shearnet.methods.anacal import (
     ShapeMeasurement,
     fpfs_shapes,
@@ -59,6 +60,13 @@ logger = get_logger(__name__)
 
 #: Estimators this harness knows how to run.
 ESTIMATORS = ("shearnet", "ngmix", "fpfs")
+
+#: Objects per ngmix batch. An ngmix ``Observation`` is ~362 kB resident at a
+#: 53x53 stamp -- the four float64 arrays are only 88 kB of that, the rest is
+#: the ``pixels`` structured array ngmix builds eagerly -- so a 200k population
+#: is 69 GB, and the bias task needs two of them. Everything downstream of the
+#: fit is 2 numbers per object, so there is no reason to hold more than a batch.
+NGMIX_CHUNK = 4096
 
 
 def _parser():
@@ -142,7 +150,22 @@ def _flatten(prefix: str, bias, extra=None) -> dict:
 # ----------------------------------------------------------------------
 # per-estimator measurement
 # ----------------------------------------------------------------------
-def _measure_callables(renderer, estimators, *, seed, psf_model, gal_model, fpfs_kw, predictor):
+def _ngmix_batches(renderer, galaxy, psf, chunk=NGMIX_CHUNK):
+    """Yield ``(start, observations)`` a batch at a time.
+
+    The observations for a whole population never exist at once. That is the
+    difference between the bias task fitting in an allocation and not: at 200k
+    objects the plus and minus populations alone would be 138 GB of ngmix
+    ``Observation``, before a single fit runs.
+    """
+    for start in range(0, len(galaxy), int(chunk)):
+        stop = start + int(chunk)
+        yield start, renderer.observations_from_stamps(galaxy[start:stop], psf[start:stop])
+
+
+def _measure_callables(
+    renderer, estimators, *, seed, psf_model, gal_model, fpfs_kw, predictor, nproc=None
+):
     """``{name: measure(galaxy, psf) -> (N, 2)}`` for the requested estimators.
 
     One callable per estimator, so the shared response pass can hand every one
@@ -157,8 +180,13 @@ def _measure_callables(renderer, estimators, *, seed, psf_model, gal_model, fpfs
     if "ngmix" in estimators:
 
         def ngmix_measure(galaxy, psf):
-            obs = renderer.observations_from_stamps(galaxy, psf)
-            return fit_shapes(obs, seed=seed, psf_model=psf_model, gal_model=gal_model)[0]
+            e = np.full((len(galaxy), 2), np.nan)
+            for start, obs in _ngmix_batches(renderer, galaxy, psf):
+                e[start : start + len(obs)] = fit_shapes(
+                    obs, seed=seed, psf_model=psf_model, gal_model=gal_model, nproc=nproc
+                )[0]
+                del obs
+            return e
 
         measures["ngmix"] = ngmix_measure
     if "fpfs" in estimators:
@@ -199,36 +227,93 @@ def _shared_shear_responses(renderer, measures, *, samples, seed, base_shear, st
     return {name: np.stack(cols, axis=-1) for name, cols in columns.items()}
 
 
-def _ngmix_metacal_shapes(observations, *, seed, psf_model, gal_model, step):
-    """ngmix ellipticity with metacal's image-shearing response, unchanged.
+def _ngmix_metacal_shapes(renderer, galaxy, psf, *, seed, psf_model, gal_model, step, nproc=None):
+    """ngmix ellipticity with metacal's image-shearing response.
 
-    Kept exactly as ``m/main.py`` runs it, so the number in the metacal column
-    is the number that column has always meant.
+    The fit is exactly what ``m/main.py`` runs, so the number in the metacal
+    column is the number that column has always meant. What changed is only how
+    the objects reach it: batched, so neither the observations nor metacal's
+    own sheared copies of them are ever all resident, and over a worker pool,
+    because metacal costs ~156 ms/object against ~7 ms for a plain fit -- 8.7
+    hours of one core for a 200k population.
     """
     from shearnet.methods.ngmix import _get_priors, mp_fit_one_single
 
-    data_list, _ = mp_fit_one_single(
-        observations,
-        _get_priors(seed),
-        np.random.RandomState(seed),
-        psf_model=psf_model,
-        gal_model=gal_model,
-        mcal_pars={"psf": "dilate", "mcal_shear": step},
-    )
-    n = len(data_list)
+    n = len(galaxy)
     e = np.full((n, 2), np.nan)
     dedg = np.full((n, 2, 2), np.nan)
     flags = np.ones(n, dtype=bool)
-    for i, rows in enumerate(data_list):
-        by_type = {str(row["shear_type"]): row for row in rows}
-        needed = ("noshear", "1p", "1m", "2p", "2m")
-        if not all(name in by_type and by_type[name]["flags"] == 0 for name in needed):
-            continue
-        e[i] = by_type["noshear"]["g"]
-        for b, (plus, minus) in enumerate((("1p", "1m"), ("2p", "2m"))):
-            dedg[i, :, b] = (by_type[plus]["g"] - by_type[minus]["g"]) / (2.0 * step)
-        flags[i] = False
+    needed = ("noshear", "1p", "1m", "2p", "2m")
+
+    for start, obs in _ngmix_batches(renderer, galaxy, psf):
+        data_list, _ = mp_fit_one_single(
+            obs,
+            _get_priors(seed),
+            np.random.RandomState(seed),
+            psf_model=psf_model,
+            gal_model=gal_model,
+            mcal_pars={"psf": "dilate", "mcal_shear": step},
+            nproc=nproc,
+        )
+        del obs
+        for offset, rows in enumerate(data_list):
+            i = start + offset
+            by_type = {str(row["shear_type"]): row for row in rows}
+            if not all(name in by_type and by_type[name]["flags"] == 0 for name in needed):
+                continue
+            e[i] = by_type["noshear"]["g"]
+            for b, (up, down) in enumerate((("1p", "1m"), ("2p", "2m"))):
+                dedg[i, :, b] = (by_type[up]["g"] - by_type[down]["g"]) / (2.0 * step)
+            flags[i] = False
     return ShapeMeasurement(e=e, dedg=dedg, flags=flags)
+
+
+# ----------------------------------------------------------------------
+# preflight
+# ----------------------------------------------------------------------
+#: Measured on a 53x53 stamp: resident bytes per ngmix Observation (362 kB, of
+#: which only 88 kB is the four float64 arrays), and seconds per fit for a plain
+#: shape fit and for a metacal fit. Used only to print a budget before the run
+#: commits to it -- a wrong constant misprints a log line, it does not change a
+#: result. Rescaled by stamp area, which is how all three actually vary.
+_OBS_BYTES_PER_PIXEL = 362e3 / (53 * 53)
+_FIT_SECONDS_PER_PIXEL = 6.9e-3 / (53 * 53)
+_METACAL_SECONDS_PER_PIXEL = 156e-3 / (53 * 53)
+
+
+def _log_cost_estimate(samples, renderer, estimators, section) -> None:
+    """Print the memory and CPU budget this configuration is about to ask for.
+
+    The bias task is the expensive one and it fails late: rendering happens
+    first, so an allocation that cannot hold the measurement stage finds out
+    hours in, with an OOM kill and no output. Estimating it up front costs
+    nothing and turns that into a number you can read before the queue does.
+    """
+    npix = int(renderer.spec.npix)
+    area = npix * npix
+    gib = 1024**3
+    stamps_gib = samples * area * 4 * 2 / gib  # gal + psf, float32
+    # 2 populations resident + at most one response render at a time
+    lines = [f"stamps {3 * stamps_gib:.1f} GiB (3 populations x {stamps_gib:.1f})"]
+    seconds = 0.0
+
+    if "ngmix" in estimators:
+        workers = resolve_nproc(section.get("ngmix_nproc"), n_tasks=samples)
+        batch_gib = min(samples, NGMIX_CHUNK) * area * _OBS_BYTES_PER_PIXEL / gib
+        lines.append(f"ngmix observations {batch_gib:.2f} GiB (batched at {NGMIX_CHUNK})")
+        lines.append(f"ngmix on {workers} worker(s)")
+        # 2 populations + 2 axes x 2 signs, each fit once per population
+        seconds += 2 * (1 + 4) * samples * area * _FIT_SECONDS_PER_PIXEL / workers
+        if section.get("metacal", True):
+            seconds += 2 * samples * area * _METACAL_SECONDS_PER_PIXEL / workers
+
+    logger.info("bias preflight: %s", "; ".join(lines))
+    if seconds:
+        logger.info(
+            "bias preflight: ngmix fitting ~%.1f h; raise eval.bias.ngmix_nproc or "
+            "lower eval.n_obs if that does not fit the wall clock",
+            seconds / 3600.0,
+        )
 
 
 # ----------------------------------------------------------------------
@@ -247,7 +332,6 @@ def _run_bias(benchmark: Config, training: Config, estimators) -> dict:
     gal_model = _eval(benchmark, "gal_model", "gauss")
     c_convention = section.get("c_convention", "shearnet")
     resample = section.get("resample", "jackknife")
-    needs_obs = "ngmix" in estimators
     noise_sd = _noise_sd(training)
     fpfs_kw = dict(
         pixel_scale=renderer.spec.scale,
@@ -267,9 +351,12 @@ def _run_bias(benchmark: Config, training: Config, estimators) -> dict:
         renderer.spec.exp,
         list(estimators),
     )
-    plus, minus = renderer.shear_pair(
-        samples, seed=seed, shear=shear, component=component, observations=needs_obs
-    )
+    _log_cost_estimate(samples, renderer, estimators, section)
+    # observations=False deliberately: every ngmix path here builds its own in
+    # batches from the stamps, so a population-sized list is never materialised.
+    # It also makes the two backends consistent -- the plain-fit path already
+    # went through observations_from_stamps regardless of backend.
+    plus, minus = renderer.shear_pair(samples, seed=seed, shear=shear, component=component)
     if plus.psf_images is None:
         raise RuntimeError("Training-matched benchmarks require the PSF channel")
 
@@ -286,6 +373,7 @@ def _run_bias(benchmark: Config, training: Config, estimators) -> dict:
         gal_model=gal_model,
         fpfs_kw=fpfs_kw,
         predictor=predictor,
+        nproc=section.get("ngmix_nproc"),
     )
 
     result = {
@@ -352,23 +440,18 @@ def _run_bias(benchmark: Config, training: Config, estimators) -> dict:
         )
 
     if "ngmix" in estimators and section.get("metacal", True):
+        nproc = section.get("ngmix_nproc")
+        result["ngmix_metacal_nproc"] = resolve_nproc(nproc, n_tasks=samples)
+        metacal_kw = dict(psf_model=psf_model, gal_model=gal_model, step=step, nproc=nproc)
         result.update(
             _flatten(
                 "ngmix_metacal",
                 paired_bias(
                     _ngmix_metacal_shapes(
-                        plus.observations,
-                        seed=seed + 1,
-                        psf_model=psf_model,
-                        gal_model=gal_model,
-                        step=step,
+                        renderer, plus.galaxy_images, plus.psf_images, seed=seed + 1, **metacal_kw
                     ),
                     _ngmix_metacal_shapes(
-                        minus.observations,
-                        seed=seed + 2,
-                        psf_model=psf_model,
-                        gal_model=gal_model,
-                        step=step,
+                        renderer, minus.galaxy_images, minus.psf_images, seed=seed + 2, **metacal_kw
                     ),
                     shear,
                     **common,

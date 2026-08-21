@@ -149,6 +149,45 @@ def test_every_estimator_shares_one_response_pass(trained_run, monkeypatch):
     assert calls["n"] == 10, calls["n"]
 
 
+def test_ngmix_never_holds_a_whole_population_of_observations(trained_run, monkeypatch):
+    """The bias task must batch its ngmix Observations, not materialise them.
+
+    This is what OOM-killed a 200k-object run. An ngmix ``Observation`` is
+    ~362 kB resident at a 53x53 stamp -- the four float64 arrays are 88 kB of
+    that and the ``pixels`` structured array is the rest -- so a population is
+    69 GB and the plus/minus pair is 138 GB, on a 96 GB allocation, before a
+    single fit runs. Nothing downstream needs more than two numbers per object.
+
+    Asserting on the batch size rather than on peak RSS keeps the test cheap and
+    deterministic: if anyone re-introduces a population-sized call, this fails
+    at N=16 instead of at N=200000 three hours into a job.
+    """
+    import shearnet.benchmarking as bm
+
+    benchmark, training = trained_run
+    sizes = []
+    real = bm.TrainingMatchedRenderer.observations_from_stamps
+
+    def counting(self, galaxy, psf):
+        sizes.append(len(galaxy))
+        return real(self, galaxy, psf)
+
+    monkeypatch.setattr(bm.TrainingMatchedRenderer, "observations_from_stamps", counting)
+    harness._run_bias(benchmark, training, ("ngmix",))
+
+    assert sizes, "ngmix built no observations at all"
+    assert max(sizes) <= harness.NGMIX_CHUNK, max(sizes)
+    # and the renderer must not have been asked for them either, which is the
+    # other way a whole population comes into existence
+    assert all(
+        stamps.observations is None
+        for stamps in [
+            bm.TrainingMatchedRenderer(training, eval_catalog=benchmark.get("paths.eval_catalog"))
+            .shear_pair(4, seed=99, shear=0.01)[0]
+        ]
+    )
+
+
 def test_bias_task_writes_a_readable_result(trained_run, tmp_path):
     benchmark, training = trained_run
     result = harness._run_bias(benchmark, training, ("fpfs",))

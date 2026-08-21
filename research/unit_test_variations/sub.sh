@@ -5,9 +5,9 @@
 # Variations are config-only directories; this supplies the jobs they lack.
 # Every stage is driven entirely by $CONFIG, so one copy serves all of them.
 #
-#   ./sub.sh fourth_inloop_response              # train, then all benchmarks
-#   ./sub.sh fourth_inloop_control --no-train    # re-benchmark an existing model
-#   ./sub.sh fourth_inloop_forklens m            # just the bias table
+#   ./sub.sh fourth_shearnet                      # train, then all benchmarks
+#   ./sub.sh fourth_shearnet_control --no-train   # re-benchmark an existing model
+#   ./sub.sh fourth_forklens m                    # just the bias table
 #
 # Benchmarks run research/shear_bias/run.py, which measures ShearNet, ngmix and
 # FPFS in one job under a single response protocol -- so the m values in the
@@ -29,7 +29,8 @@ Usage: $(basename "$0") <variation> [--no-train] [stage ...]
   stage         one or more of: m leakage timing (default: all)
 
 Available variations with an in-loop config:
-$(cd "$ROOT" && ls -d */ 2>/dev/null | tr -d '/' | grep inloop | sed 's/^/  /')
+$(cd "$ROOT" && grep -ls 'generation:[[:space:]]*inloop' */config.yaml 2>/dev/null \
+    | xargs -r -n1 dirname | sort | sed 's/^/  /')
 USAGE
 }
 

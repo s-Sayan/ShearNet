@@ -1,11 +1,12 @@
 """NGmix-based shear estimation and metacalibration utilities for ShearNet."""
 
-from multiprocessing import Pool, cpu_count
+import multiprocessing as mp
 
 import ngmix
 import numpy as np
 
 from ..logging_utils import get_logger
+from ..parallel import cpu_only_children, resolve_nproc
 
 logger = get_logger(__name__)
 
@@ -303,10 +304,6 @@ def mp_fit_one(
     TO DO: add a label indicating whether the galaxy passed the selection
     cuts for each shear step (i.e. no_shear,1p,1m,2p,2m).
     """
-    import multiprocessing as mp
-
-    mp.set_start_method("spawn", force=True)
-
     # Get image pixel scale
     jacobian = obslist[0]._jacobian
     scale = jacobian.get_scale()
@@ -364,22 +361,13 @@ def mp_fit_one(
         # types=types,
     )
 
-    num_cores = cpu_count()
+    num_cores = resolve_nproc(n_tasks=len(obslist))
     logger.info(
         f"Starting NGmix ML fitting: num_gal: {len(obslist)} | psf_model: {psf_model} | "
         f"gal_model: {gal_model} | num_cores: {num_cores}"
     )
 
-    data_list = []
-
-    with Pool(num_cores) as pool:
-        results_list = list(pool.starmap(process_obs, [(obs, boot) for obs in obslist]))
-
-    # Separate data_list and obsdict_list
-    data_list = [r[0] for r in results_list]
-    obsdict_list = [r[1] for r in results_list]
-
-    return data_list, obsdict_list
+    return _metacal_map(boot, obslist, num_cores), []
 
 
 def ngmix_pred(data_list, return_bad_indices=False):
@@ -416,6 +404,74 @@ def ngmix_pred(data_list, return_bad_indices=False):
     return preds
 
 
+def _metacal_bootstrapper(prior, rng, psf_model, gal_model, mcal_pars, Tguess):
+    """The metacal bootstrapper, built one way for both the serial and pool paths."""
+    runner, psf_runner = build_runners(
+        rng, psf_model=psf_model, gal_model=gal_model, Tguess=Tguess, prior=prior
+    )
+    return ngmix.metacal.MetacalBootstrapper(
+        runner=runner,
+        psf_runner=psf_runner,
+        rng=rng,
+        psf=mcal_pars["psf"],
+        step=mcal_pars["mcal_shear"],
+    )
+
+
+def _metacal_struct(boot, obs):
+    """One object's metacal result as a struct, dropping everything else.
+
+    ``boot.go`` returns ``(resdict, obsdict)``. ``obsdict`` holds the five
+    sheared reconvolved observations and ``resdict`` holds their fit results
+    with the observations still attached: measured at a 53x53 stamp they are
+    3.6 MB and 4.3 MB per object respectively, against 1.4 kB for the struct
+    that is the actual answer. Building the struct here and returning only that
+    is what keeps a 200k-object population from needing hundreds of gigabytes,
+    whether the caller is looping or draining a pool.
+    """
+    resdict, obsdict = boot.go(obs)
+    return np.hstack(
+        [make_struct(res=sres, obs=obsdict[stype], shear_type=stype) for stype, sres in resdict.items()]
+    )
+
+
+#: Per-worker bootstrapper, set by :func:`_metacal_pool_init` under ``spawn``.
+_POOL_BOOT = None
+
+
+def _metacal_pool_init(boot):
+    """Give each worker one bootstrapper, instead of pickling it per task.
+
+    It is ~11.5 kB, so shipping it alongside all 200k observations was never
+    the memory problem; building it once per worker is simply less work. The
+    consequence to know about: the bootstrapper's RNG stream now advances
+    across the objects a worker handles, so the metacal column is reproducible
+    for a fixed worker count and not across different ones.
+    """
+    global _POOL_BOOT
+    _POOL_BOOT = boot
+
+
+def _metacal_pool_worker(obs):
+    return _metacal_struct(_POOL_BOOT, obs)
+
+
+def _metacal_map(boot, obslist, workers, chunksize=16):
+    """``[struct per object]``, serially or over a spawn pool."""
+    if workers == 1:
+        return [_metacal_struct(boot, obs) for obs in obslist]
+    # imap over the observations, not starmap over [(obs, boot), ...]: an
+    # Observation pickles to ~352 kB, so the task list alone would be ~70 GB at
+    # 200k objects, queued before any fitting starts. imap streams it, and the
+    # worker returns only the 1.4 kB struct -- the obsdict it used to send back
+    # is 3.6 MB per object, and every caller in this repo discards it.
+    ctx = mp.get_context("spawn")
+    with cpu_only_children(), ctx.Pool(
+        workers, initializer=_metacal_pool_init, initargs=(boot,)
+    ) as pool:
+        return list(pool.imap(_metacal_pool_worker, obslist, chunksize=chunksize))
+
+
 def mp_fit_one_single(
     obslist,
     prior,
@@ -423,82 +479,59 @@ def mp_fit_one_single(
     psf_model="gauss",
     gal_model="gauss",
     mcal_pars={"psf": "dilate", "mcal_shear": 0.01},
+    nproc=None,
+    collect_resdict=False,
 ):
-    """Run metacalibration on an object (multiprocessing version of ``_fit_one``).
+    """Run metacalibration over ``obslist``, returning one struct per object.
 
-    Returns the unsheared ellipticities of each galaxy, as well as entries for
-    each shear step.
+    Args:
+        nproc: worker processes. ``None`` = the SLURM allocation (1 off-cluster).
+            Metacal costs ~156 ms/object against ~7 ms for a plain fit, so a
+            200k-object population is ~8.7 hours on one core; this is the knob
+            that makes the bias benchmark finish. Results are reproducible for a
+            fixed ``(rng seed, nproc)`` -- each worker seeds its own bootstrapper
+            deterministically from its index -- but the random *guesses* differ
+            if you change the worker count, so record ``nproc`` beside any m you
+            intend to reproduce bit-for-bit.
+        collect_resdict: also return the per-object ``resdict``. Off by default:
+            it is 4.3 MB per object (the sheared observations are still attached
+            to the fit results), so accumulating it for a 200k population asks
+            for ~817 GB, and the only caller in this repo discards it.
 
-    inputs:
-    - obslist: Observation list for MEDS object of given ID
-    - prior: ngmix mcal priors
-    - mcal_pars: mcal running parameters
+    Returns ``(data_list, resdict_list)``; the second is empty unless
+    ``collect_resdict``.
 
     TO DO: add a label indicating whether the galaxy passed the selection
     cuts for each shear step (i.e. no_shear,1p,1m,2p,2m).
     """
-    # get image pixel scale (assumes constant across list)
-    jacobian = obslist[0]._jacobian
-    Tguess = 4 * jacobian.get_scale() ** 2
-    ntry = 20
-    lm_pars = {"maxfev": 2000, "xtol": 5.0e-5, "ftol": 5.0e-5}
-    psf_lm_pars = {"maxfev": 4000, "xtol": 5.0e-5, "ftol": 5.0e-5}
+    n = len(obslist)
+    if n == 0:
+        return [], []
+    Tguess = 4 * obslist[0]._jacobian.get_scale() ** 2
+    boot = _metacal_bootstrapper(prior, rng, psf_model, gal_model, mcal_pars, Tguess)
 
-    fitter = ngmix.fitting.Fitter(model=gal_model, prior=prior, fit_pars=lm_pars)
-    guesser = ngmix.guessers.TPSFFluxAndPriorGuesser(rng=rng, T=Tguess, prior=prior)
+    if collect_resdict:
+        logger.info("metacal: %d objects, serial (collecting resdict)", n)
+        data_list, resdict_list = [], []
+        for obs in obslist:
+            resdict, obsdict = boot.go(obs)
+            data_list.append(
+                np.hstack(
+                    [
+                        make_struct(res=sres, obs=obsdict[stype], shear_type=stype)
+                        for stype, sres in resdict.items()
+                    ]
+                )
+            )
+            resdict_list.append(resdict)
+        return data_list, resdict_list
 
-    # psf fitting
-    if "em" in psf_model:
-        em_pars = {"tol": 1.0e-6, "maxiter": 50000}
-        psf_ngauss = get_em_ngauss(psf_model)
-        psf_fitter = ngmix.em.EMFitter(maxiter=em_pars["maxiter"], tol=em_pars["tol"])
-        psf_guesser = ngmix.guessers.GMixPSFGuesser(rng=rng, ngauss=psf_ngauss)
-    elif "coellip" in psf_model:
-        psf_ngauss = get_coellip_ngauss(psf_model)
-        psf_fitter = ngmix.fitting.CoellipFitter(ngauss=psf_ngauss, fit_pars=psf_lm_pars)
-        psf_guesser = ngmix.guessers.CoellipPSFGuesser(rng=rng, ngauss=psf_ngauss)
-    elif psf_model == "gauss":
-        psf_fitter = ngmix.fitting.Fitter(model="gauss", fit_pars=psf_lm_pars)
-        psf_guesser = ngmix.guessers.SimplePSFGuesser(rng=rng)
-    else:
-        raise ValueError("psf_model must be one of emn, coellipn, or gauss")
-
-    psf_runner = ngmix.runners.PSFRunner(fitter=psf_fitter, guesser=psf_guesser, ntry=ntry)
-
-    runner = ngmix.runners.Runner(fitter=fitter, guesser=guesser, ntry=ntry)
-
-    # types = ['noshear', '1p', '1m', '2p', '2m']
-    psf = mcal_pars["psf"]
-    mcal_shear = mcal_pars["mcal_shear"]
-    boot = ngmix.metacal.MetacalBootstrapper(
-        runner=runner,
-        psf_runner=psf_runner,
-        rng=rng,
-        psf=psf,
-        step=mcal_shear,
-        # types=types,
-    )
-
-    num_cores = cpu_count()
-    logger.info(f"Using {num_cores} cores out of {cpu_count()} available.")
-
-    data_list = []
-    resdict_list = []
-    for i in range(len(obslist)):
-        resdict, obsdict = boot.go(obslist[i])
-        dlist = []
-        for stype, sres in resdict.items():
-            st = make_struct(res=sres, obs=obsdict[stype], shear_type=stype)
-            dlist.append(st)
-
-        data = np.hstack(dlist)
-        data_list.append(data)
-        resdict_list.append(resdict)
-
-    return data_list, resdict_list
+    workers = resolve_nproc(nproc, n_tasks=n)
+    logger.info("metacal: %d objects on %d worker(s)", n, workers)
+    return _metacal_map(boot, obslist, workers), []
 
 
-def build_runners(rng, psf_model="gauss", gal_model="gauss", ntry=20, Tguess=None):
+def build_runners(rng, psf_model="gauss", gal_model="gauss", ntry=20, Tguess=None, prior=None):
     """Construct the ngmix PSF/galaxy runners used by every fit in this module.
 
     Factored out of :func:`mp_fit_one_single` so a plain (non-metacal) shape fit
@@ -509,7 +542,8 @@ def build_runners(rng, psf_model="gauss", gal_model="gauss", ntry=20, Tguess=Non
     """
     lm_pars = {"maxfev": 2000, "xtol": 5.0e-5, "ftol": 5.0e-5}
     psf_lm_pars = {"maxfev": 4000, "xtol": 5.0e-5, "ftol": 5.0e-5}
-    prior = _get_priors(rng.randint(0, 2**31 - 1) if hasattr(rng, "randint") else 0)
+    if prior is None:
+        prior = _get_priors(rng.randint(0, 2**31 - 1) if hasattr(rng, "randint") else 0)
 
     fitter = ngmix.fitting.Fitter(model=gal_model, prior=prior, fit_pars=lm_pars)
     guesser = ngmix.guessers.TPSFFluxAndPriorGuesser(rng=rng, T=Tguess, prior=prior)
@@ -532,7 +566,36 @@ def build_runners(rng, psf_model="gauss", gal_model="gauss", ntry=20, Tguess=Non
     return runner, psf_runner
 
 
-def fit_shapes(obslist, seed=42, psf_model="gauss", gal_model="gauss"):
+def _fit_one_shape(runner, psf_runner, obs, index=0):
+    """One plain shape fit: ``(e, ok)``, with a failed fit reported not raised."""
+    try:
+        psf_runner.go(obs=obs.psf)
+        res = runner.go(obs=obs)
+    except Exception as exc:
+        logger.debug("ngmix shape fit failed on object %d: %s", index, exc)
+        return np.array([np.nan, np.nan]), False
+    if res.get("flags", 1) != 0:
+        return np.array([np.nan, np.nan]), False
+    value = res.get("e", res.get("g"))
+    if value is None or not np.all(np.isfinite(value)):
+        return np.array([np.nan, np.nan]), False
+    return np.asarray(value, dtype=float), True
+
+
+#: Per-worker runners, set by :func:`_fit_pool_init` under ``spawn``.
+_POOL_RUNNERS = (None, None)
+
+
+def _fit_pool_init(runner, psf_runner):
+    global _POOL_RUNNERS
+    _POOL_RUNNERS = (runner, psf_runner)
+
+
+def _fit_pool_worker(obs):
+    return _fit_one_shape(_POOL_RUNNERS[0], _POOL_RUNNERS[1], obs)
+
+
+def fit_shapes(obslist, seed=42, psf_model="gauss", gal_model="gauss", nproc=None):
     """Fit each observation once, with no metacal, returning ``(e, flags)``.
 
     This is the measurement half of ngmix on its own: it is what the shared
@@ -540,28 +603,38 @@ def fit_shapes(obslist, seed=42, psf_model="gauss", gal_model="gauss"):
     calibrated the same way the network and FPFS are and the three numbers mean
     the same thing.
 
+    ``nproc`` follows the same rule as :func:`mp_fit_one_single`: ``None`` means
+    the SLURM allocation, 1 off-cluster. At ~7 ms/object a plain fit is 20x
+    cheaper than metacal, but the bias task runs it six times over the
+    population (two shear populations plus four response re-renders), which is
+    still 2.3 hours of one core at 200k objects.
+
     Returns ``(N, 2)`` ellipticities (NaN where the fit failed) and an ``(N,)``
     failure mask.
     """
+    n = len(obslist)
+    if n == 0:
+        return np.zeros((0, 2)), np.zeros(0, dtype=bool)
     rng = np.random.RandomState(seed)
     Tguess = 4 * obslist[0]._jacobian.get_scale() ** 2
     runner, psf_runner = build_runners(rng, psf_model=psf_model, gal_model=gal_model, Tguess=Tguess)
-    e = np.full((len(obslist), 2), np.nan)
-    flags = np.ones(len(obslist), dtype=bool)
-    for i, obs in enumerate(obslist):
-        try:
-            psf_runner.go(obs=obs.psf)
-            res = runner.go(obs=obs)
-        except Exception as exc:
-            logger.debug("ngmix shape fit failed on object %d: %s", i, exc)
-            continue
-        if res.get("flags", 1) != 0:
-            continue
-        value = res.get("e", res.get("g"))
-        if value is None or not np.all(np.isfinite(value)):
-            continue
-        e[i] = value
-        flags[i] = False
+    workers = resolve_nproc(nproc, n_tasks=n)
+
+    if workers == 1:
+        results = [_fit_one_shape(runner, psf_runner, obs, i) for i, obs in enumerate(obslist)]
+    else:
+        ctx = mp.get_context("spawn")
+        with cpu_only_children(), ctx.Pool(
+            workers, initializer=_fit_pool_init, initargs=(runner, psf_runner)
+        ) as pool:
+            results = list(pool.imap(_fit_pool_worker, obslist, chunksize=64))
+
+    e = np.full((n, 2), np.nan)
+    flags = np.ones(n, dtype=bool)
+    for i, (value, ok) in enumerate(results):
+        if ok:
+            e[i] = value
+            flags[i] = False
     return e, flags
 
 

@@ -1,9 +1,9 @@
 meta:
-  model_name: d4_inloop_response
+  model_name: forklens
   description: "superbit PSF; g1, g2, hlr, flux from catalog; constant noise"
 
 paths:
-  root: /home/adfield/ShearNet/research/unit_test_variations/fourth_inloop_response
+  root: /home/adfield/ShearNet/research/unit_test_variations/fourth_forklens
   psfex_model_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
   train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
   eval_catalog:  /home/adfield/ShearNet/cosmos_catalog_eval.fits
@@ -29,16 +29,16 @@ galaxy:
   flux: 12258.97
 
 model:
-  architecture: d4-fork-like
+  # ForkLens: the same two-branch topology with the equivariance removed. That
+  # is the ONE difference from fourth_shearnet_control -- plain convolutional
+  # branches instead of D4-equivariant ones -- so the pair isolates what the
+  # equivariance buys, independently of what the response terms buy.
+  architecture: fork-like
   process_psf: true
   fusion: transformer
   head: attention
-  galaxy_branch: d4cnn
-  psf_branch:    d4cnn
-  # Lin et al. (2026) Table 1: five layers at base width 32. The package default
-  # is the two-layer (16, 32) proof of concept, so fourth is quietly running a
-  # smaller backbone than the architecture it is named for.
-  branch_features: [32, 32, 32, 32, 32]
+  galaxy_branch: research_backed
+  psf_branch:    forklens_psf
   output_keys: [g1, g2, hlr, flux]
   gap: true
   dropout: 0.0
@@ -59,9 +59,12 @@ train:
   loss_weights: [1.0, 1.0, 1.0, 1.0]
   ema_decay: 0.999
   plot: true
-  # resample_noise is a no-op under generation: inloop -- fresh noise is drawn
-  # inside every step by construction, so a galaxy is never seen twice with the
-  # same realisation.
+  # On-the-fly noise resampling is ON, and it is `generation: inloop` below that
+  # turns it on: the noise field is drawn inside the jitted step from a key
+  # folded on the step counter, so no galaxy is ever seen twice with the same
+  # realisation and there is no finite noise dataset to memorise. The separate
+  # `resample_noise` key is the up-front path's approximation of this and is a
+  # no-op here, which is why it is not set.
 
   # --- the new machinery, everything else above is fourth's ---------------
   backend: jax-galsim
@@ -70,24 +73,22 @@ train:
   jax_batch_size: 128        # keep equal to batch_size: one batch size, not two
 
   response:
-    # UNTUNED starting values. Pick them so each term's logged value is
-    # comparable to the supervised loss, not orders above it -- the per-epoch
-    # "response terms:" line is the signal for that, and the R matrices in the
-    # report line tell you whether the term is doing anything.
-    gamma_weight: 1.0e-2       # drive R^gamma to the analytic per-object target
-    psf_weight: 1.0e-1         # drive R^PSF to zero (zero is exactly correct)
-    shift_weight: 1.0e-2       # a shape estimate must not depend on position
-    complement_weight: 1.0e-3  # the only bias-safe term: variance reduction
-    orbit_weight: 1.0e-2       # {P, R90 P} consistency under shared noise
-    # Cadence applies to ALL terms, not per term -- a limitation. gamma/psf/
-    # shift share one linearisation and are cheap; complement (12 image
-    # tangents) and orbit (an extra render + forward) are not. Raise this if
-    # the step time hurts, and watch the logged "(N/M active steps)" so the
-    # reported term values stay meaningful.
-    every_n_steps: 2
-    orbit_k: 2                 # measure the cos(4 phi) residual before paying for 4
-    gamma_target: analytic     # 1 - eps^2 per object, not the ensemble identity
-    report: true               # log R^gamma, R^PSF, R^shift every validation
+    # Every weight 0.0 -- that is the ONE difference from fourth_shearnet. The
+    # architecture, the in-loop renderer, the fresh noise, the seeds, the budget
+    # and the eval block are identical, so the difference in m between the two
+    # is attributable to the response terms and to nothing else.
+    gamma_weight: 0.0
+    psf_weight: 0.0
+    shift_weight: 0.0
+    complement_weight: 0.0
+    orbit_weight: 0.0
+    # Cadence and orbit size are inert with all weights at zero; they are left
+    # at the cheap defaults rather than mirrored from the flagship, because
+    # mirroring them would suggest they cost something here. They do not.
+    every_n_steps: 1
+    orbit_k: 2
+    gamma_target: analytic
+    report: true               # measure R even with no term driving it
 
   # base_shear_range stays at its 0.0 default and is NOT set here. The COSMOS
   # catalog shapes are real measured ellipticities -- they are already the
@@ -98,9 +99,13 @@ train:
   # anyway. The knob exists for one specific experiment -- checking that R^PSF
   # holds away from gamma = 0 -- and that is a separate run, not this one.
 
-  # Depth conditioning is deliberately off: it answers a different question, it
-  # is incompatible with image.normalize_images above, and enabling it here
-  # would confound the response-term question this run exists to answer.
+  # Depth conditioning is the ONE feature deliberately off. It is not the same
+  # thing as the on-the-fly noise resampling above: resampling redraws the noise
+  # at a FIXED depth, conditioning randomises the depth itself and rescales both
+  # inputs by the draw. The trainer rejects it outright alongside
+  # image.normalize_images: true, and turning it on would also change what this
+  # run measures, since m would then be an average over depths rather than the
+  # value at SuperBIT's. It belongs in its own run.
   noise:
     min_sd: null
     max_sd: null
@@ -129,6 +134,15 @@ eval:
     psf_model: gauss
     n_jackknife: 20
     shear_true: 0.01
+    # ngmix worker processes. null = the SLURM allocation (1 off-cluster).
+    # metacal is ~156 ms/object against ~7 ms for a plain fit, and this stage
+    # runs the plain fit six times over the population (two shear populations
+    # plus four response re-renders), so at n_obs 200000 this is the difference
+    # between ~20 hours on one core and ~1.2 hours on 18. The value used is
+    # recorded as ngmix_metacal_nproc in the output: metacal's random guesses
+    # depend on the worker count, so reproducing an m bit-for-bit means
+    # reproducing this too.
+    ngmix_nproc: null
     psf_response: metacal
     psf_response_step: 0.01
     shearnet_batch_size: 256

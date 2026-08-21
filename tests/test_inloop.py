@@ -395,6 +395,61 @@ def test_orbit_actually_rotates_the_psf(orbit_k):
     assert float(jnp.sum(psf)) == pytest.approx(float(jnp.sum(base_psf)), rel=1e-4)
 
 
+@pytest.mark.parametrize("orbit_k", [2, 4])
+def test_orbit_rotates_an_empirical_psf_too(orbit_k):
+    """The orbit must work on a PSFEx model, which is what production uses.
+
+    The ``ideal`` case above rotates an analytic Gaussian, where ``.rotate()``
+    is trivially available. A superbit PSF is an interpolated image pulled out
+    of a fitted PSFEx model, and it is the configuration the flagship run
+    actually trains under -- so the mechanism is pinned there as well.
+
+    A rotation should move flux around, not destroy it. At 90 degrees -- a
+    relabelling of a square grid -- it is exact to float32. At 45 the
+    interpolant is resampled on a grid that does not line up with its own
+    square support, and the flux moves: measured over 40 distinct PSFEx models,
+    up to about 1% per object but ZERO MEAN across the population (-0.004%),
+    so it is per-object resampling scatter and not a systematic. That
+    distinction is the point of the test -- a systematic would bias the orbit
+    term, scatter of that size does not.
+
+    That, plus the fact that a PSFEx profile carries the pixel response of the
+    stars it was fitted to (which 45 degrees rotates and 90 does not), is the
+    whole of the difference between ``orbit_k: 2`` and ``orbit_k: 4`` on
+    superbit. Neither invalidates the term -- what it asserts is that a shear
+    estimate must not depend on which PSF the galaxy was convolved with,
+    physically realisable or not -- but a 45-degree member is a slightly
+    different object from a rotated one, and that belongs in a test, not a
+    footnote.
+    """
+    from shearnet.core.inloop import _make_render_batch
+
+    n = 64  # enough distinct PSFEx models for the population mean to mean something
+    try:
+        gen = build_generator(n, _cfg("superbit", batch=n), n, seed=0, apply_psf_shear=True)
+    except FileNotFoundError:
+        pytest.skip("no PSFEx files available")
+
+    idx = jnp.arange(n)
+    p = {k: v[idx] for k, v in gen.params.items()}
+    models = jax.tree_util.tree_map(lambda a: a[gen.psf_idx[idx]], gen.psf_bank)
+    base_gal, base_psf = _make_render_batch(gen.cfg, True, jnp.float32)(p, models)
+    base_flux = np.asarray(base_psf).sum(axis=(1, 2))
+
+    for angle in ResponseRegularization(orbit_k=orbit_k).orbit_angles:
+        gal, psf = _make_render_batch(gen.cfg, True, jnp.float32, angle)(p, models)
+        assert not np.allclose(np.asarray(psf), np.asarray(base_psf), atol=1e-9), angle
+        assert not np.allclose(np.asarray(gal), np.asarray(base_gal), atol=1e-9), angle
+        drift = np.asarray(psf).sum(axis=(1, 2)) / base_flux - 1.0
+        if angle == 90.0:
+            assert np.abs(drift).max() < 1e-5, drift
+        else:
+            # per-object resampling scatter, bounded; and no net drift, which
+            # is the property the orbit term actually depends on
+            assert np.abs(drift).max() < 2e-2, np.abs(drift).max()
+            assert abs(float(drift.mean())) < 1e-3, float(drift.mean())
+
+
 def test_orbit_term_is_nonzero_for_a_psf_sensitive_model():
     gen, state, forward, loss_fn, labels = _harness(n=8, batch=8, apply_psf_shear=True)
     step = make_fused_train_step(
