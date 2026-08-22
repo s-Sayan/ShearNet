@@ -7,7 +7,8 @@ thing only:
 
     fourth_forklens           equivariant: no    response: no
     fourth_shearnet_control   equivariant: yes   response: no
-    fourth_shearnet           equivariant: yes   response: yes
+    fourth_inloop_shearnet    equivariant: yes   response: yes  (orbit_k 2, every_n_steps 2)
+    fourth_shearnet_k4        equivariant: yes   response: yes  (orbit_k 4, every_n_steps 1)
 
 So `forklens -> control` prices the equivariance and `control -> shearnet`
 prices the response terms, with no third change confounding either step.

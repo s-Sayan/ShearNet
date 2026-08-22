@@ -1,7 +1,9 @@
-Control for `fourth_shearnet`: the same ShearNet, with every response weight
-set to 0.0 and nothing else changed.
+Control for the ShearNet arms (`fourth_inloop_shearnet` and
+`fourth_shearnet_k4`): the same ShearNet, with every response weight set to 0.0
+and nothing else changed. It is a valid control for either, because with all
+weights at zero `every_n_steps` and `orbit_k` are inert.
 
-Without it the flagship's m is a number with nothing to compare against -- you
+Without it a flagship m is a number with nothing to compare against -- you
 cannot separate the response terms from the wider backbone, from the in-loop
 fresh noise, or from anything else that moved at the same time. The parsed
 configs differ in exactly the five response weights, `orbit_k` (inert at zero

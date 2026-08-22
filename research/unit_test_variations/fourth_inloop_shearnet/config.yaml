@@ -82,41 +82,57 @@ train:
     condition: false
 
 eval:
-  # Different from train.seed and paired with the separate evaluation catalog.
   seed: 150
   n_obs: 200000
-  include_shearnet: true
   gal_model: gauss
 
-  bias:
-    estimators: [shearnet, ngmix, fpfs]
-    metacal: true
-    fpfs_cross_check: true
-    fpfs_sigma_shapelets: 0.52
-    c_convention: shearnet
-    resample: jackknife
-    component: 0
-    psf_model: gauss
-    n_jackknife: 20
+  evaluate:
+    # ShearNet is always in the run -- a benchmark of it alone says nothing --
+    # so the only choice is which baseline it is measured against:
+    #   ngmix   esheldon/ngmix. metacal + sim. ~1.2 h at n_obs 200000 on 18
+    #           workers, and the baseline the field reads.
+    #   anacal  AnaCal's own C++ Gaussian model fit, which carries an ANALYTIC
+    #           de/dgamma out of the fit via quintuple numbers (Li 2026,
+    #           arXiv:2506.16607). Not a wrapper around ngmix. Its fit is
+    #           SERIAL at ~12.6 ms/object, so it adds ~7 h at n_obs 200000.
+    #   both    run the pair.
+    # Override on the command line with --baseline; the preflight prints the
+    # hours before the run commits to them.
+    baseline: ngmix
+
+    # Corrections, all measured, no switch to turn any off:
+    #   metacal  shear the IMAGE (ngmix's bootstrapper); ShearNet measures the
+    #            same five reconvolved stamps
+    #   anacal   the ANALYTIC response, exact rather than a finite difference,
+    #            available only for AnaCal's own fit
+    #   sim      shear the SCENE -- re-render at gamma +/- response_step with
+    #            galaxies, PSFs and noise pinned. The universal one, and the
+    #            anacal row is what says whether it agrees with the exact answer.
+    response_step: 0.01        # shared, so the responses are comparable
     shear_true: 0.01
-    psf_response: metacal
-    psf_response_step: 0.01
-    shearnet_batch_size: 256
-    output: benchmarking/m/matched_bias.npz
-
-  leakage:
-    estimators: [shearnet, fpfs]
-    fpfs_sigma_shapelets: 0.52
+    component: 0               # which component carries the applied shear
     n_jackknife: 20
-    psf_model: em5
-    psf_response: metacal
-    psf_response_step: 0.01
+    psf_model: gauss           # ngmix PSF model
+    c_convention: shearnet     # 'lin2026' to sit beside their Eq. 23
+    resample: jackknife        # 'bootstrap' to match their 20x bootstrap
+    # AnaCal model fit. The window is what the fitter cuts around each source,
+    # so an odd 53-pixel stamp needs no padding. ~12.6 ms/object and not
+    # parallelised (see shearnet/methods/anacal_fit.py for why), so budget
+    # ~4.2 h at n_obs 200000.
+    anacal_sigma_arcsec: 0.52
+    anacal_stamp_size: 32
+    anacal_epochs: 35
     shearnet_batch_size: 256
-    output: benchmarking/psf_leakage/matched_leakage.npz
 
-  timing:
-    psf_model: em5
-    n_warmup: 20
-    shearnet_batch_size: 512
-    nproc: null
-    output: timing/matched_timing.npz
+    # ngmix worker processes. null = the SLURM allocation (1 off-cluster).
+    # metacal is ~156 ms/object against ~7 ms for a plain fit, so this is the
+    # difference between ~20 hours on one core and ~1.2 hours on 18. The value
+    # used is recorded in the FITS header: metacal's random guesses depend on
+    # the worker count, so reproducing an m bit-for-bit means reproducing this.
+    ngmix_nproc: null
+
+    # One file, every time. TAB_P / TAB_M are the +/- shear populations one row
+    # per object, LEAKAGE is the unsheared population with R^PSF, SUMMARY is one
+    # row per (estimator, correction). research/shear_bias/plots_from_fits.ipynb
+    # reads exactly this.
+    output: benchmarking/evaluation.fits

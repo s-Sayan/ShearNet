@@ -418,7 +418,12 @@ def _metacal_bootstrapper(prior, rng, psf_model, gal_model, mcal_pars, Tguess):
     )
 
 
-def _metacal_struct(boot, obs):
+#: The metacal shear types, in the order their images are stacked when
+#: ``return_images`` is set. Fixed so a caller can index the stack by position.
+METACAL_TYPES = ("noshear", "1p", "1m", "2p", "2m")
+
+
+def _metacal_struct(boot, obs, return_images=False):
     """One object's metacal result as a struct, dropping everything else.
 
     ``boot.go`` returns ``(resdict, obsdict)``. ``obsdict`` holds the five
@@ -428,11 +433,28 @@ def _metacal_struct(boot, obs):
     that is the actual answer. Building the struct here and returning only that
     is what keeps a 200k-object population from needing hundreds of gigabytes,
     whether the caller is looping or draining a pool.
+
+    ``return_images`` additionally returns the reconvolved stamps as float32 --
+    the five galaxy images and the single dilated PSF they all share, 67 kB per
+    object rather than the 3.6 MB of the full observations. That is what a
+    non-deconvolving estimator needs in order to have a metacal response at all:
+    it measures the same sheared images ngmix does. Missing shear types come
+    back as NaN planes so the stack shape never depends on the object.
     """
     resdict, obsdict = boot.go(obs)
-    return np.hstack(
+    struct = np.hstack(
         [make_struct(res=sres, obs=obsdict[stype], shear_type=stype) for stype, sres in resdict.items()]
     )
+    if not return_images:
+        return struct
+    reference = next(iter(obsdict.values()))
+    shape = np.asarray(reference.image).shape
+    gal = np.full((len(METACAL_TYPES),) + shape, np.nan, dtype=np.float32)
+    for i, stype in enumerate(METACAL_TYPES):
+        if stype in obsdict:
+            gal[i] = np.asarray(obsdict[stype].image, dtype=np.float32)
+    psf = np.asarray(reference.psf.image, dtype=np.float32)
+    return struct, gal, psf
 
 
 #: Per-worker bootstrapper, set by :func:`_metacal_pool_init` under ``spawn``.
@@ -456,10 +478,18 @@ def _metacal_pool_worker(obs):
     return _metacal_struct(_POOL_BOOT, obs)
 
 
-def _metacal_map(boot, obslist, workers, chunksize=16):
-    """``[struct per object]``, serially or over a spawn pool."""
+def _metacal_pool_worker_images(obs):
+    return _metacal_struct(_POOL_BOOT, obs, return_images=True)
+
+
+def _metacal_map(boot, obslist, workers, chunksize=16, return_images=False):
+    """``[struct per object]``, serially or over a spawn pool.
+
+    With ``return_images`` each entry is ``(struct, galaxy_stack, psf)`` instead.
+    """
+    worker = _metacal_pool_worker_images if return_images else _metacal_pool_worker
     if workers == 1:
-        return [_metacal_struct(boot, obs) for obs in obslist]
+        return [_metacal_struct(boot, obs, return_images=return_images) for obs in obslist]
     # imap over the observations, not starmap over [(obs, boot), ...]: an
     # Observation pickles to ~352 kB, so the task list alone would be ~70 GB at
     # 200k objects, queued before any fitting starts. imap streams it, and the
@@ -469,7 +499,7 @@ def _metacal_map(boot, obslist, workers, chunksize=16):
     with cpu_only_children(), ctx.Pool(
         workers, initializer=_metacal_pool_init, initargs=(boot,)
     ) as pool:
-        return list(pool.imap(_metacal_pool_worker, obslist, chunksize=chunksize))
+        return list(pool.imap(worker, obslist, chunksize=chunksize))
 
 
 def mp_fit_one_single(
@@ -481,6 +511,7 @@ def mp_fit_one_single(
     mcal_pars={"psf": "dilate", "mcal_shear": 0.01},
     nproc=None,
     collect_resdict=False,
+    return_images=False,
 ):
     """Run metacalibration over ``obslist``, returning one struct per object.
 
@@ -528,7 +559,7 @@ def mp_fit_one_single(
 
     workers = resolve_nproc(nproc, n_tasks=n)
     logger.info("metacal: %d objects on %d worker(s)", n, workers)
-    return _metacal_map(boot, obslist, workers), []
+    return _metacal_map(boot, obslist, workers, return_images=return_images), []
 
 
 def build_runners(rng, psf_model="gauss", gal_model="gauss", ntry=20, Tguess=None, prior=None):

@@ -1,34 +1,37 @@
 #!/bin/bash
 #
-# Submit a unit-test VARIATION through the training-matched benchmark harness.
+# Submit one variation: train, then evaluate. One job, one output file.
 #
-# Variations are config-only directories; this supplies the jobs they lack.
-# Every stage is driven entirely by $CONFIG, so one copy serves all of them.
+#   ./sub.sh fourth_inloop_shearnet                    # train, then evaluate
+#   ./sub.sh fourth_inloop_shearnet --no-train         # evaluate the checkpoint
+#   ./sub.sh fourth_inloop_shearnet --baseline both    # ngmix AND the AnaCal fit
 #
-#   ./sub.sh fourth_shearnet                      # train, then all benchmarks
-#   ./sub.sh fourth_shearnet_control --no-train   # re-benchmark an existing model
-#   ./sub.sh fourth_forklens m                    # just the bias table
+# ShearNet is always evaluated; --baseline picks what against. Every estimator
+# is measured under every correction it admits, and the whole table always goes
+# to one FITS -- there is no stage selection and no partial output, because a
+# benchmark that sometimes writes half its columns produces results that cannot
+# be compared to each other.
 #
-# Benchmarks run research/shear_bias/run.py, which measures ShearNet, ngmix and
-# FPFS in one job under a single response protocol -- so the m values in the
-# output are directly comparable, with ngmix's metacal and FPFS's analytic
-# response reported alongside as checks on that protocol.
+#   --baseline ngmix   esheldon/ngmix (default). metacal + sim.
+#   --baseline anacal  AnaCal's Gaussian model fit, which carries an ANALYTIC
+#                      shear response. Its fit is serial, so it is the
+#                      expensive one: ~7 h at n_obs 200000 against ngmix's ~1.2.
+#   --baseline both    the pair.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$ROOT/../.." && pwd)"
-STAGES_DIR="$ROOT/_stages"
 
 usage() {
     cat <<USAGE
-Usage: $(basename "$0") <variation> [--no-train] [stage ...]
+Usage: $(basename "$0") <variation> [--no-train] [--estimators LIST]
 
-  <variation>   directory name under research/unit_test_variations/
-  --no-train    skip training; benchmark the existing checkpoint
-  stage         one or more of: m leakage timing (default: all)
+  <variation>        directory name under research/unit_test_variations/
+  --no-train         skip training; evaluate the existing checkpoint
+  --baseline WHICH   ngmix (default), anacal, or both
 
-Available variations with an in-loop config:
+Variations with an in-loop config:
 $(cd "$ROOT" && grep -ls 'generation:[[:space:]]*inloop' */config.yaml 2>/dev/null \
     | xargs -r -n1 dirname | sort | sed 's/^/  /')
 USAGE
@@ -42,50 +45,75 @@ CONFIG="$ROOT/$VARIATION/config.yaml"
 [[ -f "$CONFIG" ]] || { echo "No config at $CONFIG" >&2; usage; exit 1; }
 
 SKIP_TRAIN=0
-STAGES=()
-for arg in "$@"; do
-    case "$arg" in
-        --no-train|--skip-train|--benchmark-only) SKIP_TRAIN=1 ;;
-        m|leakage|timing) STAGES+=("$arg") ;;
+BASELINE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-train|--skip-train|--benchmark-only) SKIP_TRAIN=1; shift ;;
+        --baseline) BASELINE="$2"; shift 2 ;;
+        --baseline=*) BASELINE="${1#*=}"; shift ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "Unknown argument: $arg" >&2; usage; exit 1 ;;
+        *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
 done
-[[ ${#STAGES[@]} -eq 0 ]] && STAGES=(m leakage timing)
 
-run_stage() {
-    local want="$1" s
-    for s in "${STAGES[@]}"; do [[ "$s" == "$want" ]] && return 0; done
-    return 1
-}
+LOGDIR="$ROOT/$VARIATION/logs"
+mkdir -p "$LOGDIR"
 
-# submit_job <jobname> <log-subdir> <stage-script> [extra sbatch args...]
-submit_job() {
-    local name="$1" logsub="$2" script="$3"; shift 3
-    local logdir="$ROOT/$VARIATION/$logsub/logs"
-    mkdir -p "$logdir"
-    sbatch --parsable \
-        --job-name="${VARIATION}_${name}" \
-        --output="$logdir/${name}_%j.out" \
-        --error="$logdir/${name}_%j.err" \
-        --export="ALL,ROOT=$ROOT/$VARIATION,REPO=$REPO,CONFIG=$CONFIG" \
-        "$@" \
-        "$STAGES_DIR/$script"
-}
+echo "Variation:  $VARIATION"
+echo "Config:     $CONFIG"
+echo "Baseline:   ${BASELINE:-<from config>}  (ShearNet is always evaluated)"
+[[ "$SKIP_TRAIN" -eq 1 ]] && echo "Training:   skipped, reusing the checkpoint"
 
-echo "Variation: $VARIATION"
-echo "Config:    $CONFIG"
+JOBID=$(sbatch --parsable \
+    --job-name="$VARIATION" \
+    --output="$LOGDIR/%j.out" \
+    --error="$LOGDIR/%j.err" \
+    --export="ALL,CONFIG=$CONFIG,REPO=$REPO,SKIP_TRAIN=$SKIP_TRAIN,BASELINE=$BASELINE" \
+    <<'SBATCH'
+#!/bin/bash
+#SBATCH -p short
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gres=gpu:rtx_pro_6000_b:1
+#SBATCH --cpus-per-task=18
+#SBATCH --time=24:00:00
+#SBATCH --mem=200G
 
-DEP=""; AFTER=""
-if [[ "$SKIP_TRAIN" -eq 0 ]]; then
-    JOBID_TRAIN=$(submit_job train training run_train.sh)
-    echo "Submitted training job:  $JOBID_TRAIN"
-    DEP="--dependency=afterok:$JOBID_TRAIN"
-    AFTER=" (after $JOBID_TRAIN)"
+echo "===================================="
+echo "SLURM JOB STARTED"
+echo "Job ID: $SLURM_JOB_ID"
+echo "Node:   $(hostname)"
+echo "Config: $CONFIG"
+echo "Start:  $(date)"
+echo "===================================="
+
+source "$REPO/setup_env.sh"
+start_time=$(date +%s)
+
+if [[ "${SKIP_TRAIN:-0}" -eq 0 ]]; then
+    echo "--- training ---"
+    shearnet-train --config "$CONFIG"
 else
-    echo "Skipping training — reusing the existing checkpoint."
+    echo "--- training skipped ---"
 fi
 
-run_stage m       && echo "Submitted bias job:      $(submit_job m       benchmarking/m            run_m.sh       $DEP)$AFTER"
-run_stage leakage && echo "Submitted leakage job:   $(submit_job leakage benchmarking/psf_leakage  run_leakage.sh $DEP)$AFTER"
-run_stage timing  && echo "Submitted timing job:    $(submit_job timing  timing                    run_timing.sh  $DEP)$AFTER"
+echo "--- evaluating (ShearNet vs ${BASELINE:-config baseline}) ---"
+if [[ -n "${BASELINE:-}" ]]; then
+    python "$REPO/research/shear_bias/run.py" -c "$CONFIG" --baseline "$BASELINE"
+else
+    python "$REPO/research/shear_bias/run.py" -c "$CONFIG"
+fi
+
+end_time=$(date +%s)
+runtime=$((end_time - start_time))
+printf -v h "%02d" $((runtime/3600)); printf -v m "%02d" $(((runtime%3600)/60))
+printf -v s "%02d" $((runtime%60))
+echo "===================================="
+echo "Finished: $(date)"
+echo "Runtime:  ${h}:${m}:${s} (HH:MM:SS)"
+echo "===================================="
+SBATCH
+)
+
+echo "Submitted:  $JOBID"
+echo "Logs:       $LOGDIR/${JOBID}.out"
