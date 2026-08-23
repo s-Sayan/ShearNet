@@ -95,6 +95,8 @@ def trained_run(tmp_path_factory):
                 "n_jackknife": 4,
                 "psf_model": "gauss",
                 "response_step": 0.01,
+                "component": "both",
+                "shearnet_metacal": True,
                 "shearnet_batch_size": 64,
                 "output": "evaluation.fits",
             },
@@ -212,24 +214,166 @@ def test_evaluation_writes_one_fits_with_every_hdu(trained_run):
 
     with fits.open(path) as hdul:
         names = [h.name for h in hdul]
-        assert names == ["PRIMARY", "TAB_P", "TAB_M", "LEAKAGE", "SUMMARY"], names
+        assert names == ["PRIMARY", "TAB_P", "TAB_M", "TAB_P2", "TAB_M2",
+                         "LEAKAGE", "SUMMARY", "BINNED", "LEAKSUM"], names
         n = benchmark.get("eval.n_obs")
-        for hdu in ("TAB_P", "TAB_M", "LEAKAGE"):
+        for hdu in ("TAB_P", "TAB_M", "TAB_P2", "TAB_M2", "LEAKAGE"):
             assert len(hdul[hdu].data) == n, hdu
+        # the second pair is sheared in g2, which is what makes m2/c2 real
+        assert hdul["TAB_P"].header["COMPONEN"] == 0
+        assert hdul["TAB_P2"].header["COMPONEN"] == 1
         for column in ("g_th", "hlr_th", "flux_th", "gpsf", "Tpsf", "s2n",
                        "e_ngmix", "e_anacal", "e_shearnet",
                        "R_ngmix_metacal", "R_ngmix_sim",
                        "R_anacal_anacal", "R_anacal_sim",
                        "R_shearnet_metacal", "R_shearnet_sim",
+                       # metacal measures its own noshear shape on the
+                       # reconvolved stamp; that is what the metacal m/c
+                       # divides, so it cannot be reconstructed from e_<est>
+                       "e_ngmix_metacal", "e_shearnet_metacal",
                        # the network predicts size and flux too; shear_measure()
                        # slices those off, so they need their own forward pass
                        "hlr_shearnet", "flux_shearnet"):
             assert column in hdul["TAB_P"].data.names, (column, hdul["TAB_P"].data.names)
+        for column in ("gpsf", "s2n", "e_ngmix", "e_ngmix_raw",
+                       "e_shearnet", "e_shearnet_raw",
+                       "Rpsf_ngmix_sim", "Rbar_psf_ngmix"):
+            assert column in hdul["LEAKAGE"].data.names, column
+        header_primary = hdul["PRIMARY"].header
         summary = hdul["SUMMARY"].data
+        assert set(summary["component"]) == {0, 1}
+        assert header_primary["COMPONEN"] == 0            # the primary component
+        assert str(header_primary["MEASURED"]).strip() == "0,1"
         pairs = set(zip(summary["estimator"], summary["correction"]))
         assert {("ngmix", "metacal"), ("ngmix", "sim"),
                 ("anacal", "anacal"), ("anacal", "sim"),
                 ("shearnet", "metacal"), ("shearnet", "sim")} <= pairs, pairs
+        # the binned m/c was being computed and dropped; it is per flux
+        # quantile, each bin dividing by its own within-bin response
+        binned = hdul["BINNED"].data
+        assert len(binned) > 0
+        assert pairs >= set(zip(binned["estimator"], binned["correction"]))
+        assert set(binned["bin"]) == set(range(binned["bin"].max() + 1))
+        leaksum = hdul["LEAKSUM"].data
+        assert set(leaksum["estimator"]) == set(harness.ESTIMATORS)
+
+
+def test_the_metacal_shapes_reproduce_the_summary_row(trained_run):
+    """SUMMARY must be recomputable from the per-object columns.
+
+    The metacal m/c divides metacal's own noshear shape, not the plain
+    measurement in ``e_<est>``. Storing only the response made the file
+    unable to explain its own summary row, which is what this pins.
+    """
+    from astropy.io import fits
+
+    from shearnet.methods.anacal import ShapeMeasurement, paired_bias
+
+    benchmark, training = trained_run
+    result = harness._run_evaluation(benchmark, training, harness.ESTIMATORS)
+    path = Path(benchmark.get("paths.root")) / benchmark.get("eval.evaluate.output")
+    with fits.open(path) as hdul:
+        tabs = {"plus": hdul["TAB_P"].data, "minus": hdul["TAB_M"].data}
+        header = hdul["PRIMARY"].header
+
+        def shape(which, estimator, correction, column):
+            tab = tabs[which]
+            flag = f"flag_{estimator}"
+            return ShapeMeasurement(
+                e=np.asarray(tab[column], float)[:, :2],
+                dedg=np.asarray(tab[f"R_{estimator}_{correction}"], float),
+                flags=np.asarray(tab[flag], float) != 0 if flag in tab.names
+                else np.zeros(len(tab), bool),
+            )
+
+        for estimator, correction, column in (
+            ("ngmix", "metacal", "e_ngmix_metacal"),
+            ("shearnet", "metacal", "e_shearnet_metacal"),
+            ("anacal", "anacal", "e_anacal"),
+            ("ngmix", "sim", "e_ngmix"),
+        ):
+            bias = paired_bias(
+                shape("plus", estimator, correction, column),
+                shape("minus", estimator, correction, column),
+                float(header["SHEAR_TR"]),
+                component=int(header["COMPONEN"]),
+                njac=int(header["N_JACKKN"]),
+                c_convention=str(header["C_CONVEN"]).strip(),
+                resample=str(header["RESAMPLE"]).strip(),
+            )
+            prefix = f"{estimator}_{correction}"
+            assert bias.m == pytest.approx(result[f"{prefix}_m"], rel=1e-9), prefix
+            assert bias.c == pytest.approx(result[f"{prefix}_c"], rel=1e-9), prefix
+
+
+def test_psf_response_is_applied_to_deconvolvers_only(trained_run):
+    """ngmix's leakage is R^PSF-corrected; ShearNet's is deliberately not.
+
+    The metacal-family PSF response equals physical leakage only for an
+    estimator that explicitly deconvolves. Applying ShearNet's would fold the
+    network's own PSF sensitivity into the number the leakage plot exists to
+    show, so the default corrects ngmix and anacal and leaves ShearNet raw.
+    """
+    from astropy.io import fits
+
+    benchmark, training = trained_run
+    result = harness._run_evaluation(benchmark, training, harness.ESTIMATORS)
+    assert result["ngmix_leakage_corrected"] is True
+    assert result["anacal_leakage_corrected"] is True
+    assert result["shearnet_leakage_corrected"] is False
+
+    path = Path(benchmark.get("paths.root")) / benchmark.get("eval.evaluate.output")
+    with fits.open(path) as hdul:
+        leak = hdul["LEAKAGE"].data
+        gpsf = np.asarray(leak["gpsf"], float)
+        rbar = np.asarray(leak["Rbar_psf_ngmix"], float)
+        assert np.allclose(rbar, rbar[0])
+        # the correction is the constant ensemble response, not the per-object one
+        assert np.allclose(
+            np.asarray(leak["e_ngmix"], float),
+            np.asarray(leak["e_ngmix_raw"], float) - gpsf * rbar[0],
+            equal_nan=True,
+        )
+        # ShearNet's corrected column IS its raw column
+        assert np.allclose(
+            np.asarray(leak["e_shearnet"], float),
+            np.asarray(leak["e_shearnet_raw"], float),
+            equal_nan=True,
+        )
+
+
+def test_shearnet_metacal_can_be_switched_off(trained_run):
+    """The out-of-distribution diagnostic is optional; the physical one is not.
+
+    Turning it off must cost ShearNet only its metacal column -- ``sim`` is its
+    response, and ngmix keeps its own metacal either way.
+    """
+    benchmark, training = trained_run
+    section = harness._section(benchmark, "evaluate")
+    saved = dict(section)
+    section["shearnet_metacal"] = False
+    try:
+        result = harness._run_evaluation(benchmark, training, ("ngmix", "shearnet"))
+    finally:
+        section.clear()
+        section.update(saved)
+    assert "shearnet_metacal_m" not in result
+    assert np.isfinite(result["shearnet_sim_m"])
+    assert np.isfinite(result["ngmix_metacal_m"])
+    # still measured and reported, just not applied
+    assert result["shearnet_leakage_psf_response"].shape == (2, 2)
+
+
+def test_psf_response_apply_switch():
+    assert harness._psf_response_apply({}) == frozenset({"ngmix", "anacal"})
+    assert harness._psf_response_apply({"psf_response_apply": "none"}) == frozenset()
+    assert harness._psf_response_apply({"psf_response_apply": ["ngmix"]}) == frozenset({"ngmix"})
+    assert harness._psf_response_apply({"psf_response_apply": "ngmix, shearnet"}) == frozenset(
+        {"ngmix", "shearnet"}
+    )
+    assert harness._psf_response_apply({"psf_response_apply": "all"}) == frozenset(harness.ESTIMATORS)
+    with pytest.raises(ValueError, match="psf_response_apply"):
+        harness._psf_response_apply({"psf_response_apply": ["fpfs"]})
 
 
 def test_shearnet_metacal_measures_the_reconvolved_images(trained_run):
@@ -276,3 +420,59 @@ def test_unknown_estimator_is_rejected():
     with pytest.raises(ValueError, match="unknown baseline"):
         harness._estimators({}, "metacal")
     assert harness._estimators({"baseline": "ngmix"}, None) == ["ngmix", "shearnet"]
+
+
+def test_both_components_are_measured(trained_run):
+    """m and c exist for g1 AND g2, and they are separate measurements.
+
+    Shearing only g1 and then asking paired_bias for component 1 does not give
+    m2 -- the numerator is consistent with zero, so it returns roughly -1. A
+    real m2 needs a second pair sheared in g2, which is what `component: both`
+    renders.
+    """
+    benchmark, training = trained_run
+    result = harness._run_evaluation(benchmark, training, ("ngmix", "shearnet"))
+    for estimator in ("ngmix", "shearnet"):
+        for correction in ("metacal", "sim"):
+            for k in (1, 2):
+                prefix = f"{estimator}_{correction}_g{k}"
+                for field in ("m", "m_err", "c", "c_err"):
+                    assert np.isfinite(result[f"{prefix}_{field}"]), f"{prefix}_{field}"
+            # the two components are genuinely different measurements
+            assert (result[f"{estimator}_{correction}_g1_m"]
+                    != result[f"{estimator}_{correction}_g2_m"])
+        # the unsuffixed alias is the first measured component, so every
+        # existing caller keeps working
+        assert result[f"{estimator}_sim_m"] == result[f"{estimator}_sim_g1_m"]
+
+
+def test_component_switch():
+    assert harness._components({}) == (0,)
+    assert harness._components({"component": 1}) == (1,)
+    assert harness._components({"component": "both"}) == (0, 1)
+    assert harness._components({"component": [1, 0]}) == (1, 0)
+    assert harness._components({"component": [0, 0]}) == (0,)
+    for bad in (2, -1, "g1"):
+        with pytest.raises(ValueError, match="component"):
+            harness._components({"component": bad})
+
+
+def test_shearnet_metacal_is_off_by_default(trained_run):
+    """The network's reported response is the direct one unless asked otherwise.
+
+    metacal feeds it reconvolved stamps that are out of its training
+    distribution, so it is opt-in. ngmix keeps its metacal regardless.
+    """
+    benchmark, training = trained_run
+    section = harness._section(benchmark, "evaluate")
+    saved = dict(section)
+    section.pop("shearnet_metacal", None)
+    section["component"] = 0
+    try:
+        result = harness._run_evaluation(benchmark, training, ("ngmix", "shearnet"))
+    finally:
+        section.clear()
+        section.update(saved)
+    assert "shearnet_metacal_m" not in result
+    assert np.isfinite(result["shearnet_sim_m"])
+    assert np.isfinite(result["ngmix_metacal_m"])

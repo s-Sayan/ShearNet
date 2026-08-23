@@ -283,6 +283,7 @@ def test_response_regularisation_runs_all_terms_and_returns_metrics():
         shift_weight=0.1,
         complement_weight=0.1,
         orbit_weight=0.1,
+        isotropy_weight=0.1,
     )
     step = make_fused_train_step(
         gen,
@@ -541,3 +542,109 @@ def test_orbit_term_refuses_a_circular_psf():
             0.0,
             response=ResponseRegularization(orbit_weight=1.0),
         )
+
+
+# ----------------------------------------------------------------------
+# isotropy: the constraint D4 cannot supply
+# ----------------------------------------------------------------------
+def test_d4_forces_the_off_diagonals_and_frees_the_diagonal():
+    """The algebra behind ``isotropy_weight``, checked on the shipped signs.
+
+    Every D4 element acts on the spin-2 pair as ``S = diag(+/-1, +/-1)``, so
+    ``R -> S R S^-1`` keeps ``R11``/``R22`` and flips ``R12``/``R21`` by
+    ``w1 w2``. Averaging over the group therefore zeroes the off-diagonals and
+    leaves the diagonal entirely free -- which is why an R22-vs-R11 asymmetry
+    can survive a perfectly equivariant architecture.
+    """
+    from shearnet.core.models import _D4_W1, _D4_W2
+
+    w1, w2 = np.asarray(_D4_W1), np.asarray(_D4_W2)
+    assert set(zip(w1, w2)) == {(1, 1), (-1, -1), (1, -1), (-1, 1)}
+
+    R = np.array([[1.0, 0.3], [0.4, 0.5]])  # deliberately anisotropic
+    averaged = np.mean(
+        [np.diag([a, b]) @ R @ np.diag([a, b]) for a, b in set(zip(w1, w2))], axis=0
+    )
+    assert averaged[0, 1] == pytest.approx(0.0, abs=1e-12)
+    assert averaged[1, 0] == pytest.approx(0.0, abs=1e-12)
+    # the diagonal is untouched: D4 says nothing about R11 vs R22
+    assert averaged[0, 0] == pytest.approx(R[0, 0])
+    assert averaged[1, 1] == pytest.approx(R[1, 1])
+
+    # a 45-degree rotation is what would tie them: spin-2 doubles the angle
+    S = np.array([[0.0, -1.0], [1.0, 0.0]])
+    rotated = S @ R @ np.linalg.inv(S)
+    isotropic = 0.5 * (R + rotated)
+    assert isotropic[0, 0] == pytest.approx(isotropic[1, 1])
+    assert isotropic[0, 1] == pytest.approx(-isotropic[1, 0])
+
+
+def test_d4_model_is_equivariant_yet_anisotropic():
+    """The equivariance holds exactly; the diagonal asymmetry survives it.
+
+    Both halves matter: if the symmetry were broken, the off-diagonals would be
+    the thing to chase. They are not -- so an R22 problem is not a broken D4,
+    it is a constraint the group never imposed.
+    """
+    from shearnet.core.models import _D4_W1, _D4_W2, _d4_apply, build_model
+
+    model = build_model("d4-fork-like", galaxy_type="d4cnn", psf_type="d4cnn",
+                        fusion="transformer", head="attention", branch_features=[8, 8])
+    params = model.init(jax.random.PRNGKey(0),
+                        jnp.zeros((1, NPIX, NPIX)), jnp.zeros((1, NPIX, NPIX)))
+    key = jax.random.PRNGKey(3)
+    gal = jax.random.normal(key, (4, NPIX, NPIX))
+    psf = jax.random.normal(jax.random.fold_in(key, 1), (4, NPIX, NPIX))
+    base = np.asarray(model.apply(params, gal, psf))[:, :2]
+    scale = max(np.max(np.abs(base)), 1e-30)
+
+    for i in range(8):
+        out = np.asarray(model.apply(params, _d4_apply(gal, i), _d4_apply(psf, i)))[:, :2]
+        want = base * np.array([float(_D4_W1[i]), float(_D4_W2[i])])
+        assert np.max(np.abs(out - want)) / scale < 1e-4, f"element {i} breaks equivariance"
+
+
+def test_isotropy_term_penalises_only_the_anisotropic_part():
+    """``(R11 - R22)^2 + (R12 + R21)^2`` -- zero exactly on the invariant part."""
+    gen, state, forward, loss_fn, labels = _harness(n=16, batch=8, apply_psf_shear=True)
+    idx = gen.epoch_indices(jax.random.PRNGKey(0))[0]
+    slot = 1 + RESPONSE_TERMS.index("isotropy")
+
+    def isotropy_of(**weights):
+        step = make_fused_train_step(
+            gen, forward, loss_fn, labels, 12.7,
+            response=ResponseRegularization(**weights),
+            shear_indices=(0, 1), return_metrics=True,
+        )
+        _, _, metrics = step(normalize_state(state), idx,
+                             jax.random.PRNGKey(1), jax.random.PRNGKey(2))
+        return float(np.asarray(metrics)[slot])
+
+    # off unless asked for, and strictly positive for a generic model
+    assert isotropy_of(gamma_weight=0.1) == 0.0
+    assert isotropy_of(isotropy_weight=0.1) > 0.0
+    # it needs no extra render: turning it on alongside gamma leaves the gamma
+    # term identical, because both read the same R^gamma matrix
+    both = make_fused_train_step(
+        gen, forward, loss_fn, labels, 12.7,
+        response=ResponseRegularization(gamma_weight=0.1, isotropy_weight=0.1),
+        shear_indices=(0, 1), return_metrics=True,
+    )
+    only = make_fused_train_step(
+        gen, forward, loss_fn, labels, 12.7,
+        response=ResponseRegularization(gamma_weight=0.1),
+        shear_indices=(0, 1), return_metrics=True,
+    )
+    gamma_slot = 1 + RESPONSE_TERMS.index("gamma")
+    a = np.asarray(both(normalize_state(state), idx,
+                        jax.random.PRNGKey(1), jax.random.PRNGKey(2))[2])
+    b = np.asarray(only(normalize_state(state), idx,
+                        jax.random.PRNGKey(1), jax.random.PRNGKey(2))[2])
+    assert a[gamma_slot] == pytest.approx(b[gamma_slot], rel=1e-6)
+
+
+def test_isotropy_weight_is_a_recognised_config_key():
+    response = ResponseRegularization.from_config({"isotropy_weight": 0.05})
+    assert response.isotropy_weight == 0.05
+    assert response.enabled
+    assert response.weights[RESPONSE_TERMS.index("isotropy")] == 0.05

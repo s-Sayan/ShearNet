@@ -71,6 +71,16 @@ train:
     # Re-rendering only the PSF at 90 degrees is a simulator constraint. It is
     # distinct from the joint D4 symmetry implemented by the architecture.
     orbit_weight: 1.0e-2
+    # (R11 - R22)^2 + (R12 + R21)^2 on R^gamma: the 45-degree-rotation
+    # invariance, and the ONE thing the D4 architecture structurally cannot
+    # give you. Every D4 element acts on (e1, e2) as diag(+/-1, +/-1), so
+    # R -> S R S^-1 zeroes the off-diagonals and leaves R11 and R22 completely
+    # unrelated -- measured on this very model at initialisation: R12 and R21
+    # both consistent with zero (1.8 and 1.0 sigma) while R11 - R22 is 35
+    # sigma, with D4 equivariance itself holding to 2e-7. Reuses the R^gamma
+    # matrix gamma_weight already builds, so it costs no extra render.
+    # See ISOTROPY_NOTE in shearnet/core/inloop.py.
+    isotropy_weight: 1.0e-2
     every_n_steps: 2
     orbit_k: 2
     gamma_target: analytic
@@ -100,21 +110,55 @@ eval:
     # hours before the run commits to them.
     baseline: ngmix
 
-    # Corrections, all measured, no switch to turn any off:
-    #   metacal  shear the IMAGE (ngmix's bootstrapper); ShearNet measures the
-    #            same five reconvolved stamps
+    # Corrections:
+    #   metacal  shear the IMAGE: deconvolve, shear, reconvolve with a DILATED
+    #            PSF (ngmix's bootstrapper). ShearNet measures the same five
+    #            reconvolved stamps -- see shearnet_metacal below.
     #   anacal   the ANALYTIC response, exact rather than a finite difference,
     #            available only for AnaCal's own fit
     #   sim      shear the SCENE -- re-render at gamma +/- response_step with
-    #            galaxies, PSFs and noise pinned. The universal one, and the
+    #            galaxies, PSFs and noise pinned. No deconvolution: this is the
+    #            "direct" route, and it is the physical response for a
+    #            non-deconvolving estimator. The universal column, and the
     #            anacal row is what says whether it agrees with the exact answer.
     response_step: 0.01        # shared, so the responses are comparable
     shear_true: 0.01
-    component: 0               # which component carries the applied shear
+    # Which shear component carries the applied shear. m_k is only a
+    # measurement if the shear is ON component k -- with shear on g1 only, the
+    # g2 numerator is consistent with zero and "m2" comes out at -1. So 'both'
+    # renders a SECOND pair sheared in g2, doubling the render and the metacal
+    # fit (the dominant cost; the preflight prints the new total). That is the
+    # price of reporting m1, m2, c1 and c2 rather than just the first component.
+    component: both
     n_jackknife: 20
     psf_model: gauss           # ngmix PSF model
     c_convention: shearnet     # 'lin2026' to sit beside their Eq. 23
     resample: jackknife        # 'bootstrap' to match their 20x bootstrap
+
+    # ---- PSF response: which estimators get it APPLIED ----------------------
+    # R^PSF is always MEASURED, for every estimator, the "direct"
+    # (skip-deconvolution) way: shear the real PSF by +/- response_step and
+    # re-render, no dilated reconvolution PSF anywhere.
+    #
+    # Applying it is a different question. The metacal-family PSF response is
+    # the physical leakage only for an estimator that explicitly deconvolves,
+    # so the ensemble correction e -> e - gpsf * Rbar^PSF is subtracted for
+    # ngmix and anacal and NOT for ShearNet: the network never deconvolves, so
+    # its R^PSF is a diagnostic of its own PSF sensitivity, and applying it
+    # would hide in the leakage plot the very thing that plot exists to show.
+    # LEAKAGE carries both e_<est> (as applied) and e_<est>_raw.
+    psf_response_apply: [ngmix, anacal]   # or 'none' / 'all' / a subset
+
+    # ---- ShearNet's metacal response: an opt-in diagnostic -----------------
+    # OFF by default, because ShearNet's response is measured the DIRECT way:
+    # `sim` shears the scene and reconvolves with the REAL PSF, no deconvolution
+    # and no dilated reconvolution PSF anywhere, so the stamps stay in the
+    # distribution the network trained on. The metacal route feeds it
+    # deconvolved/dilated/reconvolved stamps instead -- out of distribution, and
+    # historically poor, which is why the skip-deconvolution route exists at all
+    # (c538a8c). Turn it on to carry that diagnostic column as well; ngmix keeps
+    # its own metacal either way.
+    shearnet_metacal: false
     # AnaCal model fit. The window is what the fitter cuts around each source,
     # so an odd 53-pixel stamp needs no padding. ~12.6 ms/object and not
     # parallelised (see shearnet/methods/anacal_fit.py for why), so budget
@@ -131,8 +175,16 @@ eval:
     # the worker count, so reproducing an m bit-for-bit means reproducing this.
     ngmix_nproc: null
 
-    # One file, every time. TAB_P / TAB_M are the +/- shear populations one row
-    # per object, LEAKAGE is the unsheared population with R^PSF, SUMMARY is one
-    # row per (estimator, correction). research/shear_bias/plots_from_fits.ipynb
-    # reads exactly this.
+    # One file, every time:
+    #   TAB_P / TAB_M  the +/- shear populations, one row per object, carrying
+    #                  both e_<est> (plain measurement) and e_<est>_metacal
+    #                  (metacal's own noshear shape, which is what its m/c
+    #                  divides) alongside every response matrix
+    #   LEAKAGE        the unsheared population: R^PSF, e_<est> as applied and
+    #                  e_<est>_raw
+    #   SUMMARY        one row per (estimator, correction)
+    #   BINNED         one row per (estimator, correction, flux quantile); each
+    #                  bin divides by its own within-bin <R>
+    #   LEAKSUM        one row per estimator: mean shape, R^PSF, applied or not
+    # research/shear_bias/plots_from_fits.ipynb reads exactly this.
     output: benchmarking/evaluation.fits

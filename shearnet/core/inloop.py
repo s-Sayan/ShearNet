@@ -97,7 +97,45 @@ INLOOP_LABEL_KEYS = ("g1", "g2", "hlr", "flux")
 
 
 #: Response loss components, in the order they appear in the metrics vector.
-RESPONSE_TERMS = ("gamma", "psf", "shift", "complement", "orbit")
+RESPONSE_TERMS = ("gamma", "psf", "shift", "complement", "orbit", "isotropy")
+
+#: Why ``isotropy_weight`` has to exist, given a D4-equivariant architecture.
+ISOTROPY_NOTE = """D4 cannot relate R11 to R22; only a 45-degree rotation can.
+
+Under D4 the spin-2 pair transforms with independent signs -- the code is in
+``shearnet.core.models``: ``w1(g) = (-1)**r`` and ``w2(g) = (-1)**(r + m)``, so
+every one of the eight elements acts as ``S = diag(+/-1, +/-1)``. The response
+transforms as ``R -> S R S^-1``, which leaves ``R11`` and ``R22`` untouched and
+multiplies ``R12``/``R21`` by ``w1 w2``. Averaging over the group therefore
+forces ``R12 = R21 = 0`` and says nothing whatsoever about ``R11`` vs ``R22``.
+
+Both halves of that are measurable on the untrained d4-fork-like model, over ten
+independent batches of 64 rendered stamps:
+
+    D4 equivariance of (g1, g2)   exact to 2.4e-07 relative
+    R12 = +3.0e-03 +/- 1.6e-03    consistent with zero (1.8 sigma)
+    R21 = -1.5e-03 +/- 1.5e-03    consistent with zero (1.0 sigma)
+    R11 - R22 = -0.288 +/- 0.008  35 sigma, at initialisation
+
+The symmetry is doing exactly what the algebra says, and the diagonal asymmetry
+it leaves free is 35 sigma before a single gradient step.
+
+The element that would relate them is a 45-degree rotation: spin-2 doubles the
+angle, so it acts as ``S = [[0, -1], [1, 0]]`` and
+``S R S^-1 = [[R22, -R21], [-R12, R11]]``. Averaging ``R`` over that gives
+``[[(R11+R22)/2, (R12-R21)/2], [(R21-R12)/2, (R11+R22)/2]]`` -- isotropic
+diagonal, antisymmetric off-diagonal. D4 has no 45-degree rotation, so this term
+imposes that invariance directly on the response instead:
+
+    isotropy = (R11 - R22)^2 + (R12 + R21)^2
+
+It reuses the ``R^gamma`` matrix ``gamma_weight`` already computes, so it costs
+no extra render, linearisation or forward pass.
+
+``R^PSF`` needs no counterpart: its target is zero in all four entries and
+``psf_weight`` already penalises them equally, which is strictly stronger than
+isotropy.
+"""
 
 #: Simulator parameters whose image tangents span the physically realisable
 #: directions. Anything orthogonal to their span is noise, and that complement
@@ -151,6 +189,17 @@ class ResponseRegularization:
       fixed**, by re-rendering from the profile; it is a simulator consistency
       constraint, not a D4 transformation of the input images, and it is not
       expressible as an architectural symmetry.
+    * ``isotropy_weight`` penalises ``(R11 - R22)^2 + (R12 + R21)^2`` on
+      ``R^gamma``: the one statement about the response that the D4 architecture
+      structurally cannot make. See :data:`ISOTROPY_NOTE`.
+
+    Every response term above is already a **full 2x2 matrix** penalised
+    entry-by-entry with equal weight -- ``R^gamma``, ``R^PSF`` and the shift
+    response all constrain both components, and both are logged separately in
+    :data:`RESPONSE_REPORT_FIELDS`. Nothing here is first-component-only.
+    ``isotropy_weight`` exists because equal treatment of the two components is
+    not the same as *tying them together*, and the difference is where an
+    ``R22``-vs-``R11`` asymmetry lives.
 
     Attributes:
         orbit_k: size of the PSF orbit. ``2`` uses ``{P, R_90 P}``, which
@@ -182,6 +231,7 @@ class ResponseRegularization:
     shift_weight: float = 0.0
     complement_weight: float = 0.0
     orbit_weight: float = 0.0
+    isotropy_weight: float = 0.0
     every_n_steps: int = 1
     orbit_k: int = 2
     gamma_target: str = "analytic"
@@ -206,6 +256,7 @@ class ResponseRegularization:
         "shift_weight",
         "complement_weight",
         "orbit_weight",
+        "isotropy_weight",
         "every_n_steps",
         "orbit_k",
         "gamma_target",
@@ -231,13 +282,14 @@ class ResponseRegularization:
 
     @property
     def weights(self):
-        """The five term weights, ordered as :data:`RESPONSE_TERMS`."""
+        """The term weights, ordered as :data:`RESPONSE_TERMS`."""
         return (
             float(self.gamma_weight),
             float(self.psf_weight),
             float(self.shift_weight),
             float(self.complement_weight),
             float(self.orbit_weight),
+            float(self.isotropy_weight),
         )
 
     @property
@@ -763,7 +815,10 @@ def make_fused_train_step(
                 # direction would re-render the whole batch once per tangent --
                 # up to twelve renders a step for the complement basis alone.
                 need_output_jvp = bool(
-                    response.gamma_weight or response.psf_weight or response.shift_weight
+                    response.gamma_weight
+                    or response.psf_weight
+                    or response.shift_weight
+                    or response.isotropy_weight
                 )
                 predict_jvp = jax.linearize(predict_from_params, p)[1] if need_output_jvp else None
 
@@ -774,11 +829,29 @@ def make_fused_train_step(
                     """``R[a, b] = d output_a / d param_b`` for the named pair."""
                     return jnp.stack([output_jvp(name1), output_jvp(name2)], axis=-1)
 
-                if response.gamma_weight:
+                # R^gamma is shared by gamma_weight and isotropy_weight, so it
+                # is built once if either is on.
+                if response.gamma_weight or response.isotropy_weight:
                     gamma = response_matrix("base_g1", "base_g2")
+                else:
+                    gamma = None
+
+                if response.gamma_weight:
                     gamma_loss = jnp.mean((gamma - gamma_target(p)) ** 2)
                 else:
                     gamma_loss = jnp.array(0.0, net_dtype)
+
+                # The 45-degree-rotation invariant: isotropic diagonal and
+                # antisymmetric off-diagonal. See ISOTROPY_NOTE -- D4 forces the
+                # off-diagonals to zero and leaves the diagonal free, so without
+                # this nothing in the model or the loss ties R22 to R11.
+                if response.isotropy_weight:
+                    isotropy_loss = jnp.mean(
+                        (gamma[:, 0, 0] - gamma[:, 1, 1]) ** 2
+                        + (gamma[:, 0, 1] + gamma[:, 1, 0]) ** 2
+                    )
+                else:
+                    isotropy_loss = jnp.array(0.0, net_dtype)
 
                 if response.psf_weight:
                     psf_loss = jnp.mean(response_matrix("psf_g1", "psf_g2") ** 2)
@@ -849,7 +922,8 @@ def make_fused_train_step(
                     orbit_loss = jnp.mean((stacked - jnp.mean(stacked, axis=0)) ** 2)
 
                 return jnp.stack(
-                    [gamma_loss, psf_loss, shift_loss, complement_loss, orbit_loss]
+                    [gamma_loss, psf_loss, shift_loss, complement_loss, orbit_loss,
+                     isotropy_loss]
                 ).astype(net_dtype)
 
             active = (state.step % response.every_n_steps) == 0
