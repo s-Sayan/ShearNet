@@ -56,6 +56,44 @@ correct ShearNet. Hence in this harness:
   stamps and is expected to be noisier and biased. Switch it off with
   ``eval.evaluate.shearnet_metacal: false``.
 
+What ``sim`` m actually measures, and why there is a ``none`` row
+-----------------------------------------------------------------
+``paired_bias`` forms ``gamma_hat = <(e+ - e-)/2> / <R>`` and reports
+``m = gamma_hat / gamma_true - 1``. Substitute the ``sim`` response and the
+whole thing collapses. With the applied shear at ``+/- gamma_true`` and the
+response differenced with half-width ``step``, ``<R>`` is the secant of the
+same response curve over ``[-gamma_true - step, +gamma_true + step]`` while the
+numerator is the secant over ``[-gamma_true, +gamma_true]``. At the default
+``gamma_true = step = 0.01``::
+
+    m_sim = secant over +/-0.01  /  secant over +/-0.02  -  1
+
+Both secants come from the same renderer, the same galaxies and the same noise.
+That ratio is **identically zero for any perfectly linear estimator, however
+badly calibrated it is**: it is a nonlinearity check, not a calibration. A
+number like ``m = -3e-05`` out of that row is a statement about third-order
+curvature of the response curve and nothing else, and reading it as "this
+estimator is calibrated to 3 parts in 100000" is a mistake.
+
+The calibration is the ``none`` row, which divides by the identity and so
+compares the measured shape directly against the shear that was actually
+applied::
+
+    m_none = <(e+ - e-)/2> / gamma_true - 1
+
+Nothing on the right-hand side is a derivative of the simulator; ``gamma_true``
+is an input to the render. For ShearNet, whose output *is* a shear, that is the
+multiplicative bias. For ngmix and anacal, whose output is an ellipticity of
+roughly twice the shear, it sits near ``+1`` by construction -- which is exactly
+why those estimators need metacal and ShearNet does not.
+
+The precision of the ``none`` row is set by shape noise, not by the estimator,
+so ``eval.evaluate.shape_noise_cancel`` renders each galaxy a second time with
+its intrinsic shape rotated 90 degrees and averages the two measurements. The
+intrinsic ellipticity cancels in that mean; the applied shear does not. It
+costs one extra render pass and buys what would otherwise take a hundredfold
+larger population.
+
 The legacy scripts still run: ``m/main.py`` and ``psf_leakage/main.py`` are
 untouched, and disagreement between them and this entry point is a finding, not
 a nuisance -- it is the drift this harness exists to expose.
@@ -356,7 +394,9 @@ def _measure_callables(
     return measures
 
 
-def _shared_shear_responses(renderer, measures, *, samples, seed, base_shear, step):
+def _shared_shear_responses(
+    renderer, measures, *, samples, seed, base_shear, step, intrinsic_rotation=0.0
+):
     """``de/dgamma`` for every estimator, rendering each offset exactly ONCE.
 
     The four re-renders that make up a central difference are identical across
@@ -375,7 +415,8 @@ def _shared_shear_responses(renderer, measures, *, samples, seed, base_shear, st
             offset = list(base_shear)
             offset[axis] += sign * step
             stamps = renderer.render(
-                samples, seed=seed, base_shear_g1=offset[0], base_shear_g2=offset[1]
+                samples, seed=seed, base_shear_g1=offset[0], base_shear_g2=offset[1],
+                intrinsic_rotation=intrinsic_rotation,
             )
             for name, measure in measures.items():
                 value = np.asarray(measure(stamps.galaxy_images, stamps.psf_images), dtype=float)
@@ -600,6 +641,16 @@ def _log_cost_estimate(samples, renderer, estimators, section, components=(0,)) 
         lines.append(f"{ncomp} shear components -> {ncomp}x the measurement")
         seconds *= ncomp
 
+    # ...and every extra ring station is a full extra pair again, per component:
+    # the rotated twin is re-rendered, re-fitted and re-metacal'd from scratch.
+    ring = _rotations(section)
+    if len(ring) > 1:
+        lines.append(
+            f"ring test at {', '.join(f'{d:g}' for d in ring)} degrees "
+            f"-> {len(ring)}x the measurement"
+        )
+        seconds *= len(ring)
+
     logger.info("preflight: %s", "; ".join(lines))
     if seconds:
         logger.info(
@@ -634,10 +685,19 @@ def _log_cost_estimate(samples, renderer, estimators, section, components=(0,)) 
 #:            estimator, black box or differentiable, so it is the one column
 #:            every row has -- and the `anacal` estimator, which carries both,
 #:            is what says whether `sim` agrees with the exact answer.
+#:   none     divide by R = I, i.e. do not divide at all. m is then measured
+#:            against the KNOWN applied shear and nothing else:
+#:            m = <(e+ - e-)/2> / gamma_true - 1. This is the only row in the
+#:            table that is a CALIBRATION rather than a self-consistency check;
+#:            see the "what `sim` m actually measures" section of the module
+#:            docstring for why the distinction is not pedantic. It is the
+#:            meaningful row for an estimator whose output is already a shear
+#:            (ShearNet predicts g1, g2); for one whose output is an ellipticity
+#:            (ngmix, anacal) it lands near +1 by construction and is not a bias.
 #:
 #: A pair the harness cannot measure is simply absent from SUMMARY, rather than
 #: filled in from a different derivative wearing the same name.
-CORRECTIONS = ("metacal", "anacal", "sim")
+CORRECTIONS = ("metacal", "anacal", "sim", "none")
 
 
 def _run_evaluation(benchmark: Config, training: Config, estimators) -> dict:
@@ -676,6 +736,13 @@ def _run_evaluation(benchmark: Config, training: Config, estimators) -> dict:
     # manipulation. ngmix keeps its metacal either way; this switch only governs
     # whether the network is also run over the reconvolved stamps.
     want_shearnet_metacal = bool(section.get("shearnet_metacal", False))
+    # The ring test. Every extra station multiplies the render and the
+    # measurement -- including the metacal fit, which is the expensive part --
+    # in exchange for removing the intrinsic ellipticity from the error budget
+    # of c and alpha (90 degrees) and the O(eps^2 gamma) bias from m (45
+    # degrees). See RINGS. The preflight below prints the multiplied cost
+    # before the run commits to it.
+    rotations = _rotations(section)
     anacal_kw = dict(
         pixel_scale=renderer.spec.scale,
         noise_variance=max(noise_sd, 1e-12) ** 2,
@@ -738,6 +805,8 @@ def _run_evaluation(benchmark: Config, training: Config, estimators) -> dict:
         "n_jackknife": njac,
         "psf_response_apply": ",".join(sorted(psf_apply)) or "none",
         "shearnet_metacal": want_shearnet_metacal,
+        "shape_noise_cancel": len(rotations),
+        "ring": ",".join(f"{d:g}" for d in rotations),
         "bin_by": "flux",
     }
 
@@ -758,6 +827,24 @@ def _run_evaluation(benchmark: Config, training: Config, estimators) -> dict:
         pair_columns, shapes, bin_values = _measure_shear_pair(
             renderer, component=k, **kwargs
         )
+        if len(rotations) > 1:
+            # The same galaxies, the same applied shear, the same PSFs, with
+            # every intrinsic shape rotated round the ring. Averaging the
+            # stations cancels the intrinsic ellipticity -- which is the entire
+            # error budget on c and alpha -- and, at 45 degrees, the
+            # O(eps^2 gamma) term that biases the truth-referenced m. The
+            # response to the applied shear survives both.
+            per_rotation = [shapes]
+            for degrees in rotations[1:]:
+                rot_columns, rot_shapes, _ = _measure_shear_pair(
+                    renderer, component=k, intrinsic_rotation=degrees, **kwargs
+                )
+                per_rotation.append(rot_shapes)
+                for label in pair_columns:
+                    pair_columns[label].update(
+                        _rotated_columns(rot_columns[label], degrees)
+                    )
+            shapes = _average_rotations(per_rotation)
         tables[k] = pair_columns
         common = dict(
             component=k, njac=njac, c_convention=c_convention, resample=resample,
@@ -783,6 +870,7 @@ def _run_evaluation(benchmark: Config, training: Config, estimators) -> dict:
     leakage_columns = _leakage_pass(
         renderer, measures, predictor, samples=samples, seed=seed, step=step,
         njac=njac, noise_sd=noise_sd, result=result, apply_to=psf_apply,
+        rotations=rotations,
     )
     result.update(_timing_pass(renderer, predictor, samples=samples, seed=seed, batch=batch))
     _write_evaluation_fits(benchmark, section, tables, leakage_columns, result)
@@ -792,7 +880,7 @@ def _run_evaluation(benchmark: Config, training: Config, estimators) -> dict:
 def _measure_shear_pair(
     renderer, *, component, estimators, measures, predictor, samples, seed, shear,
     step, batch, psf_model, gal_model, nproc, noise_sd, anacal_kw,
-    want_shearnet_metacal,
+    want_shearnet_metacal, intrinsic_rotation=0.0,
 ):
     """Render the +/- pair for ONE shear component and measure everything on it.
 
@@ -804,9 +892,15 @@ def _measure_shear_pair(
     Split out of :func:`_run_evaluation` so the whole measurement can be run
     once per component. Nothing here is component-specific except which entry
     of the applied shear is non-zero.
+
+    ``intrinsic_rotation`` runs the identical measurement on the same galaxies
+    with their intrinsic shapes rotated by that many degrees -- one station of
+    the ring test. The applied shear, the PSFs and the response protocol are
+    unchanged; only the intrinsic shape (and, with it, the scene) rotates.
     """
     plus, minus = renderer.shear_pair(
-        samples, seed=seed, shear=shear, component=component
+        samples, seed=seed, shear=shear, component=component,
+        intrinsic_rotation=intrinsic_rotation,
     )
     if plus.psf_images is None:
         raise RuntimeError("Training-matched benchmarks require the PSF channel")
@@ -858,12 +952,24 @@ def _measure_shear_pair(
                     measure(stamps.galaxy_images, stamps.psf_images), dtype=float
                 )
         responses = _shared_shear_responses(
-            renderer, measures, samples=samples, seed=seed, base_shear=base, step=step
+            renderer, measures, samples=samples, seed=seed, base_shear=base, step=step,
+            intrinsic_rotation=intrinsic_rotation,
         )
         for name in measures:
             e = raw[name][:, :2]
+            bad = ~np.isfinite(e).all(axis=1)
+            identity = np.broadcast_to(np.eye(2), (len(e), 2, 2))
             shapes[name]["sim"][label] = ShapeMeasurement(
-                e=e, dedg=responses[name], flags=~np.isfinite(e).all(axis=1)
+                e=e, dedg=responses[name], flags=bad
+            )
+            # The SAME shape, divided by the identity instead of by a finite
+            # difference of the simulator. That makes m a comparison against
+            # `shear`, which is an input to the render rather than an output of
+            # it -- see "what `sim` m actually measures" in the module
+            # docstring. No extra measurement, no extra render: one more view of
+            # numbers already in hand.
+            shapes[name]["none"][label] = ShapeMeasurement(
+                e=e, dedg=identity, flags=bad
             )
             col[f"e_{name}"] = e
             col[f"R_{name}_sim"] = responses[name]
@@ -917,8 +1023,128 @@ def _measure_shear_pair(
     return columns, shapes, bin_values
 
 
+#: The two useful rings, and what each one cancels.
+#:
+#: ``{0, 90}`` -- SHAPE NOISE. Spin-2 makes a 90-degree rotation a sign flip on
+#: the intrinsic ellipticity, so it cancels in the mean over the pair while the
+#: applied shear survives. This is what makes ``c`` and the PSF-leakage slope
+#: ``alpha`` precise: their error is shape-noise limited at
+#: ``sigma_e / (sqrt(N) sigma_ePSF)``, which is 1.2e-2 at N = 200000 -- the level
+#: the last runs BOUNDED alpha at rather than measured it.
+#:
+#: ``{0, 45}`` -- THE NONLINEARITY RESIDUAL. Shear composition is a Moebius map,
+#: not an addition, so the plus/minus difference is
+#: ``gamma - eps^2 conj(gamma)`` rather than ``gamma``: a real bias in the
+#: truth-referenced ``m``. A 45-degree rotation sends ``eps -> i eps`` and hence
+#: ``eps^2 -> -eps^2``, so averaging 0 with 45 kills it. Measured on the
+#: composition directly at N = 400000, gamma = 0.01, sigma_e = 0.25:
+#:
+#:     each rotation alone   m = +1.354e-04, per-object scatter 1.25e-01
+#:     {0, 90}               m = +1.354e-04, per-object scatter 1.25e-01
+#:     {0, 45}               m = -1.190e-08, per-object scatter 5.40e-06
+#:
+#: 90 degrees does NOT touch this term -- ``(-eps)^2 = eps^2`` -- so a ring of
+#: {0, 90} leaves ``m`` with a 1.35e-04 bias and a 2.8e-04 error at N = 200000.
+#: 45 degrees removes it object by object, not merely in the mean, leaving only
+#: the ``O(gamma^3 eps^4)`` term at 5.4e-06 -- a factor of 23000 down, and far
+#: below anything else in the budget.
+#:
+#: Hence: two rotations for c and alpha, four for m as well.
+RINGS = {1: (0.0,), 2: (0.0, 90.0), 4: (0.0, 45.0, 90.0, 135.0)}
+
+
+def _rotations(section: dict):
+    """The ring of intrinsic rotations to measure, from ``shape_noise_cancel``.
+
+    Accepts ``false``/``true`` (off / the ``{0, 90}`` pair) or the number of
+    stations directly, which is the only way to ask for the full ``{0, 45, 90,
+    135}`` ring. Every station is a complete extra measurement -- render, fit
+    and metacal -- so the count is the cost multiplier and is spelled out rather
+    than hidden behind a boolean.
+    """
+    value = section.get("shape_noise_cancel", False)
+    if isinstance(value, bool) or value is None:
+        return RINGS[2] if value else RINGS[1]
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"shape_noise_cancel must be a bool or one of {sorted(RINGS)}, "
+            f"got {value!r}"
+        ) from None
+    if count not in RINGS:
+        raise ValueError(
+            f"shape_noise_cancel must be a bool or one of {sorted(RINGS)}, "
+            f"got {count}. 2 = (0, 90) cancels the intrinsic shape; "
+            "4 = (0, 45, 90, 135) also cancels the O(eps^2 gamma) term in m."
+        )
+    return RINGS[count]
+
+
+#: Column prefixes carried for each extra ring station. The rest of the
+#: per-object columns -- S/N, PSF moments, the sizes and fluxes -- either are
+#: identical across the ring (the PSF is deliberately NOT rotated) or are
+#: nuisance parameters that no downstream statistic averages over, so
+#: duplicating them would inflate the file to no purpose. What IS carried is
+#: everything the SUMMARY rows are built from, which keeps the promise that
+#: every number in SUMMARY can be recomputed from the tables: ``e_<est>``
+#: averaged with its ``e_<est>_r45`` / ``_r90`` / ``_r135`` siblings is the
+#: shape the ring-averaged m/c divides.
+ROTATED_COLUMN_PREFIXES = ("e_", "R_", "flag_", "g_th")
+
+
+def _rotation_suffix(degrees):
+    """``_r45``, ``_r90``, ... -- the tag a ring station's columns carry."""
+    return f"_r{int(round(float(degrees)))}"
+
+
+def _rotated_columns(columns, degrees):
+    """Suffix the shape/response columns of one ring station."""
+    suffix = _rotation_suffix(degrees)
+    return {
+        f"{key}{suffix}": value
+        for key, value in columns.items()
+        if key.startswith(ROTATED_COLUMN_PREFIXES)
+    }
+
+
+def _average_rotations(per_rotation):
+    """Mean of a shape measurement over the ring.
+
+    ``per_rotation`` is the list of ``shapes[estimator][correction][population]``
+    dicts, one per station. The intrinsic ellipticity enters the ring with
+    rotating phase and cancels in the mean; the response to the applied shear
+    enters with the same sign at every station and survives. That is the ring
+    test of Nakajima & Bernstein (2007); see :data:`RINGS` for which term each
+    ring cancels and by how much.
+
+    Responses are averaged the same way, and a row is flagged if it failed at
+    ANY station, so the pairing is never broken.
+    """
+    first, rest = per_rotation[0], per_rotation[1:]
+    merged = {}
+    for name, by_correction in first.items():
+        merged[name] = {}
+        for correction, populations in by_correction.items():
+            others = [other.get(name, {}).get(correction, {}) for other in rest]
+            if any(set(populations) != set(other) for other in others):
+                # A correction measured at one station but not another is
+                # dropped rather than partly averaged.
+                continue
+            stations = [populations, *others]
+            merged[name][correction] = {
+                label: ShapeMeasurement(
+                    e=np.mean([s[label].e for s in stations], axis=0),
+                    dedg=np.mean([s[label].dedg for s in stations], axis=0),
+                    flags=np.logical_or.reduce([s[label].flags for s in stations]),
+                )
+                for label in populations
+            }
+    return merged
+
+
 def _leakage_pass(renderer, measures, predictor, *, samples, seed, step, njac,
-                  noise_sd, result, apply_to=()):
+                  noise_sd, result, apply_to=(), rotations=(0.0,)):
     """``R^PSF`` per estimator on an unsheared population, and its correction.
 
     The response is measured the **direct** (skip-deconvolution) way for every
@@ -947,20 +1173,56 @@ def _leakage_pass(renderer, measures, predictor, *, samples, seed, step, njac,
     :data:`DEFAULT_PSF_RESPONSE_APPLY`. Both shapes are always stored:
     ``e_<est>`` is what the leakage plot reads, ``e_<est>_raw`` is the
     uncorrected measurement.
+
+    ``rotations`` runs the whole pass once per ring station and averages. This
+    is where the ring pays for itself most: the leakage slope ``alpha`` is
+    regressed on ``e^PSF`` and its error is shape-noise limited at
+    ``sigma_e / (sqrt(N) sigma_ePSF)`` -- 1.2e-2 at N = 200000, which is a
+    *bound* on alpha rather than a measurement of it. Removing the intrinsic
+    ellipticity removes that floor. It is also much cheaper here than in the
+    bias pass, because no metacal runs in this one. Every station's shapes and
+    responses are stored under ``_r45`` / ``_r90`` / ... alongside the unrotated
+    ones, and the ring average -- which is what the reported ``alpha`` and the
+    ``LEAKSUM`` row divide -- is written under ``_ring`` so a plot does not have
+    to reassemble it.
     """
     stamps = renderer.render(samples, seed=seed)
     columns = {}
+    # The PSF is not rotated, so its moments and the S/N are the same at every
+    # ring station and are measured once.
     gpsf, tpsf = _psf_moments(renderer, stamps.psf_images)
     columns["gpsf"], columns["Tpsf"] = gpsf, tpsf
     gal = np.asarray(stamps.galaxy_images, dtype=float)
     columns["s2n"] = np.sqrt(np.sum(gal**2, axis=(1, 2))) / max(noise_sd, 1e-12)
     del gal
 
+    turned = {
+        degrees: renderer.render(samples, seed=seed, intrinsic_rotation=degrees)
+        for degrees in rotations[1:]
+    }
+
     for name, measure in measures.items():
-        psf_response = renderer_shear_response(
-            renderer.response_renderer(samples, seed=seed, psf=True), measure, step=step, psf=True
-        )
-        e_raw = np.asarray(measure(stamps.galaxy_images, stamps.psf_images), dtype=float)[:, :2]
+        by_station = []
+        for degrees in rotations:
+            images = (stamps if degrees == rotations[0] else turned[degrees])
+            response = renderer_shear_response(
+                renderer.response_renderer(
+                    samples, seed=seed, psf=True, intrinsic_rotation=degrees
+                ),
+                measure, step=step, psf=True,
+            )
+            shape = np.asarray(
+                measure(images.galaxy_images, images.psf_images), dtype=float
+            )[:, :2]
+            by_station.append((degrees, shape, response))
+
+        # LEAKSUM and the reported alpha divide the RING AVERAGE -- that is the
+        # point of measuring the ring. The unsuffixed columns below stay the
+        # unrotated station, exactly as before, and the extra stations are
+        # written beside them, so a reader averages the same way the notebook's
+        # `_ringed` does and reproduces LEAKSUM from the table.
+        psf_response = np.mean([r for _, _, r in by_station], axis=0)
+        e_raw = np.mean([s for _, s, _ in by_station], axis=0)
         # Over exactly the rows `leakage` keeps, so the response that is applied
         # is the one that gets reported -- subtracting a constant leaves the
         # keep mask unchanged, so `stats["psf_response"][0, 0]` below equals this.
@@ -975,15 +1237,31 @@ def _leakage_pass(renderer, measures, predictor, *, samples, seed, step, njac,
         result.update({f"{name}_leakage_{k}": v for k, v in stats.items()})
         result[f"{name}_leakage_corrected"] = corrected
         result[f"{name}_leakage_mean_e_raw"] = np.nanmean(e_raw, axis=0)
-        columns[f"e_{name}"] = e
-        columns[f"e_{name}_raw"] = e_raw
-        columns[f"Rpsf_{name}_sim"] = psf_response
+        for degrees, shape, response in by_station:
+            suffix = "" if degrees == rotations[0] else _rotation_suffix(degrees)
+            columns[f"e_{name}{suffix}"] = (
+                shape - gpsf * rbar if corrected else shape
+            )
+            columns[f"e_{name}_raw{suffix}"] = shape
+            columns[f"Rpsf_{name}_sim{suffix}"] = response
+        if len(rotations) > 1:
+            # The ring average, written out under its own name rather than left
+            # for each reader to reassemble. The leakage panels and the
+            # alpha-vs-size regression are the whole reason the ring is run, and
+            # they should not have to know how many stations there were: they
+            # read `e_<est>_ring` and get the shape-noise-cancelled shape. It is
+            # exactly the mean of the station columns above, and it is what the
+            # LEAKSUM row for this estimator reports.
+            columns[f"e_{name}_ring"] = e
+            columns[f"e_{name}_raw_ring"] = e_raw
+            columns[f"Rpsf_{name}_sim_ring"] = psf_response
         columns[f"Rbar_psf_{name}"] = np.full(samples, rbar)
         logger.info(
-            "%s R^PSF = [[%+.3e %+.3e] [%+.3e %+.3e]] +/- %.1e  (%s)",
+            "%s R^PSF = [[%+.3e %+.3e] [%+.3e %+.3e]] +/- %.1e  (%s)%s",
             name, *stats["psf_response"].ravel(),
             float(np.max(stats["psf_response_err"])),
             "applied" if corrected else "reported, not applied",
+            f", ring of {len(rotations)}" if len(rotations) > 1 else "",
         )
     return columns
 
@@ -1140,6 +1418,10 @@ def _leakage_summary_table(result):
     return _catalog_table(rows)
 
 
+#: Result keys whose 8-character FITS truncation would be unreadable.
+_HEADER_KEYS = {"shape_noise_cancel": "SNC"}
+
+
 def _write_evaluation_fits(benchmark, section, tables, leakage_columns, result):
     """One FITS holding everything the evaluation measured.
 
@@ -1149,6 +1431,13 @@ def _write_evaluation_fits(benchmark, section, tables, leakage_columns, result):
     ``R^PSF``; ``SUMMARY`` is one row per (estimator, correction, component);
     ``BINNED`` adds the flux bin; ``LEAKSUM`` is one row per estimator. Written
     unconditionally: there is no config switch that produces a partial file.
+
+    With ``shape_noise_cancel`` on, ``TAB_*`` additionally carry ``<col>_r45``,
+    ``<col>_r90``, ... for the shape and response columns -- the same objects
+    measured with their intrinsic shapes rotated round the ring. The SUMMARY
+    rows then divide the mean over the ring, so they stay reproducible from the
+    table. ``SNC`` in the primary header is the number of stations and ``RING``
+    lists their angles.
     """
     from astropy.io import fits
 
@@ -1164,10 +1453,15 @@ def _write_evaluation_fits(benchmark, section, tables, leakage_columns, result):
                 "component", "measured_components", "response_step",
                 "c_convention", "resample",
                 "n_jackknife", "bin_by", "psf_response_apply", "shearnet_metacal",
+                "shape_noise_cancel", "ring",
                 "ngmix_nproc", "render_seconds", "inference_seconds"):
         if key in result:
             value = result[key]
-            primary.header[key[:8].upper()] = (
+            # FITS keywords are 8 characters. Truncation is the rule here, but
+            # `shape_noise_cancel` truncates to the meaningless "SHAPE_NO", so
+            # it gets an explicit name; the comment carries the full key either
+            # way, so nothing is lost to a reader.
+            primary.header[_HEADER_KEYS.get(key, key[:8].upper())] = (
                 value.item() if hasattr(value, "item") else value, key
             )
 

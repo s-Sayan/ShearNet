@@ -316,3 +316,130 @@ def test_psf_response_offset_does_not_randomise_the_base_point(tmp_path):
     # same galaxies throughout: the extra draws must not shift the centroids
     np.testing.assert_allclose(base.labels, plus.labels, atol=1e-6)
     np.testing.assert_allclose(base.labels, minus.labels, atol=1e-6)
+
+
+# ----------------------------------------------------------------------
+# shape-noise cancellation: the 90-degree rotated twin
+# ----------------------------------------------------------------------
+def test_rotating_the_intrinsic_shape_needs_the_jax_backend(tmp_path):
+    renderer = TrainingMatchedRenderer(_config(tmp_path))
+    with pytest.raises(NotImplementedError, match="jax-galsim"):
+        renderer.render(4, seed=21, intrinsic_rotation=90.0)
+
+
+def test_rotating_the_intrinsic_shape_flips_the_label_and_keeps_the_psf(tmp_path):
+    """The twin is the same galaxy turned 90 degrees under the SAME PSF.
+
+    Both halves matter. Flipping the label is what makes the intrinsic shape
+    cancel in the pair mean; leaving the PSF alone is what keeps PSF leakage in
+    the pair mean, where it can still be measured.
+    """
+    pytest.importorskip("jax_galsim")
+    renderer = TrainingMatchedRenderer(_config(tmp_path, **{"dataset.backend": "jax-galsim"}))
+    base = renderer.render(8, seed=22)
+    twin = renderer.render(8, seed=22, intrinsic_rotation=90.0)
+
+    # spin-2 doubles the angle, so a 90-degree rotation is a sign flip on both
+    # components -- and with no applied shear the label IS the intrinsic shape
+    np.testing.assert_allclose(twin.labels[:, :2], -base.labels[:, :2], atol=1e-6)
+    # size and flux are rotation invariant
+    np.testing.assert_allclose(twin.labels[:, 2:], base.labels[:, 2:], atol=1e-6)
+    # the PSF is deliberately NOT rotated
+    np.testing.assert_allclose(twin.psf_images, base.psf_images)
+    # ...but the galaxy stamp is a different image
+    assert not np.allclose(twin.galaxy_images, base.galaxy_images)
+
+
+def test_the_rotated_twin_carries_its_own_noise(tmp_path):
+    """rot90 of an i.i.d. field is an independent field, so noise averages down.
+
+    Repeating the same noise realisation in the twin would make the pair mean
+    keep all of it. Rotating the field about the stamp centre correlates only
+    the single fixed pixel, so the twin is effectively an independent draw and
+    the pair mean gets the sqrt(2) as well as the shape cancellation.
+    """
+    pytest.importorskip("jax_galsim")
+    renderer = TrainingMatchedRenderer(
+        _config(tmp_path, **{"dataset.backend": "jax-galsim"})
+    )
+    clean = renderer.render(4, seed=23, add_noise=False)
+    clean_twin = renderer.render(4, seed=23, intrinsic_rotation=90.0, add_noise=False)
+    noisy = renderer.render(4, seed=23)
+    noisy_twin = renderer.render(4, seed=23, intrinsic_rotation=90.0)
+
+    noise = noisy.galaxy_images - clean.galaxy_images
+    noise_twin = noisy_twin.galaxy_images - clean_twin.galaxy_images
+    np.testing.assert_allclose(noise_twin, np.rot90(noise, k=1, axes=(-2, -1)), atol=1e-5)
+    # same amplitude, different realisation
+    assert np.std(noise_twin) == pytest.approx(np.std(noise), rel=0.05)
+    assert not np.allclose(noise_twin, noise)
+
+
+def test_a_45_degree_rotation_sends_e_to_i_times_e(tmp_path):
+    """Spin-2: 45 degrees on the sky is a quarter turn in shape space.
+
+    That is the rotation that flips the sign of ``eps^2``, which is the term
+    that biases the truth-referenced ``m`` -- 90 degrees leaves it alone,
+    because ``(-eps)^2 = eps^2``.
+    """
+    pytest.importorskip("jax_galsim")
+    renderer = TrainingMatchedRenderer(_config(tmp_path, **{"dataset.backend": "jax-galsim"}))
+    base = renderer.render(8, seed=26)
+    turned = renderer.render(8, seed=26, intrinsic_rotation=45.0)
+    e1, e2 = base.labels[:, 0], base.labels[:, 1]
+    np.testing.assert_allclose(turned.labels[:, 0], -e2, atol=1e-6)
+    np.testing.assert_allclose(turned.labels[:, 1], e1, atol=1e-6)
+    # eps^2 has flipped sign; |eps| has not moved
+    np.testing.assert_allclose(
+        turned.labels[:, 0] ** 2 - turned.labels[:, 1] ** 2, -(e1**2 - e2**2), atol=1e-6
+    )
+
+
+def test_the_ring_cancels_the_intrinsic_shape(tmp_path):
+    """The mean over the ring is the applied shear, not the galaxy's own shape.
+
+    Asserted on the labels -- exact and noise-free -- rather than on a
+    measurement, because this is a property of the construction and not of any
+    estimator. The 90-degree pair removes the intrinsic shape; what it leaves
+    behind is the ``O(eps^2 gamma)`` term of the Moebius composition, and the
+    full ring removes that too.
+    """
+    pytest.importorskip("jax_galsim")
+    renderer = TrainingMatchedRenderer(_config(tmp_path, **{"dataset.backend": "jax-galsim"}))
+    shear = 0.02
+    stations = {
+        degrees: renderer.render(
+            64, seed=24, base_shear_g1=shear, intrinsic_rotation=degrees
+        ).labels[:, :2]
+        for degrees in (0.0, 45.0, 90.0, 135.0)
+    }
+
+    single = stations[0.0]
+    pair = 0.5 * (stations[0.0] + stations[90.0])
+    ring = np.mean(list(stations.values()), axis=0)
+
+    # the intrinsic shape is gone from every object, not just from the ensemble
+    assert np.std(pair[:, 0]) < 0.05 * np.std(single[:, 0])
+    # ...and the residual the pair leaves is the eps^2 term, which the full ring
+    # removes by another two orders of magnitude
+    pair_residual = np.abs(pair[:, 0] - shear).max()
+    ring_residual = np.abs(ring[:, 0] - shear).max()
+    assert ring_residual < 0.02 * pair_residual, (ring_residual, pair_residual)
+    assert ring_residual < 1e-4, ring_residual
+    assert np.abs(ring[:, 1]).max() < 1e-4
+
+
+def test_shear_pair_and_response_renderer_carry_the_rotation(tmp_path):
+    pytest.importorskip("jax_galsim")
+    renderer = TrainingMatchedRenderer(_config(tmp_path, **{"dataset.backend": "jax-galsim"}))
+    plus, minus = renderer.shear_pair(6, seed=25, shear=0.02, intrinsic_rotation=90.0)
+    straight, _ = renderer.shear_pair(6, seed=25, shear=0.02)
+    assert not np.allclose(plus.galaxy_images, straight.galaxy_images)
+    # the +/- pairing survives the rotation: same galaxies, opposite shear
+    np.testing.assert_allclose(plus.psf_images, minus.psf_images)
+
+    render = renderer.response_renderer(6, seed=25, intrinsic_rotation=90.0)
+    rotated_gal, _ = render(0.0, 0.0)
+    plain_gal, _ = renderer.response_renderer(6, seed=25)(0.0, 0.0)
+    assert not np.allclose(rotated_gal, plain_gal)
+>>>>>>> temp_import

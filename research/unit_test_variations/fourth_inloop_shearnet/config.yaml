@@ -121,6 +121,17 @@ eval:
     #            "direct" route, and it is the physical response for a
     #            non-deconvolving estimator. The universal column, and the
     #            anacal row is what says whether it agrees with the exact answer.
+    #   none     do not divide at all: R = I, so m is measured against the
+    #            APPLIED shear and nothing else. READ THIS ROW FOR SHEARNET.
+    #            The `sim` m divides the +/-shear_true secant by the
+    #            +/-(shear_true + response_step) secant of the SAME response
+    #            curve, so it vanishes identically for any linear estimator no
+    #            matter how miscalibrated -- it is a nonlinearity check, not a
+    #            calibration. The `none` row compares against shear_true, which
+    #            is an input to the render rather than an output of it. ngmix
+    #            and anacal land near +1 here because they report an
+    #            ellipticity rather than a shear; that is not a bias, it is what
+    #            their metacal/analytic response exists to divide out.
     response_step: 0.01        # shared, so the responses are comparable
     shear_true: 0.01
     # Which shear component carries the applied shear. m_k is only a
@@ -131,6 +142,46 @@ eval:
     # price of reporting m1, m2, c1 and c2 rather than just the first component.
     component: both
     n_jackknife: 20
+
+    # ---- the ring test ------------------------------------------------------
+    # Render every galaxy again with its intrinsic shape rotated on the sky --
+    # same applied shear, same PSF, same focal-plane position -- and average the
+    # measurements. The ring test of Nakajima & Bernstein (2007); used for shear
+    # calibration on simulations in this form by Fenech Conti et al. (2017).
+    #
+    #   false / 1  off, one station.
+    #   true  / 2  (0, 90). Spin-2 doubles the angle, so 90 degrees flips the
+    #              sign of the intrinsic ellipticity and it cancels in the mean
+    #              while the applied shear survives. This is shape-noise
+    #              cancellation, and it is what makes c and the leakage slope
+    #              alpha precise. At n_obs 200000 with sigma_e ~ 0.25 the
+    #              shape-noise floor on alpha is
+    #              sigma_e / (sqrt(N) * sigma_ePSF) = 1.2e-2 -- exactly where
+    #              the last runs sat, which is why they BOUNDED alpha rather
+    #              than measuring it. Reaching 1e-3 by brute force would take
+    #              ~1.3e7 galaxies; the rotated twin gets there for 2x.
+    #   4          (0, 45, 90, 135). Additionally kills the O(eps^2 gamma) term
+    #              in the truth-referenced m. Shear composition is a Moebius
+    #              map, so the +/- difference is gamma - eps^2 conj(gamma), not
+    #              gamma; 90 degrees CANNOT touch that ((-eps)^2 = eps^2) but 45
+    #              degrees flips its sign. Measured on the composition at
+    #              N = 400000, gamma = 0.01, sigma_e = 0.25:
+    #
+    #                each station alone   m = +1.354e-04, scatter 1.25e-01
+    #                (0, 90)              m = +1.354e-04, scatter 1.25e-01
+    #                (0, 45)              m = -1.190e-08, scatter 5.40e-06
+    #
+    #              i.e. at 2 stations the `none` row carries a 1.35e-04 bias and
+    #              a 2.8e-04 error bar at n_obs 200000; at 4 stations both drop
+    #              by a factor of 23000, object by object, leaving only the
+    #              O(gamma^3 eps^4) term the ring does not reach.
+    #
+    # 4 is chosen here because m is the headline number and 2 would leave it
+    # with a bias 4x larger than the effect being looked for. Each station is a
+    # full extra measurement -- render, ngmix fit and metacal -- so with
+    # component: both this is 8x the single-component single-station baseline.
+    # The preflight prints the hours before the run commits to them.
+    shape_noise_cancel: 4
     psf_model: gauss           # ngmix PSF model
     c_convention: shearnet     # 'lin2026' to sit beside their Eq. 23
     resample: jackknife        # 'bootstrap' to match their 20x bootstrap
@@ -179,9 +230,15 @@ eval:
     #   TAB_P / TAB_M  the +/- shear populations, one row per object, carrying
     #                  both e_<est> (plain measurement) and e_<est>_metacal
     #                  (metacal's own noshear shape, which is what its m/c
-    #                  divides) alongside every response matrix
+    #                  divides) alongside every response matrix; with
+    #                  shape_noise_cancel on, also e_<est>_r45 / _r90 / _r135
+    #                  and the matching R_ columns for each ring station, whose
+    #                  mean is what the SUMMARY rows divide
     #   LEAKAGE        the unsheared population: R^PSF, e_<est> as applied and
-    #                  e_<est>_raw
+    #                  e_<est>_raw; with shape_noise_cancel on, each ring
+    #                  station beside them and the ring average under
+    #                  e_<est>_raw_ring, which is the column the leakage panels
+    #                  and the alpha-vs-size regression should read
     #   SUMMARY        one row per (estimator, correction)
     #   BINNED         one row per (estimator, correction, flux quantile); each
     #                  bin divides by its own within-bin <R>

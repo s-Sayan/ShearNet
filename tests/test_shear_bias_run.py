@@ -124,9 +124,9 @@ def test_evaluation_measures_every_estimator_under_every_correction(trained_run)
     # the pairs the harness can actually measure: metacal shears images so it
     # needs ngmix's bootstrapper, and anacal is analytic so only AnaCal's own
     # fit has it. sim is universal.
-    expected = {("ngmix", "metacal"), ("ngmix", "sim"),
-                ("anacal", "anacal"), ("anacal", "sim"),
-                ("shearnet", "metacal"), ("shearnet", "sim")}
+    expected = {("ngmix", "metacal"), ("ngmix", "sim"), ("ngmix", "none"),
+                ("anacal", "anacal"), ("anacal", "sim"), ("anacal", "none"),
+                ("shearnet", "metacal"), ("shearnet", "sim"), ("shearnet", "none")}
     for estimator, correction in sorted(expected):
         prefix = f"{estimator}_{correction}"
         for field in ("m", "m_err", "c", "c_err"):
@@ -487,3 +487,286 @@ def test_shearnet_metacal_is_off_by_default(trained_run):
     assert "shearnet_metacal_m" not in result
     assert np.isfinite(result["shearnet_sim_m"])
     assert np.isfinite(result["ngmix_metacal_m"])
+
+
+# ----------------------------------------------------------------------
+# the truth-referenced ("none") row
+# ----------------------------------------------------------------------
+def test_the_sim_row_is_a_nonlinearity_check_and_the_none_row_is_the_calibration():
+    """A perfectly linear estimator with a 10% bias must show m_sim = 0.
+
+    This is the whole reason the ``none`` correction exists, so it is asserted
+    on a case where the answer is known exactly rather than inferred from a run.
+
+    ``paired_bias`` forms ``<(e+ - e-)/2> / <R>`` and divides by the applied
+    shear. Substituting the ``sim`` response makes the numerator the secant of
+    the response curve over ``+/-gamma`` and the denominator its secant over
+    ``+/-(gamma + step)``. For a linear estimator those secants are the SAME
+    number whatever the slope is, so the ratio is 1 and m is 0 -- no matter how
+    badly the estimator is calibrated. Dividing by the identity instead compares
+    against the applied shear, which is an input to the render, and recovers the
+    bias.
+    """
+    from shearnet.methods.anacal import ShapeMeasurement, paired_bias
+
+    rng = np.random.default_rng(0)
+    n, gamma, step, slope = 20_000, 0.01, 0.01, 0.9  # a real -10% bias
+    intrinsic = rng.normal(scale=0.25, size=(n, 2))
+
+    def measure(g1, g2):
+        return intrinsic + slope * np.array([g1, g2])
+
+    def sim_response(base):
+        columns = []
+        for axis in (0, 1):
+            high = list(base); high[axis] += step
+            low = list(base); low[axis] -= step
+            columns.append((measure(*high) - measure(*low)) / (2.0 * step))
+        return np.stack(columns, axis=-1)
+
+    flags = np.zeros(n, dtype=bool)
+    identity = np.broadcast_to(np.eye(2), (n, 2, 2))
+    plus, minus = measure(gamma, 0.0), measure(-gamma, 0.0)
+
+    sim = paired_bias(
+        ShapeMeasurement(e=plus, dedg=sim_response([gamma, 0.0]), flags=flags),
+        ShapeMeasurement(e=minus, dedg=sim_response([-gamma, 0.0]), flags=flags),
+        gamma, component=0, njac=20,
+    )
+    none = paired_bias(
+        ShapeMeasurement(e=plus, dedg=identity, flags=flags),
+        ShapeMeasurement(e=minus, dedg=identity, flags=flags),
+        gamma, component=0, njac=20,
+    )
+    # blind to a 10% bias, to machine precision
+    assert abs(sim.m) < 1e-12, sim.m
+    assert np.isclose(sim.response[0, 0], slope)
+    # and the truth-referenced row recovers it exactly
+    assert np.isclose(none.m, slope - 1.0), none.m
+    assert np.isclose(none.response[0, 0], 1.0)
+
+
+def test_the_none_row_divides_by_the_identity_and_reproduces_from_the_table(trained_run):
+    """SUMMARY's ``none`` rows are recomputable from TAB_P/TAB_M by hand."""
+    from astropy.io import fits
+
+    benchmark, training = trained_run
+    result = harness._run_evaluation(benchmark, training, ("ngmix", "shearnet"))
+    shear = benchmark.get("eval.evaluate.shear_true")
+
+    for estimator in ("ngmix", "shearnet"):
+        assert np.allclose(result[f"{estimator}_none_response"], np.eye(2))
+
+    path = Path(benchmark.get("paths.root")) / benchmark.get("eval.evaluate.output")
+    with fits.open(path) as hdul:
+        plus, minus = hdul["TAB_P"].data, hdul["TAB_M"].data
+        summary = hdul["SUMMARY"].data
+        for estimator in ("ngmix", "shearnet"):
+            e_p = np.asarray(plus[f"e_{estimator}"], dtype=float)
+            e_m = np.asarray(minus[f"e_{estimator}"], dtype=float)
+            keep = np.isfinite(e_p).all(axis=1) & np.isfinite(e_m).all(axis=1)
+            by_hand = np.nanmean(0.5 * (e_p[keep, 0] - e_m[keep, 0])) / shear - 1.0
+            row = summary[(summary["estimator"] == estimator)
+                          & (summary["correction"] == "none")
+                          & (summary["component"] == 0)]
+            assert len(row) == 1, estimator
+            assert np.isclose(row["m"][0], by_hand, rtol=1e-10), estimator
+
+
+# ----------------------------------------------------------------------
+# shape-noise cancellation
+# ----------------------------------------------------------------------
+def test_the_ring_parser_spells_out_the_cost():
+    """`true` is the 90-degree pair; the full ring has to be asked for by count."""
+    assert harness._rotations({}) == (0.0,)
+    assert harness._rotations({"shape_noise_cancel": False}) == (0.0,)
+    assert harness._rotations({"shape_noise_cancel": True}) == (0.0, 90.0)
+    assert harness._rotations({"shape_noise_cancel": 2}) == (0.0, 90.0)
+    assert harness._rotations({"shape_noise_cancel": 4}) == (0.0, 45.0, 90.0, 135.0)
+    assert harness._rotations({"shape_noise_cancel": 1}) == (0.0,)
+    for bad in (3, 8, "yes"):
+        with pytest.raises(ValueError, match="shape_noise_cancel"):
+            harness._rotations({"shape_noise_cancel": bad})
+
+
+def test_45_degrees_cancels_the_term_that_90_degrees_cannot():
+    """The ring choice is a measurement, not a preference, so it is asserted.
+
+    The plus/minus difference of the Moebius composition is
+    ``gamma - eps^2 conj(gamma)``, not ``gamma``. A 90-degree rotation sends
+    ``eps -> -eps`` and leaves ``eps^2`` untouched, so a {0, 90} ring cannot
+    remove that term however many galaxies it averages. A 45-degree rotation
+    sends ``eps -> i eps``, so ``eps^2 -> -eps^2``, and the term cancels object
+    by object.
+    """
+    rng = np.random.default_rng(1)
+    n, gamma = 400_000, 0.01 + 0j
+    eps = rng.normal(scale=0.25, size=n) + 1j * rng.normal(scale=0.25, size=n)
+
+    def compose(e, g):                       # Seitz & Schneider (1997)
+        return (e + g) / (1.0 + np.conj(g) * e)
+
+    def m_none(phases):
+        difference = np.mean(
+            [0.5 * (compose(p * eps, gamma) - compose(p * eps, -gamma)) for p in phases],
+            axis=0,
+        )
+        return (difference.mean() / gamma).real - 1.0, np.std(difference.real) / abs(gamma)
+
+    m_pair, scatter_pair = m_none([1, -1])          # {0, 90}
+    m_ring, scatter_ring = m_none([1, 1j, -1, -1j])  # {0, 45, 90, 135}
+
+    # 90 degrees leaves the bias exactly where it was
+    assert abs(m_pair) > 1e-4, m_pair
+    assert scatter_pair > 0.1, scatter_pair
+    # 45 degrees removes it, and removes the scatter with it -- per object, down
+    # to the O(gamma^3 eps^4) term the four-station ring does not reach (5.4e-06
+    # here, against 0.125 for the pair: a factor of 23000)
+    assert abs(m_ring) < 1e-6, m_ring
+    assert scatter_ring < 1e-5, scatter_ring
+    assert scatter_ring < 1e-4 * scatter_pair, (scatter_ring, scatter_pair)
+
+
+def test_average_rotations_averages_shapes_responses_and_unions_flags():
+    from shearnet.methods.anacal import ShapeMeasurement
+
+    def measurement(value, flag):
+        return ShapeMeasurement(
+            e=np.full((3, 2), value),
+            dedg=np.full((3, 2, 2), value),
+            flags=np.array([flag, False, False]),
+        )
+
+    straight = {"shearnet": {"sim": {"plus": measurement(1.0, True),
+                                     "minus": measurement(3.0, False)},
+                             # measured at one station only -> dropped, not
+                             # partly averaged
+                             "metacal": {"plus": measurement(1.0, False)}}}
+    rotated = {"shearnet": {"sim": {"plus": measurement(5.0, False),
+                                    "minus": measurement(1.0, False)},
+                            "metacal": {}}}
+
+    merged = harness._average_rotations([straight, rotated])
+    assert set(merged["shearnet"]) == {"sim"}
+    plus = merged["shearnet"]["sim"]["plus"]
+    assert np.allclose(plus.e, 3.0) and np.allclose(plus.dedg, 3.0)
+    assert plus.flags.tolist() == [True, False, False]
+    assert np.allclose(merged["shearnet"]["sim"]["minus"].e, 2.0)
+
+
+def test_shape_noise_cancellation_writes_the_twin_and_stays_reproducible(trained_run):
+    """The rotated twin reaches the file, and SUMMARY still divides what is in it.
+
+    Every number in SUMMARY has to be recomputable from the tables -- that is
+    the standing contract of this file -- so turning on shape-noise cancellation
+    has to carry the twin's columns, not just quietly average them away.
+    """
+    from astropy.io import fits
+
+    benchmark, training = trained_run
+    section = harness._section(benchmark, "evaluate")
+    saved = dict(section)
+    section["shape_noise_cancel"] = 4
+    section["component"] = 0
+    try:
+        result = harness._run_evaluation(benchmark, training, ("ngmix", "shearnet"))
+        path = Path(benchmark.get("paths.root")) / section["output"]
+        shear = benchmark.get("eval.evaluate.shear_true")
+        with fits.open(path) as hdul:
+            assert hdul["PRIMARY"].header["SNC"] == 4
+            assert hdul["PRIMARY"].header["RING"] == "0,45,90,135"
+            plus, minus = hdul["TAB_P"].data, hdul["TAB_M"].data
+            summary = hdul["SUMMARY"].data
+            for column in ("e_ngmix", "e_shearnet", "R_ngmix_sim", "R_shearnet_sim"):
+                for suffix in ("_r45", "_r90", "_r135"):
+                    assert f"{column}{suffix}" in plus.columns.names, column + suffix
+                    assert f"{column}{suffix}" in minus.columns.names, column + suffix
+            # each station is a different measurement of the same objects
+            assert not np.allclose(plus["e_shearnet"], plus["e_shearnet_r90"])
+            assert not np.allclose(plus["e_shearnet_r45"], plus["e_shearnet_r90"])
+            # ...and the nuisance columns are NOT duplicated
+            assert "s2n_r90" not in plus.columns.names
+
+            def ring(table, name):
+                return np.mean(
+                    [np.asarray(table[f"{name}{s}"], dtype=float)
+                     for s in ("", "_r45", "_r90", "_r135")],
+                    axis=0,
+                )
+
+            for estimator in ("ngmix", "shearnet"):
+                e_p, e_m = ring(plus, f"e_{estimator}"), ring(minus, f"e_{estimator}")
+                keep = np.isfinite(e_p).all(axis=1) & np.isfinite(e_m).all(axis=1)
+                by_hand = np.nanmean(0.5 * (e_p[keep, 0] - e_m[keep, 0])) / shear - 1.0
+                row = summary[(summary["estimator"] == estimator)
+                              & (summary["correction"] == "none")
+                              & (summary["component"] == 0)]
+                assert np.isclose(row["m"][0], by_hand, rtol=1e-10), estimator
+    finally:
+        section.clear()
+        section.update(saved)
+    assert result["shape_noise_cancel"] == 4
+
+
+def test_the_leakage_pass_rings_too_and_cancels_the_intrinsic_shape(trained_run):
+    """alpha is the shape-noise-limited number, so the ring matters most here.
+
+    The LEAKAGE table has to carry every station AND the ring average under its
+    own name, because that average -- not the unrotated station -- is what
+    LEAKSUM reports and what the leakage panels should plot.
+    """
+    from astropy.io import fits
+
+    benchmark, training = trained_run
+    section = harness._section(benchmark, "evaluate")
+    saved = dict(section)
+    section["shape_noise_cancel"] = 2
+    section["component"] = 0
+    try:
+        result = harness._run_evaluation(benchmark, training, ("ngmix", "shearnet"))
+        path = Path(benchmark.get("paths.root")) / section["output"]
+        with fits.open(path) as hdul:
+            leak = hdul["LEAKAGE"].data
+            for estimator in ("ngmix", "shearnet"):
+                station0 = np.asarray(leak[f"e_{estimator}_raw"], dtype=float)
+                station90 = np.asarray(leak[f"e_{estimator}_raw_r90"], dtype=float)
+                ring = np.asarray(leak[f"e_{estimator}_raw_ring"], dtype=float)
+                # the ring column is exactly the mean of the stations
+                np.testing.assert_allclose(ring, 0.5 * (station0 + station90))
+                # ...and it is a genuinely different measurement
+                assert not np.allclose(station0, station90)
+                # the PSF response is ringed the same way
+                assert f"Rpsf_{estimator}_sim_r90" in leak.columns.names
+                assert f"Rpsf_{estimator}_sim_ring" in leak.columns.names
+                # LEAKSUM reports the ring average, not station 0
+                reported = np.asarray(
+                    result[f"{estimator}_leakage_mean_e_raw"], dtype=float
+                )
+                np.testing.assert_allclose(
+                    reported, np.nanmean(ring, axis=0), rtol=1e-10
+                )
+    finally:
+        section.clear()
+        section.update(saved)
+
+
+def test_shape_noise_cancellation_is_off_by_default(trained_run):
+    """It costs 2x the measurement, so it is never turned on behind your back."""
+    benchmark, training = trained_run
+    section = harness._section(benchmark, "evaluate")
+    saved = dict(section)
+    section.pop("shape_noise_cancel", None)
+    section["component"] = 0
+    try:
+        result = harness._run_evaluation(benchmark, training, ("ngmix", "shearnet"))
+        path = Path(benchmark.get("paths.root")) / section["output"]
+        from astropy.io import fits
+
+        with fits.open(path) as hdul:
+            assert "e_shearnet_r90" not in hdul["TAB_P"].columns.names
+            assert "e_shearnet_raw_ring" not in hdul["LEAKAGE"].columns.names
+            assert hdul["PRIMARY"].header["SNC"] == 1
+    finally:
+        section.clear()
+        section.update(saved)
+    assert result["shape_noise_cancel"] == 1
