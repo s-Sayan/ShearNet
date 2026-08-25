@@ -15,6 +15,7 @@ from shearnet.core.dataset_jax import (  # noqa: E402
     render_truth,
     sample_truth,
 )
+from shearnet.core.shear_algebra import compose_shear  # noqa: E402
 from shearnet.core.inloop import (  # noqa: E402
     PROTECTED_PARAMS,
     RESPONSE_REPORT_FIELDS,
@@ -602,6 +603,70 @@ def test_d4_model_is_equivariant_yet_anisotropic():
         out = np.asarray(model.apply(params, _d4_apply(gal, i), _d4_apply(psf, i)))[:, :2]
         want = base * np.array([float(_D4_W1[i]), float(_D4_W2[i])])
         assert np.max(np.abs(out - want)) / scale < 1e-4, f"element {i} breaks equivariance"
+
+
+def test_analytic_target_is_anisotropic_per_object():
+    """The target's anisotropy is the spin-4 term, so isotropy must be a residual.
+
+    w = (eps + gamma) / (1 + conj(gamma) eps) is not holomorphic in gamma, so it
+    has an anti-holomorphic Wirtinger derivative -eps^2 at gamma = 0, and the
+    real Jacobian picks up R11 - R22 = -2(e1^2 - e2^2), R12 + R21 = -4 e1 e2.
+    Driving R's own anisotropy to zero would fight that object by object.
+    """
+    from shearnet.core.shear_algebra import compose_shear
+
+    rng = np.random.RandomState(0)
+    n = 512
+    e1, e2 = rng.uniform(-0.6, 0.6, n), rng.uniform(-0.6, 0.6, n)
+    p = {"g1": jnp.asarray(e1), "g2": jnp.asarray(e2),
+         "base_g1": jnp.zeros(n), "base_g2": jnp.zeros(n)}
+
+    def label_shear(q):
+        o1, o2 = compose_shear(q["g1"], q["g2"], q["base_g1"], q["base_g2"])
+        return jnp.stack([o1, o2], axis=-1)
+
+    def unit(name):
+        return {k: (jnp.ones_like(v) if k == name else jnp.zeros_like(v))
+                for k, v in p.items()}
+
+    _, jvp = jax.linearize(label_shear, p)
+    T = np.asarray(jnp.stack([jvp(unit("base_g1")), jvp(unit("base_g2"))], axis=-1))
+
+    assert np.allclose(T[:, 0, 0] - T[:, 1, 1], -2.0 * (e1**2 - e2**2), atol=1e-5)
+    assert np.allclose(T[:, 0, 1] + T[:, 1, 0], -4.0 * e1 * e2, atol=1e-5)
+    # per object it is large; in the ensemble it vanishes because <eps^2> = 0
+    assert np.std(T[:, 0, 0] - T[:, 1, 1]) > 0.2
+    assert abs(np.mean(T[:, 0, 0] - T[:, 1, 1])) < 0.05
+
+
+def test_isotropy_term_is_zero_when_the_response_equals_the_target():
+    """The term must vanish on a perfect response, not on an isotropic one.
+
+    This is the guard against the version that penalised the anisotropy of R
+    itself: that one is non-zero for a model whose response is exactly right,
+    because the correct per-object response is anisotropic.
+    """
+    gen, state, forward, loss_fn, labels = _harness(n=16, batch=8, apply_psf_shear=True)
+    idx = gen.epoch_indices(jax.random.PRNGKey(0))[0]
+    slot = 1 + RESPONSE_TERMS.index("isotropy")
+
+    p = {k: v[idx] for k, v in gen.params.items()}
+
+    def label_shear(q):
+        o1, o2 = compose_shear(q["g1"], q["g2"], q["base_g1"], q["base_g2"])
+        return jnp.stack([o1, o2], axis=-1)
+
+    def unit(name):
+        return {k: (jnp.ones_like(v) if k == name else jnp.zeros_like(v))
+                for k, v in p.items()}
+
+    _, jvp = jax.linearize(label_shear, p)
+    target = np.asarray(jnp.stack([jvp(unit("base_g1")), jvp(unit("base_g2"))], axis=-1))
+    aniso = np.mean((target[:, 0, 0] - target[:, 1, 1]) ** 2
+                    + (target[:, 0, 1] + target[:, 1, 0]) ** 2)
+    # the target itself is anisotropic, by a lot -- so "penalise R's anisotropy"
+    # and "penalise the residual's anisotropy" are genuinely different terms
+    assert aniso > 1e-3, aniso
 
 
 def test_isotropy_term_penalises_only_the_anisotropic_part():

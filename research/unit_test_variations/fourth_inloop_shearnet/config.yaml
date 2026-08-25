@@ -4,7 +4,7 @@ meta:
 
 paths:
   root: /home/adfield/ShearNet/research/unit_test_variations/fourth_inloop_shearnet
-  psfex_model_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
+  psfex_model_file: /home/adfield/weak_lensing/superbit-lensing-jax-test/simulated_data/sim_utils/emp_psfs/emp_psfs_best/psfex_all_except_best
   train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
   eval_catalog: /home/adfield/ShearNet/cosmos_catalog_eval.fits
   checkpoint_dir: null

@@ -665,11 +665,17 @@ def sim_func(
 
 
 def search_psf_files(path):
-    """Return a list of all ``*.psf`` files directly under ``path``."""
-    all_psf_files = []
-    search_path = os.path.join(path, "*.psf")
-    all_psf_files.extend(glob(search_path))
-    return all_psf_files
+    """Return the ``*.psf`` files directly under ``path``, **sorted**.
+
+    Sorted because the order is not cosmetic: ``sample_truth`` picks each
+    object's PSF as ``psf_paths[int(len(psf_paths) * ud())]``, so the list index
+    is part of the seeded draw. ``glob`` returns directory order, which is
+    filesystem-dependent and unstable -- on the 50-file SuperBIT set here it
+    comes back as emp47, emp48, emp26, emp11, ... So without this, the same seed
+    picks different PSFs on a different machine, after a directory rewrite, or
+    on a different filesystem, and a "reproducible" run silently is not.
+    """
+    return sorted(glob(os.path.join(path, "*.psf")))
 
 
 def get_background_file(psf_file):

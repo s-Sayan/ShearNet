@@ -287,3 +287,32 @@ def test_missing_training_config_says_where_it_looked(tmp_path):
         load_training_config("nope", str(tmp_path / "absent.yaml"))
     with pytest.raises(FileNotFoundError, match="training_config.yaml"):
         load_training_config("nope-at-all")
+
+def test_psf_response_offset_does_not_randomise_the_base_point(tmp_path):
+    """R^PSF must be the derivative at the object's own PSF, not a random one.
+
+    Setting apply_psf_shear for the offset renders drew a random +/- 0.05 PSF
+    shear into the truth table, so the benchmark differentiated at a randomised
+    base point while TRAINING differentiates at zero offset. The extra RNG draws
+    also came before dx/dy, shifting the galaxy centroids of the perturbed
+    renders by up to 2.3 pixels relative to the unperturbed one -- so e and gpsf
+    described a different object configuration from Rpsf in the same row.
+    """
+    pytest.importorskip("jax_galsim")
+    renderer = TrainingMatchedRenderer(_config(tmp_path, **{"dataset.backend": "jax-galsim"}))
+    base = renderer.render(8, seed=21)
+    plus = renderer.render(8, seed=21, psf_shear_g1=0.01)
+    minus = renderer.render(8, seed=21, psf_shear_g1=-0.01)
+
+    # the offset still reaches the PSF -- otherwise R^PSF would be exactly zero
+    assert not np.allclose(plus.psf_images, minus.psf_images)
+    # ... and the perturbation is symmetric about the UNPERTURBED render, which
+    # is what "the derivative at this object's PSF" means. A random base point
+    # would break this: base would not sit between the two legs.
+    midpoint = 0.5 * (np.asarray(plus.psf_images) + np.asarray(minus.psf_images))
+    spread = np.max(np.abs(np.asarray(plus.psf_images) - np.asarray(minus.psf_images)))
+    assert np.max(np.abs(midpoint - np.asarray(base.psf_images))) < 0.05 * spread
+
+    # same galaxies throughout: the extra draws must not shift the centroids
+    np.testing.assert_allclose(base.labels, plus.labels, atol=1e-6)
+    np.testing.assert_allclose(base.labels, minus.labels, atol=1e-6)

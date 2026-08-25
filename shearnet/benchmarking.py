@@ -171,8 +171,25 @@ class TrainingMatchedRenderer:
                 "as_result": True,
             }
         )
-        if psf_shear_g1 or psf_shear_g2:
-            kwargs["apply_psf_shear"] = True
+        # NOT `apply_psf_shear = True` here. That flag draws a RANDOM per-object
+        # PSF shear (uniform +/- psf_shear_range, rms 0.030 at the 0.05 default)
+        # into the truth table. The R^PSF offset does not need it: it is added
+        # straight onto truth.params below and `_render_jax` already renders
+        # with trace_psf_shear=True. Switching it on instead moved the
+        # measurement in two ways:
+        #
+        #   1. It evaluated d e / d e^PSF at a random +/- 0.05 base point rather
+        #      than at the object's actual PSF -- while TRAINING measures the
+        #      same derivative at zero offset, because the truth table there is
+        #      drawn with apply_psf_shear from the config (unset = False). Same
+        #      quantity, different point: a train/eval mismatch in exactly the
+        #      number psf_weight optimises.
+        #   2. The two extra RNG draws are consumed BEFORE dx/dy, so the
+        #      perturbed renders got different galaxy centroids from the
+        #      unperturbed one -- up to 0.325 arcsec, 2.3 pixels. Both legs of
+        #      the difference shifted together so R^PSF itself stayed clean, but
+        #      e_<est> and gpsf were then measured on a different object
+        #      configuration from Rpsf_<est>_sim in the same LEAKAGE row.
         if self.spec.backend == "jax-galsim":
             # The benchmark sets the applied shear itself; the training-time
             # random base-shear augmentation would randomise what we are

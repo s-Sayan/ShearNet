@@ -100,41 +100,52 @@ INLOOP_LABEL_KEYS = ("g1", "g2", "hlr", "flux")
 RESPONSE_TERMS = ("gamma", "psf", "shift", "complement", "orbit", "isotropy")
 
 #: Why ``isotropy_weight`` has to exist, given a D4-equivariant architecture.
-ISOTROPY_NOTE = """D4 cannot relate R11 to R22; only a 45-degree rotation can.
+ISOTROPY_NOTE = """What isotropy_weight is, and why it is a RESIDUAL.
 
-Under D4 the spin-2 pair transforms with independent signs -- the code is in
-``shearnet.core.models``: ``w1(g) = (-1)**r`` and ``w2(g) = (-1)**(r + m)``, so
-every one of the eight elements acts as ``S = diag(+/-1, +/-1)``. The response
-transforms as ``R -> S R S^-1``, which leaves ``R11`` and ``R22`` untouched and
-multiplies ``R12``/``R21`` by ``w1 w2``. Averaging over the group therefore
-forces ``R12 = R21 = 0`` and says nothing whatsoever about ``R11`` vs ``R22``.
+D4 cannot relate R11 to R22. Under D4 the spin-2 pair transforms with
+independent signs -- ``shearnet.core.models`` sets ``w1(g) = (-1)**r`` and
+``w2(g) = (-1)**(r + m)`` -- so every one of the eight elements acts as
+``S = diag(+/-1, +/-1)``. The response transforms as ``R -> S R S^-1``, which
+leaves ``R11`` and ``R22`` untouched and multiplies ``R12``/``R21`` by
+``w1 w2``. Orbit-averaging therefore kills the off-diagonals and says nothing
+whatsoever about ``R11`` vs ``R22``. The element that would relate them is a
+45-degree rotation (spin-2 doubles the angle, so it acts as
+``S = [[0, -1], [1, 0]]``), and D4 has no such element.
 
-Both halves of that are measurable on the untrained d4-fork-like model, over ten
-independent batches of 64 rendered stamps:
+Measured on the untrained d4-fork-like model over ten independent batches of 64
+rendered stamps: D4 equivariance of ``(g1, g2)`` holds to 2.4e-07 relative,
+``R12`` and ``R21`` are consistent with zero (1.8 and 1.0 sigma), and
+``R11 - R22`` is 35 sigma from zero before a single gradient step.
 
-    D4 equivariance of (g1, g2)   exact to 2.4e-07 relative
-    R12 = +3.0e-03 +/- 1.6e-03    consistent with zero (1.8 sigma)
-    R21 = -1.5e-03 +/- 1.5e-03    consistent with zero (1.0 sigma)
-    R11 - R22 = -0.288 +/- 0.008  35 sigma, at initialisation
+**But the target is not isotropic per object, so the term is a residual.**
+The observed shape is ``w = (eps + gamma) / (1 + conj(gamma) eps)``, which is
+*not* holomorphic in ``gamma``: the ``conj(gamma)`` gives it an anti-holomorphic
+Wirtinger derivative ``dw/dconj(gamma) = -eps^2`` at ``gamma = 0``. For
+``w = A dgamma + B dconj(gamma)`` the real Jacobian has
 
-The symmetry is doing exactly what the algebra says, and the diagonal asymmetry
-it leaves free is 35 sigma before a single gradient step.
+    R11 - R22 = 2 Re(B) = -2 (eps1^2 - eps2^2)
+    R12 + R21 = 2 Im(B) = -4 eps1 eps2
 
-The element that would relate them is a 45-degree rotation: spin-2 doubles the
-angle, so it acts as ``S = [[0, -1], [1, 0]]`` and
-``S R S^-1 = [[R22, -R21], [-R12, R11]]``. Averaging ``R`` over that gives
-``[[(R11+R22)/2, (R12-R21)/2], [(R21-R12)/2, (R11+R22)/2]]`` -- isotropic
-diagonal, antisymmetric off-diagonal. D4 has no 45-degree rotation, so this term
-imposes that invariance directly on the response instead:
+so the analytic target's anisotropic part is exactly the spin-4 term
+``-2 eps^2``, verified against ``compose_shear`` to 2.6e-07. Over a shape
+catalogue its per-object RMS is 0.31, while its ENSEMBLE mean is zero because
+``<eps^2> = 0`` for an isotropic shape distribution.
 
-    isotropy = (R11 - R22)^2 + (R12 + R21)^2
+Penalising the anisotropy of ``R`` itself would therefore fight the correct
+answer object by object -- the same mistake ``gamma_target: identity`` makes,
+and for the same reason. The term is the anisotropic projection of the
+*residual*::
 
-It reuses the ``R^gamma`` matrix ``gamma_weight`` already computes, so it costs
-no extra render, linearisation or forward pass.
+    D = R - target
+    isotropy = (D11 - D22)^2 + (D12 + D21)^2
+
+which is zero exactly when the response is right, and is a reweighting of the
+component of the ``gamma_weight`` residual that D4 leaves unconstrained. It
+reuses the ``R^gamma`` matrix ``gamma_weight`` already computes, so it costs no
+extra render, linearisation or forward pass.
 
 ``R^PSF`` needs no counterpart: its target is zero in all four entries and
-``psf_weight`` already penalises them equally, which is strictly stronger than
-isotropy.
+``psf_weight`` already penalises them equally, which is strictly stronger.
 """
 
 #: Simulator parameters whose image tangents span the physically realisable
@@ -841,14 +852,20 @@ def make_fused_train_step(
                 else:
                     gamma_loss = jnp.array(0.0, net_dtype)
 
-                # The 45-degree-rotation invariant: isotropic diagonal and
-                # antisymmetric off-diagonal. See ISOTROPY_NOTE -- D4 forces the
-                # off-diagonals to zero and leaves the diagonal free, so without
-                # this nothing in the model or the loss ties R22 to R11.
+                # The anisotropic projection of the gamma RESIDUAL. See
+                # ISOTROPY_NOTE: it must be the residual, not R itself. The
+                # analytic target is anisotropic per object -- its
+                # (R11 - R22, R12 + R21) part is exactly the spin-4 term
+                # -2 eps^2, RMS 0.31 over a shape catalogue -- so driving R's own
+                # anisotropy to zero would fight the correct answer object by
+                # object, which is precisely the error `gamma_target: identity`
+                # makes. Subtracting the target first leaves a term that is zero
+                # exactly when the response is right.
                 if response.isotropy_weight:
+                    deviation = gamma - gamma_target(p)
                     isotropy_loss = jnp.mean(
-                        (gamma[:, 0, 0] - gamma[:, 1, 1]) ** 2
-                        + (gamma[:, 0, 1] + gamma[:, 1, 0]) ** 2
+                        (deviation[:, 0, 0] - deviation[:, 1, 1]) ** 2
+                        + (deviation[:, 0, 1] + deviation[:, 1, 0]) ** 2
                     )
                 else:
                     isotropy_loss = jnp.array(0.0, net_dtype)

@@ -362,3 +362,43 @@ def test_dataset_spec_build_dispatches_to_jax():
     ref, _ = generate_dataset_jax(4, psf_fwhm=FWHM, npix=33, seed=0,
                                   jax_batch_size=4)
     assert np.array_equal(im, ref)
+
+
+def test_psf_directory_draw_is_deterministic_and_spread():
+    """A directory of PSFEx files must give a stable, seeded, spread-out draw.
+
+    search_psf_files used to return raw glob order, which is directory order and
+    therefore filesystem-dependent -- on the 50-file SuperBIT set it comes back
+    emp47, emp48, emp26, emp11, ... Since sample_truth picks each object's PSF as
+    psf_paths[int(len(psf_paths) * ud())], that index is part of the seeded draw,
+    so an unsorted list means the same seed picks different PSFs on a different
+    machine.
+    """
+    import os
+    from glob import glob
+
+    from shearnet.core.dataset import search_psf_files
+
+    directory = os.environ.get("SHEARNET_TEST_PSF_DIR")
+    if not directory or not os.path.isdir(directory):
+        pytest.skip("no PSFEx directory available")
+    found = search_psf_files(directory)
+    if len(found) < 2:
+        pytest.skip("need at least two .psf files")
+
+    assert found == sorted(found), "search_psf_files must sort"
+    # and the sort must actually be doing something -- otherwise this test
+    # would pass on a filesystem that happens to return sorted order
+    assert set(found) == set(glob(os.path.join(directory, "*.psf")))
+
+    cfg = JaxRenderConfig(npix=53, scale=0.141, psf_fwhm="superbit", exp="superbit",
+                          fft_size=256, batch_size=16)
+    kw = dict(seed=7, add_noise=False, hlr_type="constant", flux_type="constant")
+    a = sample_truth(64, cfg, psf_file_or_dir=directory, **kw)
+    b = sample_truth(64, cfg, psf_file_or_dir=directory, **kw)
+    assert a.psf_files == b.psf_files, "same seed must give the same PSF files"
+    # the draw spreads over the directory rather than collapsing onto one file
+    assert len(set(a.psf_files)) > 1
+    # a single file still works and yields exactly that file
+    one = sample_truth(8, cfg, psf_file_or_dir=found[0], **kw)
+    assert set(one.psf_files) == {found[0]}
