@@ -44,9 +44,11 @@ correct ShearNet. Hence in this harness:
 
 * ``R^PSF`` (the ``LEAKAGE`` table) is measured the **direct** way for every
   estimator -- the renderer shears the real PSF and re-renders.
-* The ensemble ``R^PSF`` is *applied* only to the deconvolving estimators
-  (``eval.evaluate.psf_response_apply``, default ngmix and anacal). ShearNet's
-  is reported and left unapplied. Both the corrected and raw shapes are stored.
+* The ensemble ``R^PSF`` is measured for every estimator and **applied to
+  none** by default. Applying it to ngmix turned a raw leakage slope of -0.002
+  into -0.457 at 50 sigma: the finite-difference ``R^PSF`` and the regression
+  slope ``alpha`` are different quantities and differ by ~200x here. See
+  :data:`DEFAULT_PSF_RESPONSE_APPLY`. Both shapes are always stored.
 * The shear response ``R^gamma`` is measured both ways. ``sim`` is the direct
   one and is the physical response for every estimator. ``metacal`` is the
   dilate one; for ngmix it is a genuine second estimate of the same derivative,
@@ -116,17 +118,30 @@ ESTIMATORS = ("ngmix", "anacal", "shearnet")
 #: it costs ~4.2 h at n_obs 200000 against ngmix's ~1.2 h on 18 workers.
 BASELINES = ("ngmix", "anacal")
 
-#: Estimators whose ensemble ``R^PSF`` is *applied* to their leakage shapes by
-#: default. Both deconvolve the PSF explicitly -- ngmix in its metacal-family
-#: fit, AnaCal in the deconvolved, resmoothed ``f_h`` its Gaussian fit works on
-#: -- so for them the measured PSF response is the physical leakage and
-#: subtracting ``gpsf * Rbar^PSF`` is the correction the field applies.
+#: Estimators whose ensemble ``R^PSF`` is *applied* to their leakage shapes.
 #:
-#: ShearNet is deliberately absent. It never deconvolves, so its ``R^PSF`` is a
-#: diagnostic of the network's own PSF sensitivity, not a calibration; applying
-#: it would inject the network's own error into the number the leakage plot is
-#: meant to expose. Override per run with ``eval.evaluate.psf_response_apply``.
-DEFAULT_PSF_RESPONSE_APPLY = ("ngmix", "anacal")
+#: EMPTY BY DEFAULT, because applying it made the leakage worse, not better.
+#: Measured on the 50-PSFEx run (job 2180809, 200k objects):
+#:
+#:     ngmix R^PSF_11 (finite difference)      = +0.4550
+#:     ngmix alpha_1 AFTER the correction      = -0.457  (50.6 sigma)
+#:     => ngmix alpha_1 BEFORE the correction  = -0.002  (consistent with zero)
+#:
+#: ngmix's raw PSF leakage was already zero -- it deconvolves, which is the whole
+#: point of it -- and subtracting ``gpsf * Rbar^PSF`` *created* a 50-sigma slope.
+#:
+#: The mistake was treating two different quantities as one. ``R^PSF`` here is a
+#: finite difference under an ARTIFICIAL shear applied to each object's PSF;
+#: ``alpha`` is the regression slope of the measured shape against the NATURAL
+#: PSF ellipticity across the 50 PSFEx models, which differ in size and higher
+#: moments as well as ellipticity. For an estimator that handles real PSF
+#: variation correctly the two can differ by orders of magnitude, and here they
+#: differ by ~200x. Only ``alpha`` is what a leakage correction should subtract.
+#:
+#: The measurement is still made and stored for every estimator, and
+#: ``e_<est>_raw`` is always written alongside ``e_<est>``. Set
+#: ``eval.evaluate.psf_response_apply`` to opt in if you have a reason to.
+DEFAULT_PSF_RESPONSE_APPLY = ()
 
 #: Objects per ngmix batch. An ngmix ``Observation`` is ~362 kB resident at a
 #: 53x53 stamp -- the four float64 arrays are only 88 kB of that, the rest is

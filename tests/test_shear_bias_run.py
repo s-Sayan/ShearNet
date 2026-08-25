@@ -317,7 +317,14 @@ def test_psf_response_is_applied_to_deconvolvers_only(trained_run):
     from astropy.io import fits
 
     benchmark, training = trained_run
-    result = harness._run_evaluation(benchmark, training, harness.ESTIMATORS)
+    section = harness._section(benchmark, "evaluate")
+    saved = dict(section)
+    section["psf_response_apply"] = ["ngmix", "anacal"]
+    try:
+        result = harness._run_evaluation(benchmark, training, harness.ESTIMATORS)
+    finally:
+        section.clear()
+        section.update(saved)
     assert result["ngmix_leakage_corrected"] is True
     assert result["anacal_leakage_corrected"] is True
     assert result["shearnet_leakage_corrected"] is False
@@ -365,7 +372,11 @@ def test_shearnet_metacal_can_be_switched_off(trained_run):
 
 
 def test_psf_response_apply_switch():
-    assert harness._psf_response_apply({}) == frozenset({"ngmix", "anacal"})
+    # nothing is corrected by default: on job 2180809 subtracting the
+    # finite-difference R^PSF turned ngmix's raw leakage slope of -0.002 into
+    # -0.457 at 50 sigma. R^PSF and the regression slope alpha are different
+    # quantities and only alpha may be subtracted.
+    assert harness._psf_response_apply({}) == frozenset()
     assert harness._psf_response_apply({"psf_response_apply": "none"}) == frozenset()
     assert harness._psf_response_apply({"psf_response_apply": ["ngmix"]}) == frozenset({"ngmix"})
     assert harness._psf_response_apply({"psf_response_apply": "ngmix, shearnet"}) == frozenset(

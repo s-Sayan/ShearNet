@@ -140,14 +140,14 @@ eval:
     # (skip-deconvolution) way: shear the real PSF by +/- response_step and
     # re-render, no dilated reconvolution PSF anywhere.
     #
-    # Applying it is a different question. The metacal-family PSF response is
-    # the physical leakage only for an estimator that explicitly deconvolves,
-    # so the ensemble correction e -> e - gpsf * Rbar^PSF is subtracted for
-    # ngmix and anacal and NOT for ShearNet: the network never deconvolves, so
-    # its R^PSF is a diagnostic of its own PSF sensitivity, and applying it
-    # would hide in the leakage plot the very thing that plot exists to show.
-    # LEAKAGE carries both e_<est> (as applied) and e_<est>_raw.
-    psf_response_apply: [ngmix, anacal]   # or 'none' / 'all' / a subset
+    # Applying it is a different question, and the answer is NO by default:
+    # applying it made things WORSE. On job 2180809 ngmix's raw leakage
+    # slope was -0.002 (consistent with zero -- it deconvolves), and subtracting
+    # gpsf * Rbar^PSF with Rbar = +0.455 turned that into -0.457 at 50 sigma.
+    # The finite-difference R^PSF and the regression slope alpha are different
+    # quantities; only alpha is what a leakage correction may subtract. R^PSF is
+    # still measured and stored for every estimator, next to e_<est>_raw.
+    psf_response_apply: none              # or a list of estimators, or 'all'
 
     # ---- ShearNet's metacal response: an opt-in diagnostic -----------------
     # OFF by default, because ShearNet's response is measured the DIRECT way:
