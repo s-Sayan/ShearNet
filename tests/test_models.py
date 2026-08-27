@@ -9,12 +9,14 @@ import pytest
 pytest.importorskip("jax")
 pytest.importorskip("flax")
 
+import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 import jax.random as random  # noqa: E402
 
 from shearnet.core.models import (  # noqa: E402
     BRANCH_MODELS,
     SINGLE_BRANCH_MODELS,
+    _ShearNetD4Backbone,
     build_branch_model,
     build_model,
 )
@@ -100,6 +102,7 @@ def test_d4_fork_like_is_equivariant(fusion):
 # equivariant for an arbitrary square-map backbone (not just the smooth d4cnn).
 D4_BRANCH_PAIRS = [
     ("d4cnn", "d4cnn"),
+    ("shearnet-d4", "shearnet-d4"),
     ("research_backed", "forklens_psf"),
     ("research_backed", "d4cnn"),
     ("d4cnn", "forklens_psf"),
@@ -158,7 +161,10 @@ def test_d4_fork_like_branches_are_equivariant(galaxy_branch, psf_branch):
 
 
 @pytest.mark.parametrize("head", ["gap", "attention"])
-@pytest.mark.parametrize("galaxy_branch,psf_branch", [("d4cnn", "d4cnn"), ("research_backed", "forklens_psf")])
+@pytest.mark.parametrize(
+    "galaxy_branch,psf_branch",
+    [("d4cnn", "d4cnn"), ("shearnet-d4", "shearnet-d4"), ("research_backed", "forklens_psf")],
+)
 def test_d4_fork_like_head_is_equivariant(head, galaxy_branch, psf_branch):
     """Both pooling heads stay exactly spin-2 equivariant.
 
@@ -191,6 +197,51 @@ def test_d4_fork_like_head_is_equivariant(head, galaxy_branch, psf_branch):
     # mirror: g1 unchanged, g2 flips; hlr, flux invariant.
     assert jnp.allclose(out_mir[:, :2], out[:, :2] * jnp.array([1.0, -1.0]), atol=1e-5)
     assert jnp.allclose(out_mir[:, 2:], out[:, 2:], atol=1e-5)
+
+
+def test_shearnet_d4_branch_reaches_fusion_at_13x13():
+    """The shearnet-d4 backbones take a 53x53 stamp to the 13x13x64 fusion map.
+
+    This is the point of the branch: two anti-aliased downsamplings instead of
+    the five avg-pools of a five-layer d4cnn, so cross-attention sees 169
+    spatial tokens rather than one. The PSF variant is the lighter one -- same
+    shapes, fewer residual blocks and no dilated context block -- so it must
+    have strictly fewer parameters than the galaxy variant.
+    """
+    stamp = jnp.ones((2, 53, 53))
+    galaxy = _ShearNetD4Backbone()
+    psf = _ShearNetD4Backbone(depths=(1, 1, 1), multiscale=False)
+
+    gal_params = galaxy.init(random.PRNGKey(0), stamp)
+    psf_params = psf.init(random.PRNGKey(0), stamp)
+    assert galaxy.apply(gal_params, stamp).shape == (2, 13, 13, 64)
+    assert psf.apply(psf_params, stamp).shape == (2, 13, 13, 64)
+
+    count = lambda p: sum(x.size for x in jax.tree_util.tree_leaves(p))  # noqa: E731
+    assert count(psf_params) < count(gal_params)
+
+
+def test_shearnet_d4_design_only_applies_to_its_own_branch():
+    """Selecting shearnet-d4 brings its fusion FFN and deeper odd heads with it.
+
+    The report specifies branches, fusion and heads as one architecture, so the
+    branch name sets ``design``; every other branch keeps the existing layout
+    and therefore the existing parameter tree.
+    """
+    kw = dict(fusion="transformer", head="attention")
+    assert build_model("d4-fork-like", galaxy_type="shearnet-d4", **kw).design == "shearnet-d4"
+    assert build_model("d4-fork-like", galaxy_type="d4cnn", **kw).design == "d4cnn"
+
+    gal = jnp.ones((2, 24, 24))
+    ok = ("g1", "g2", "hlr", "flux")
+    model = build_model("d4-fork-like", galaxy_type="shearnet-d4", psf_type="shearnet-d4", **kw)
+    params = model.init(random.PRNGKey(0), gal, gal, output_keys=ok)["params"]
+    # Sec. 10.1: 256 -> 128 -> 128 -> 1, so three bias-free layers per component.
+    assert {"odd_e1_dense0", "odd_e1_dense1", "odd_e1_dense2"} <= set(params)
+    for layer in ("odd_e1_dense0", "odd_e1_dense1", "odd_e1_dense2"):
+        assert "bias" not in params[layer]
+    # Sec. 10.2: one final linear layer per invariant scalar.
+    assert {"scalar_hlr", "scalar_flux"} <= set(params)
 
 
 def test_single_branch_accepts_unbatched_input():

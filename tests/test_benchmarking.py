@@ -442,4 +442,3 @@ def test_shear_pair_and_response_renderer_carry_the_rotation(tmp_path):
     rotated_gal, _ = render(0.0, 0.0)
     plain_gal, _ = renderer.response_renderer(6, seed=25)(0.0, 0.0)
     assert not np.allclose(rotated_gal, plain_gal)
->>>>>>> temp_import

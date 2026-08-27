@@ -819,6 +819,122 @@ class _D4SmoothCNN(nn.Module):
         return x
 
 
+def _blur_pool(x):
+    """Anti-aliased 2x downsample: a fixed [1,2,1]x[1,2,1]/16 blur, then 2x2 average pooling.
+
+    The kernel is separable, so it is applied as two 1-D passes; it is fixed
+    rather than learned, and D4-symmetric. Low-pass filtering before
+    subsampling suppresses the frequencies the coarser grid cannot represent,
+    which is what makes strided sampling stable under sub-pixel shifts
+    (Zhang, ICML 2019). Odd sizes lose the last row/column to the pooling, so
+    53 -> 26 -> 13.
+    """
+    k = jnp.array([0.25, 0.5, 0.25], dtype=x.dtype)
+    for axis in (1, 2):
+        pad = [(0, 0)] * x.ndim
+        pad[axis] = (1, 1)
+        xp = jnp.pad(x, pad)
+        n = x.shape[axis]
+        x = sum(k[i] * jax.lax.slice_in_dim(xp, i, i + n, axis=axis) for i in range(3))
+    return nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
+
+
+class _SmoothResBlock(nn.Module):
+    """Pre-normalised residual block ``x + alpha * u2`` (ShearNet-D4 report, Sec. 4.1).
+
+    Two LayerNorm/GELU/3x3-convolution stages feed a scaled residual. LayerNorm
+    normalises over channels at each spatial location, so -- unlike batch
+    normalisation -- a faint galaxy's representation never depends on the S/N
+    distribution of its minibatch neighbours, and training and inference are the
+    same function. The small ``alpha`` keeps the block near the identity at
+    initialisation, which is what you want when the sought distortion is far
+    smaller than the intrinsic morphology.
+    """
+
+    features: int
+    alpha: float = 0.1
+
+    @nn.compact
+    def __call__(self, x):
+        """Apply the residual block and return a map with ``features`` channels."""
+        skip = x
+        if x.shape[-1] != self.features:
+            skip = nn.Conv(self.features, (1, 1), use_bias=False)(x)
+        u = nn.Conv(self.features, (3, 3), padding="SAME")(nn.gelu(nn.LayerNorm()(x)))
+        u = nn.Conv(self.features, (3, 3), padding="SAME")(nn.gelu(nn.LayerNorm()(u)))
+        return skip + self.alpha * u
+
+
+class _SmoothMultiScaleBlock(nn.Module):
+    """Dilated multiscale context block (ShearNet-D4 report, Sec. 5.1).
+
+    Three parallel 3x3 convolutions at dilations (1, 2, 4) give effective
+    kernels of 3, 5 and 9 feature-grid pixels; their concatenation is projected
+    back to ``features`` and added residually. Dilation buys the receptive field
+    without a further resolution cut (Yu & Koltun, ICLR 2016), so at 13x13 the
+    three paths separate compact cores, intermediate morphology and
+    nearly stamp-wide context.
+    """
+
+    features: int = 64
+    scale_features: int = 32
+    dilations: tuple = (1, 2, 4)
+    alpha: float = 0.1
+
+    @nn.compact
+    def __call__(self, x):
+        """Apply the multiscale context block and return a map of the same shape."""
+        z = nn.gelu(nn.LayerNorm()(x))
+        paths = [
+            nn.Conv(self.scale_features, (3, 3), padding="SAME", kernel_dilation=(d, d))(z)
+            for d in self.dilations
+        ]
+        return x + self.alpha * nn.Conv(self.features, (1, 1))(jnp.concatenate(paths, axis=-1))
+
+
+class _ShearNetD4Backbone(nn.Module):
+    """Smooth residual backbone of the ShearNet-D4 report (Secs. 4-6).
+
+    Three stages at widths ``features`` separated by :func:`_blur_pool`, so a
+    53x53 stamp reaches the 13x13 fusion resolution as
+    ``53x53x32 -> 26x26x48 -> 13x13x64``. Each stage is a 1x1 transition
+    followed by ``depths[stage]`` :class:`_SmoothResBlock`s; the galaxy branch
+    additionally ends in a :class:`_SmoothMultiScaleBlock`.
+
+    Everything here is convolution, LayerNorm, GELU and fixed linear pooling --
+    no ReLU kink, no max pooling, no batch statistic -- so the image derivatives
+    the response losses differentiate through stay well behaved.
+
+    Attributes:
+        features: channel width of each stage.
+        depths: number of residual blocks per stage. The report's galaxy branch
+            is ``(2, 2, 1)`` and its lighter PSF branch is ``(1, 1, 1)``.
+        multiscale: append the dilated context block (galaxy branch only).
+    """
+
+    features: tuple = (32, 48, 64)
+    depths: tuple = (2, 2, 1)
+    multiscale: bool = True
+
+    @nn.compact
+    def __call__(self, x):
+        """Map ``(batch, H, W)`` to a spatial feature map ``(batch, H/4, W/4, C)``."""
+        if x.ndim == 2:
+            x = jnp.expand_dims(x, axis=0)
+        x = jnp.expand_dims(x, axis=-1)
+        # Stem: 3x3 convolution, LayerNorm, GELU.
+        x = nn.gelu(nn.LayerNorm()(nn.Conv(self.features[0], (3, 3), padding="SAME")(x)))
+        for stage, (feat, depth) in enumerate(zip(self.features, self.depths)):
+            if stage:
+                x = _blur_pool(x)
+                x = nn.Conv(feat, (1, 1))(x)
+            for _ in range(depth):
+                x = _SmoothResBlock(feat)(x)
+        if self.multiscale:
+            x = _SmoothMultiScaleBlock(self.features[-1])(x)
+        return x
+
+
 class _D4SpatialTransformerFusion(nn.Module):
     """Transformer fusion that returns a *spatial* galaxy-frame feature map.
 
@@ -828,11 +944,23 @@ class _D4SpatialTransformerFusion(nn.Module):
     output spatial lets the enclosing :class:`D4ForkLike` undo the orbit
     transformation and build the equivariant features. All activations are the
     smooth GeLU.
+
+    ``ffn_dim`` adds the pre-normalised feed-forward sublayer after each
+    attention sublayer, as in the original transformer block (Vaswani et al.
+    2017) and required by the ShearNet-D4 report (Secs. 7.2-7.3). ``0``, the
+    default, omits them entirely, leaving the attention-only block -- and its
+    parameter tree -- exactly as it was.
     """
 
     d_model: int = 64
     num_heads: int = 4
     num_self_attn_layers: int = 1
+    ffn_dim: int = 0
+
+    def _ffn(self, tokens):
+        """Pre-normalised residual feed-forward sublayer."""
+        h = nn.gelu(nn.Dense(self.ffn_dim)(nn.LayerNorm()(tokens)))
+        return tokens + nn.Dense(self.d_model)(h)
 
     @nn.compact
     def __call__(self, galaxy_map, psf_map, deterministic: bool = True):
@@ -859,11 +987,15 @@ class _D4SpatialTransformerFusion(nn.Module):
         psf_norm = nn.LayerNorm()(psf_tokens)
         cross_out = nn.MultiHeadDotProductAttention(num_heads=self.num_heads)(gal_norm, psf_norm)
         gal_tokens = gal_tokens + cross_out
+        if self.ffn_dim:
+            gal_tokens = self._ffn(gal_tokens)
 
         for _ in range(self.num_self_attn_layers):
             gal_norm = nn.LayerNorm()(gal_tokens)
             self_out = nn.MultiHeadDotProductAttention(num_heads=self.num_heads)(gal_norm, gal_norm)
             gal_tokens = gal_tokens + self_out
+            if self.ffn_dim:
+                gal_tokens = self._ffn(gal_tokens)
 
         # Back to a galaxy-frame spatial map for orbit alignment.
         return gal_tokens.reshape(batch, H_g, W_g, self.d_model)
@@ -898,9 +1030,14 @@ class D4ForkLike(nn.Module):
             vector broadcast onto the galaxy map).
         galaxy_branch / psf_branch: spatial backbone for each branch, one of
             :data:`D4_BRANCH_BACKBONES` (``'d4cnn'`` default). ``'d4cnn'`` is the
-            smooth (GeLU / avg-pool) :class:`_D4SmoothCNN` -- the only branch that
-            keeps the map continuously differentiable, a prerequisite for the
-            analytic gradient-based calibration of Lin et al. (2026, Sec 2.1.2).
+            smooth (GeLU / avg-pool) :class:`_D4SmoothCNN`, which keeps the map
+            continuously differentiable -- a prerequisite for the analytic
+            gradient-based calibration of Lin et al. (2026, Sec 2.1.2).
+            ``'shearnet-d4'`` is the equally smooth but far deeper
+            :class:`_ShearNetD4Backbone`, which reaches the fusion stage at
+            13x13 instead of 1x1 and is the branch the ShearNet-D4 report
+            specifies; see ``design`` below, since choosing it also changes the
+            fusion block and the heads.
             ``'research_backed'`` and ``'forklens_psf'`` are higher-capacity but
             use ReLU / strided convs, so they stay equivariant but forgo that
             smoothness. Any backbone must return a *square* spatial map so the
@@ -913,6 +1050,15 @@ class D4ForkLike(nn.Module):
             is stochastic only during training (``deterministic=False``) and an
             exact identity at inference, so the model's spin-2 equivariance holds
             for every evaluated quantity. ``0.0`` (default) inserts no dropout.
+        design: which specification the fusion block and the output heads follow.
+            ``'d4cnn'`` (default) is the attention-only fusion and single-hidden-
+            layer heads described above. ``'shearnet-d4'`` selects the ShearNet-D4
+            report's versions of the same three pieces -- feed-forward sublayers
+            in the fusion block (Secs. 7.2-7.3), two-hidden-layer odd shape heads
+            (Sec. 10.1), and one output layer per invariant scalar (Sec. 10.2).
+            The report specifies branches, fusion and heads as a single
+            architecture, so ``build_model`` sets this from the branch name
+            rather than exposing it as an independent config key.
     """
 
     fusion: str = "transformer"
@@ -925,16 +1071,25 @@ class D4ForkLike(nn.Module):
     head: str = "gap"  # 'gap' (fixed Gaussian window) | 'attention'
     num_pool_heads: int = 4  # number of attention pooling maps (head='attention')
     dropout: float = 0.0  # spatial-dropout rate for a 'research_backed' branch
+    design: str = "d4cnn"  # 'd4cnn' | 'shearnet-d4' -- fusion and head layout
 
-    def _branch_map(self, branch, features, x, deterministic):
+    def _branch_map(self, branch, features, x, deterministic, psf=False):
         """Run the chosen spatial backbone over the orbit and return its map.
 
         Any backbone returning a square spatial feature map is valid; the
         enclosing Reynolds average makes the whole model exactly spin-2
-        equivariant regardless of the backbone's internal structure.
+        equivariant regardless of the backbone's internal structure. ``psf``
+        selects the lighter variant of any backbone that has one.
         """
         if branch == "d4cnn":
             return _D4SmoothCNN(features=features)(x)
+        if branch == "shearnet-d4":
+            # The report gives the galaxy branch two residual blocks per stage
+            # plus the dilated context block, and the PSF branch one block per
+            # stage and no context block: a PSF kernel needs enough capacity for
+            # anisotropy and wings, not a morphology hierarchy.
+            depths = (1, 1, 1) if psf else (2, 2, 1)
+            return _ShearNetD4Backbone(depths=depths, multiscale=not psf)(x)
         if branch == "research_backed":
             # ``dropout`` regularizes only this high-capacity backbone; it is
             # stochastic under training (deterministic=False) and an exact
@@ -952,9 +1107,13 @@ class D4ForkLike(nn.Module):
     def _fuse(self, galaxy_map, psf_map, deterministic):
         """Fuse galaxy/PSF maps into a single galaxy-frame spatial map."""
         if self.fusion == "transformer":
-            return _D4SpatialTransformerFusion(d_model=self.d_model, num_heads=self.num_heads)(
-                galaxy_map, psf_map, deterministic=deterministic
-            )
+            return _D4SpatialTransformerFusion(
+                d_model=self.d_model,
+                num_heads=self.num_heads,
+                # Sec. 7.2: a width-256 GELU feed-forward after each attention
+                # sublayer. 0 keeps the attention-only block.
+                ffn_dim=256 if self.design == "shearnet-d4" else 0,
+            )(galaxy_map, psf_map, deterministic=deterministic)
         # 'concat': summarise the PSF as a global descriptor and broadcast it
         # onto every galaxy spatial location, keeping the galaxy spatial frame.
         psf_global = jnp.mean(psf_map, axis=(1, 2), keepdims=True)
@@ -988,7 +1147,9 @@ class D4ForkLike(nn.Module):
         gal_maps = self._branch_map(
             self.galaxy_branch, self.galaxy_features, gal_orbit, deterministic
         )
-        psf_maps = self._branch_map(self.psf_branch, self.psf_features, psf_orbit, deterministic)
+        psf_maps = self._branch_map(
+            self.psf_branch, self.psf_features, psf_orbit, deterministic, psf=True
+        )
         fused = self._fuse(gal_maps, psf_maps, deterministic)  # (8*batch, H, W, C)
 
         H, W, C = fused.shape[1], fused.shape[2], fused.shape[3]
@@ -1034,11 +1195,16 @@ class D4ForkLike(nn.Module):
 
         s1, s2 = _pool(psi1), _pool(psi2)
 
-        # Bias-free tanh ("odd") MLPs preserve the spin-2 sign of the features.
+        # Bias-free tanh ("odd") MLPs preserve the spin-2 sign of the features:
+        # a bias-free linear map and tanh are both odd, so f(-s) = -f(s) and the
+        # sign carried by psi1/psi2 survives the head. The report (Sec. 10.1)
+        # uses two hidden layers, 256 -> 128 -> 128 -> 1.
+        hidden = (128, 128) if self.design == "shearnet-d4" else (128,)
+
         def odd_mlp(z, name):
-            z = nn.Dense(128, use_bias=False, name=f"{name}_dense0")(z)
-            z = nn.tanh(z)
-            z = nn.Dense(1, use_bias=False, name=f"{name}_dense1")(z)
+            for i, width in enumerate(hidden):
+                z = nn.tanh(nn.Dense(width, use_bias=False, name=f"{name}_dense{i}")(z))
+            z = nn.Dense(1, use_bias=False, name=f"{name}_dense{len(hidden)}")(z)
             return z[:, 0]
 
         n_out = len(output_keys)
@@ -1053,8 +1219,16 @@ class D4ForkLike(nn.Module):
         if n_out > 2:
             s_inv = _pool(psi_inv)
             h = nn.gelu(nn.Dense(128)(s_inv))
-            extra = nn.Dense(n_out - 2)(h)
-            columns.extend(extra[:, k] for k in range(n_out - 2))
+            if self.design == "shearnet-d4":
+                # Sec. 10.2: one final linear layer per scalar. log-size and
+                # log-flux have different noise and dynamic ranges, so they do
+                # not share an undifferentiated multi-output layer.
+                columns.extend(
+                    nn.Dense(1, name=f"scalar_{key}")(h)[:, 0] for key in output_keys[2:]
+                )
+            else:
+                extra = nn.Dense(n_out - 2)(h)
+                columns.extend(extra[:, k] for k in range(n_out - 2))
 
         return jnp.stack(columns, axis=-1)
 
@@ -1103,9 +1277,11 @@ def build_branch_model(model_type):
 # Each must return a SQUARE spatial feature map (the orbit alignment uses
 # ``rot90``); the enclosing Reynolds average then makes the whole model exactly
 # spin-2 equivariant regardless of the backbone. ``d4cnn`` is the smooth default;
-# the others are higher-capacity but non-smooth (see :class:`D4ForkLike`).
+# ``shearnet-d4`` is the smooth residual backbone of the ShearNet-D4 report; the
+# others are higher-capacity but non-smooth (see :class:`D4ForkLike`).
 D4_BRANCH_BACKBONES = {
     "d4cnn": _D4SmoothCNN,
+    "shearnet-d4": _ShearNetD4Backbone,
     "research_backed": ResearchBackedGalaxyResNet,
     "forklens_psf": ForkLensPSFNet,
 }
@@ -1169,14 +1345,20 @@ def build_model(
         # proof-of-concept, so a baseline meant to reproduce their numbers has
         # to say so rather than inherit a smaller network silently.
         widths = tuple(branch_features) if branch_features else (16, 32)
+        galaxy_branch = _d4_branch(galaxy_type)
         return D4ForkLike(
             fusion=fusion,
-            galaxy_branch=_d4_branch(galaxy_type),
+            galaxy_branch=galaxy_branch,
             psf_branch=_d4_branch(psf_type),
             galaxy_features=widths,
             psf_features=widths,
             head=head or "gap",
             dropout=dropout or 0.0,
+            # The ShearNet-D4 report specifies branches, fusion and heads as one
+            # architecture, so selecting its galaxy backbone also selects its
+            # fusion feed-forward sublayers and its head depths. Every other
+            # branch keeps the existing layout.
+            design="shearnet-d4" if galaxy_branch == "shearnet-d4" else "d4cnn",
         )
     try:
         model_cls = SINGLE_BRANCH_MODELS[nn]

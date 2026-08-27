@@ -1,0 +1,233 @@
+meta:
+  model_name: fourth_inloop_shearnet_d4
+  description: "D4 ShearNet with in-loop rendering, depth resampling, and response losses"
+
+paths:
+  root: /home/adfield/ShearNet/research/unit_test_variations/fourth_inloop_shearnet_d4
+  psfex_model_file: /home/adfield/weak_lensing/superbit-lensing-jax-test/simulated_data/sim_utils/emp_psfs/emp_psfs_best/psfex_all_except_best
+  train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
+  eval_catalog: /home/adfield/ShearNet/cosmos_catalog_eval.fits
+  checkpoint_dir: null
+  plot_dir: null
+
+image:
+  stamp_size: 53
+  pixel_scale: 0.141
+  noise_sd: 12.719674
+  normalize_images: true
+
+psf:
+  mode: superbit
+  gaussian_fwhm: 0.5
+  stamp_size: 53
+  noise: 1.0e-6
+
+galaxy:
+  hlr_type: catalog
+  flux_type: catalog
+  hlr: catalog
+  flux: catalog
+
+model:
+  architecture: d4-fork-like
+  process_psf: true
+  fusion: transformer
+  head: attention
+  galaxy_branch: shearnet-d4
+  psf_branch: shearnet-d4
+  branch_features: [32, 32, 32, 32, 32]
+  output_keys: [g1, g2, hlr, flux]
+  gap: true
+  dropout: 0.0
+
+train:
+  seed: 42
+  samples: 3000
+  epochs: 60
+  batch_size: 128
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-2
+  patience: 10
+  val_split: 0.2
+  eval_interval: 1
+  loss_weights: [1.0, 1.0, 1.0, 1.0]
+  ema_decay: 0.999
+  plot: true
+
+  backend: jax-galsim
+  generation: inloop
+  jax_fft_size: 256
+  jax_batch_size: 128
+
+  response:
+    gamma_weight: 1.0e-2
+    psf_weight: 1.0e-1
+    shift_weight: 1.0e-2
+    # The complement is the protected-subspace penalty: it damps directions
+    # orthogonal to all physical image tangents without changing those tangents.
+    complement_weight: 1.0e-3
+    # Re-rendering only the PSF at 90 degrees is a simulator constraint. It is
+    # distinct from the joint D4 symmetry implemented by the architecture.
+    orbit_weight: 1.0e-2
+    # (R11 - R22)^2 + (R12 + R21)^2 on R^gamma: the 45-degree-rotation
+    # invariance, and the ONE thing the D4 architecture structurally cannot
+    # give you. Every D4 element acts on (e1, e2) as diag(+/-1, +/-1), so
+    # R -> S R S^-1 zeroes the off-diagonals and leaves R11 and R22 completely
+    # unrelated -- measured on this very model at initialisation: R12 and R21
+    # both consistent with zero (1.8 and 1.0 sigma) while R11 - R22 is 35
+    # sigma, with D4 equivariance itself holding to 2e-7. Reuses the R^gamma
+    # matrix gamma_weight already builds, so it costs no extra render.
+    # See ISOTROPY_NOTE in shearnet/core/inloop.py.
+    isotropy_weight: 1.0e-2
+    every_n_steps: 2
+    orbit_k: 2
+    gamma_target: analytic
+    report: true
+
+  noise:
+    min_sd: null
+    max_sd: null
+    condition: false
+
+eval:
+  seed: 150
+  n_obs: 2000
+  gal_model: gauss
+
+  evaluate:
+    # ShearNet is always in the run -- a benchmark of it alone says nothing --
+    # so the only choice is which baseline it is measured against:
+    #   ngmix   esheldon/ngmix. dilate/metacal R^gamma + R^PSF. ~1.2 h at
+    #           n_obs 200000 on 18
+    #           workers, and the baseline the field reads.
+    #   anacal  AnaCal's own C++ Gaussian model fit, which carries an ANALYTIC
+    #           de/dgamma out of the fit via quintuple numbers (Li 2026,
+    #           arXiv:2506.16607). Not a wrapper around ngmix. Its fit is
+    #           SERIAL at ~12.6 ms/object, so it adds ~7 h at n_obs 200000.
+    #   both    run the pair.
+    # Override on the command line with --baseline; the preflight prints the
+    # hours before the run commits to them.
+    baseline: ngmix
+
+    # Corrections:
+    #   metacal  deconvolve, perturb, and reconvolve with a DILATED PSF. Both
+    #            estimators measure the same nine products. Rbar^PSF is
+    #            subtracted first; R^gamma then divides m and (with lin2026) c.
+    #   anacal   the ANALYTIC response, exact rather than a finite difference,
+    #            available only for AnaCal's own fit
+    #   sim      retained only for AnaCal as a check on its analytic response.
+    #            It is never measured or applied to ngmix or ShearNet.
+    #   none     do not divide at all: R = I, so m is measured against the
+    #            APPLIED shear and nothing else. This is the completely
+    #            uncorrected row. It compares against shear_true, which is an
+    #            input to the render rather than an output of it. ngmix
+    #            and anacal land near +1 here because they report an
+    #            ellipticity rather than a shear; that is not a bias, it is what
+    #            their metacal/analytic response exists to divide out.
+    response_step: 0.01        # shared, so the responses are comparable
+    shear_true: 0.01
+    # Which shear component carries the applied shear. m_k is only a
+    # measurement if the shear is ON component k -- with shear on g1 only, the
+    # g2 numerator is consistent with zero and "m2" comes out at -1. So 'both'
+    # renders a SECOND pair sheared in g2, doubling the render and the metacal
+    # fit (the dominant cost; the preflight prints the new total). That is the
+    # price of reporting m1, m2, c1 and c2 rather than just the first component.
+    component: both
+    n_jackknife: 20
+
+    # ---- the ring test ------------------------------------------------------
+    # Render every galaxy again with its intrinsic shape rotated on the sky --
+    # same applied shear, same PSF, same focal-plane position -- and average the
+    # measurements. The ring test of Nakajima & Bernstein (2007); used for shear
+    # calibration on simulations in this form by Fenech Conti et al. (2017).
+    #
+    #   false / 1  off, one station.
+    #   true  / 2  (0, 90). Spin-2 doubles the angle, so 90 degrees flips the
+    #              sign of the intrinsic ellipticity and it cancels in the mean
+    #              while the applied shear survives. This is shape-noise
+    #              cancellation, and it is what makes c and the leakage slope
+    #              alpha precise. At n_obs 200000 with sigma_e ~ 0.25 the
+    #              shape-noise floor on alpha is
+    #              sigma_e / (sqrt(N) * sigma_ePSF) = 1.2e-2 -- exactly where
+    #              the last runs sat, which is why they BOUNDED alpha rather
+    #              than measuring it. Reaching 1e-3 by brute force would take
+    #              ~1.3e7 galaxies; the rotated twin gets there for 2x.
+    #   4          (0, 45, 90, 135). Additionally kills the O(eps^2 gamma) term
+    #              in the truth-referenced m. Shear composition is a Moebius
+    #              map, so the +/- difference is gamma - eps^2 conj(gamma), not
+    #              gamma; 90 degrees CANNOT touch that ((-eps)^2 = eps^2) but 45
+    #              degrees flips its sign. Measured on the composition at
+    #              N = 400000, gamma = 0.01, sigma_e = 0.25:
+    #
+    #                each station alone   m = +1.354e-04, scatter 1.25e-01
+    #                (0, 90)              m = +1.354e-04, scatter 1.25e-01
+    #                (0, 45)              m = -1.190e-08, scatter 5.40e-06
+    #
+    #              i.e. at 2 stations the `none` row carries a 1.35e-04 bias and
+    #              a 2.8e-04 error bar at n_obs 200000; at 4 stations both drop
+    #              by a factor of 23000, object by object, leaving only the
+    #              O(gamma^3 eps^4) term the ring does not reach.
+    #
+    # 4 is chosen here because m is the headline number and 2 would leave it
+    # with a bias 4x larger than the effect being looked for. Each station is a
+    # full extra measurement -- render, ngmix fit and metacal -- so with
+    # component: both this is 8x the single-component single-station baseline.
+    # The preflight prints the hours before the run commits to them.
+    shape_noise_cancel: 4
+    psf_model: gauss           # ngmix PSF model
+    c_convention: lin2026
+    resample: jackknife        # 'bootstrap' to match their 20x bootstrap
+
+    # ngmix and ShearNet now always use the full 2x2 dilate/metacal R^PSF in the
+    # corrected m/c and LEAKAGE products. This legacy selector affects only the
+    # optional AnaCal direct PSF diagnostic when baseline: anacal/both; it does
+    # not disable either requested estimator's metacal correction.
+    psf_response_apply: none
+
+    # ---- Complete metacal correction for BOTH estimators -------------------
+    # One psf='dilate' bootstrap produces nine reconvolved image/PSF pairs:
+    # noshear, +/-g1, +/-g2, +/-PSF-g1 and +/-PSF-g2. ngmix and ShearNet both
+    # measure those same pairs. The ordinary four finite differences give
+    # R^gamma; the four *_psf differences give R^PSF. A single ensemble
+    # Rbar^PSF over the paired +/- applied-shear populations is subtracted from
+    # the metacal noshear prediction, then m/c divide by R^gamma. The FITS also
+    # keeps the original completely uncorrected prediction and m/c row.
+    shearnet_metacal: true
+    # AnaCal model fit. The window is what the fitter cuts around each source,
+    # so an odd 53-pixel stamp needs no padding. ~12.6 ms/object and not
+    # parallelised (see shearnet/methods/anacal_fit.py for why), so budget
+    # ~4.2 h at n_obs 200000.
+    anacal_sigma_arcsec: 0.52
+    anacal_stamp_size: 32
+    anacal_epochs: 35
+    shearnet_batch_size: 256
+
+    # ngmix worker processes. null = the SLURM allocation (1 off-cluster).
+    # metacal is ~156 ms/object against ~7 ms for a plain fit, so this is the
+    # difference between ~20 hours on one core and ~1.2 hours on 18. The value
+    # used is recorded in the FITS header: metacal's random guesses depend on
+    # the worker count, so reproducing an m bit-for-bit means reproducing this.
+    ngmix_nproc: null
+
+    # One file, every time:
+    #   TAB_P / TAB_M  the +/- shear populations, one row per object, carrying
+    #                  e_<est>_uncorrected (original image),
+    #                  e_<est>_metacal_raw (metacal noshear before PSF
+    #                  subtraction), and e_<est>_metacal_corrected (the value
+    #                  used for corrected m/c), beside Rgamma_<est>_metacal,
+    #                  Rpsf_<est>_metacal and Rbarpsf_<est>_metacal; with
+    #                  shape_noise_cancel on, also e_<est>_r45 / _r90 / _r135
+    #                  and the matching R_ columns for each ring station, whose
+    #                  mean is what the SUMMARY rows divide
+    #   LEAKAGE        the unsheared population: metacal R^PSF,
+    #                  e_<est>_original, e_<est>_metacal_raw, and the corrected
+    #                  e_<est>; with shape_noise_cancel on, each ring
+    #                  station beside them and the ring average under
+    #                  e_<est>_raw_ring, which is the column the leakage panels
+    #                  and the alpha-vs-size regression should read
+    #   SUMMARY        one row per (estimator, correction)
+    #   BINNED         one row per (estimator, correction, flux quantile); each
+    #                  bin divides by its own within-bin <R>
+    #   LEAKSUM        one row per estimator: mean shape, R^PSF, applied or not
+    # research/shear_bias/plots_from_fits.ipynb reads exactly this.
+    output: benchmarking/evaluation.fits
