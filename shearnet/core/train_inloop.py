@@ -46,13 +46,14 @@ from .inloop import (
     InLoopGenerator,
     ResponseRegularization,
     format_response_report,
+    make_batch_render,
     make_fused_eval_step,
     make_fused_train_step,
     make_response_report,
     normalize_state,
 )
 from .losses import resolve_loss
-from .models import build_model, is_fork_model
+from .models import attention_pool_diagnostics, build_model, is_fork_model
 from .train import save_checkpoint
 
 logger = get_logger(__name__)
@@ -279,6 +280,37 @@ def train_model_inloop(
         noise_condition=noise_condition,
     )
 
+    # The attention head already computes four spatial probability maps.  Once
+    # per validation pass, capture those maps through Flax's intermediates
+    # collection and report statistics that reveal diffuse maps, duplicate
+    # heads, and full head collapse.  This does not alter ordinary forward
+    # returns, checkpoints, or the training objective.
+    attention_report = None
+    if nn == "d4-fork-like" and head == "attention":
+        attention_render = make_batch_render(
+            gen,
+            eval_nse_sd,
+            trace_psf_shear=trace_psf_shear,
+            img_norm=img_norm,
+            noise_condition=noise_condition,
+        )
+
+        @jax.jit
+        def attention_report(params, idx, noise_key):
+            gal, psf = attention_render(idx, noise_key)
+            _, captured = model.apply(
+                params,
+                gal,
+                psf,
+                output_keys=output_keys,
+                gap=gap,
+                deterministic=True,
+                capture_attention=True,
+                mutable=["intermediates"],
+            )
+            maps = captured["intermediates"]["pool_attention"][0]
+            return attention_pool_diagnostics(maps)
+
     if noise_range is not None:
         logger.info(
             "in-loop noise randomization: uniform [%.4g, %.4g]%s; validation at %.4g",
@@ -374,6 +406,20 @@ def train_model_inloop(
                 eval_state.params, val_batches[0], jax.random.fold_in(val_noise_key, 0)
             )
             logger.info("  %s", format_response_report(values))
+        if attention_report is not None:
+            diagnostics = attention_report(
+                eval_state.params, val_batches[0], jax.random.fold_in(val_noise_key, 0)
+            )
+            entropy = diagnostics["entropy"]
+            logger.info(
+                "  attention pooling: entropy=[%s] similarity(mean/max)=%.4f/%.4f "
+                "effective_heads=%.3f/%d",
+                ", ".join(f"{float(value):.4f}" for value in entropy),
+                float(diagnostics["mean_similarity"]),
+                float(diagnostics["max_similarity"]),
+                float(diagnostics["effective_rank"]),
+                len(entropy),
+            )
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss

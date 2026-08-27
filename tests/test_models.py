@@ -17,6 +17,7 @@ from shearnet.core.models import (  # noqa: E402
     BRANCH_MODELS,
     SINGLE_BRANCH_MODELS,
     _ShearNetD4Backbone,
+    attention_pool_diagnostics,
     build_branch_model,
     build_model,
 )
@@ -242,6 +243,56 @@ def test_shearnet_d4_design_only_applies_to_its_own_branch():
         assert "bias" not in params[layer]
     # Sec. 10.2: one final linear layer per invariant scalar.
     assert {"scalar_hlr", "scalar_flux"} <= set(params)
+
+
+def test_attention_pool_maps_are_explicitly_capturable():
+    """Diagnostics expose all four maps without changing normal predictions."""
+    model = build_model(
+        "d4-fork-like",
+        galaxy_type="shearnet-d4",
+        psf_type="shearnet-d4",
+        fusion="transformer",
+        head="attention",
+    )
+    gal = random.normal(random.PRNGKey(2), (2, 24, 24))
+    psf = random.normal(random.PRNGKey(3), (2, 24, 24))
+    output_keys = ("g1", "g2")
+    variables = model.init(random.PRNGKey(0), gal, psf, output_keys=output_keys)
+    assert "intermediates" not in variables
+
+    ordinary = model.apply(variables, gal, psf, output_keys=output_keys)
+    captured_pred, captured = model.apply(
+        variables,
+        gal,
+        psf,
+        output_keys=output_keys,
+        capture_attention=True,
+        mutable=["intermediates"],
+    )
+    maps = captured["intermediates"]["pool_attention"][0]
+    assert maps.shape == (2, 6, 6, 4)
+    assert jnp.allclose(jnp.sum(maps, axis=(1, 2)), 1.0, atol=1e-6)
+    assert jnp.allclose(captured_pred, ordinary, atol=1e-7)
+
+
+def test_attention_pool_diagnostics_identify_head_collapse():
+    """Identical maps have unit similarity and one effective head."""
+    maps = jnp.full((3, 2, 2, 4), 0.25)
+    diagnostics = attention_pool_diagnostics(maps)
+    assert jnp.allclose(diagnostics["entropy"], 1.0)
+    assert jnp.allclose(diagnostics["similarity"], jnp.ones((4, 4)))
+    assert float(diagnostics["max_similarity"]) == pytest.approx(1.0)
+    assert float(diagnostics["effective_rank"]) == pytest.approx(1.0, abs=1e-5)
+
+
+def test_attention_pool_diagnostics_distinguish_independent_heads():
+    """Four disjoint maps have zero overlap and four effective heads."""
+    maps = jnp.eye(4).reshape(1, 2, 2, 4)
+    diagnostics = attention_pool_diagnostics(maps)
+    assert jnp.allclose(diagnostics["entropy"], 0.0)
+    assert jnp.allclose(diagnostics["similarity"], jnp.eye(4))
+    assert float(diagnostics["max_similarity"]) == pytest.approx(0.0)
+    assert float(diagnostics["effective_rank"]) == pytest.approx(4.0, abs=1e-5)
 
 
 def test_single_branch_accepts_unbatched_input():

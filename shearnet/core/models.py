@@ -1128,8 +1128,16 @@ class D4ForkLike(nn.Module):
         output_keys: tuple = ("g1", "g2"),
         deterministic: bool = False,
         gap: bool = False,
+        capture_attention: bool = False,
     ):
-        """Run the D4 orbit, build equivariant features, and return predictions."""
+        """Run the D4 orbit, build equivariant features, and return predictions.
+
+        When ``capture_attention`` is true, the four spatial pooling maps are
+        exposed in Flax's ``intermediates`` collection under
+        ``"pool_attention"``.  The default is false so model initialisation and
+        ordinary prediction keep exactly the same variable tree and return
+        value as before.
+        """
         if galaxy_image.ndim == 2:
             galaxy_image = jnp.expand_dims(galaxy_image, axis=0)
         if psf_image.ndim == 2:
@@ -1181,6 +1189,8 @@ class D4ForkLike(nn.Module):
             logits = nn.Dense(K, name="pool_logits")(ctx)  # (B, H, W, K)
             attn = jax.nn.softmax(logits.reshape(batch, H * W, K), axis=1)
             attn = attn.reshape(batch, H, W, K)
+            if capture_attention:
+                self.sow("intermediates", "pool_attention", attn)
 
             def _pool(psi):
                 # (B,H,W,C) weighted by (B,H,W,K) -> (B, K*C)
@@ -1231,6 +1241,54 @@ class D4ForkLike(nn.Module):
                 columns.extend(extra[:, k] for k in range(n_out - 2))
 
         return jnp.stack(columns, axis=-1)
+
+
+def attention_pool_diagnostics(attention, eps=1e-12):
+    """Summarise a batch of attention-pooling maps without discarding the maps.
+
+    Args:
+        attention: ``(batch, height, width, heads)`` probability maps captured
+            from :class:`D4ForkLike`'s ``"pool_attention"`` intermediate.
+        eps: numerical floor used by logarithms and normalisations.
+
+    Returns:
+        A dictionary containing per-head normalised spatial entropy, the full
+        mean cosine-similarity matrix, mean/max off-diagonal similarity, and an
+        effective head rank in ``[1, heads]``.  Identical pooling maps have
+        similarity one and effective rank one, making head collapse explicit.
+    """
+    attention = jnp.asarray(attention)
+    if attention.ndim != 4:
+        raise ValueError(
+            "attention pooling maps must have shape (batch, height, width, heads), "
+            f"got {attention.shape}"
+        )
+    batch, height, width, heads = attention.shape
+    spatial = height * width
+    flat = attention.reshape(batch, spatial, heads)
+
+    entropy = -jnp.sum(flat * jnp.log(jnp.maximum(flat, eps)), axis=1)
+    entropy = jnp.mean(entropy / jnp.log(jnp.asarray(spatial, attention.dtype)), axis=0)
+
+    unit = flat / jnp.maximum(jnp.linalg.norm(flat, axis=1, keepdims=True), eps)
+    similarity = jnp.mean(jnp.einsum("bnh,bnk->bhk", unit, unit), axis=0)
+    offdiag = ~jnp.eye(heads, dtype=bool)
+    offdiag_values = similarity[offdiag]
+    mean_similarity = jnp.mean(offdiag_values) if heads > 1 else jnp.asarray(0.0)
+    max_similarity = jnp.max(offdiag_values) if heads > 1 else jnp.asarray(0.0)
+
+    eigenvalues = jnp.maximum(jnp.linalg.eigvalsh(similarity), 0.0)
+    spectrum = eigenvalues / jnp.maximum(jnp.sum(eigenvalues), eps)
+    effective_rank = jnp.exp(
+        -jnp.sum(spectrum * jnp.log(jnp.maximum(spectrum, eps)))
+    )
+    return {
+        "entropy": entropy,
+        "similarity": similarity,
+        "mean_similarity": mean_similarity,
+        "max_similarity": max_similarity,
+        "effective_rank": effective_rank,
+    }
 
 
 # ---------------------------------------------------------------------------

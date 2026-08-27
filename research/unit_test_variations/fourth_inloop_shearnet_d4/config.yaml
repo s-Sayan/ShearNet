@@ -35,7 +35,6 @@ model:
   head: attention
   galaxy_branch: shearnet-d4
   psf_branch: shearnet-d4
-  branch_features: [32, 32, 32, 32, 32]
   output_keys: [g1, g2, hlr, flux]
   gap: true
   dropout: 0.0
@@ -80,7 +79,7 @@ train:
     # See ISOTROPY_NOTE in shearnet/core/inloop.py.
     isotropy_weight: 1.0e-2
     every_n_steps: 2
-    orbit_k: 2
+    orbit_k: 4
     gamma_target: analytic
     report: true
 
