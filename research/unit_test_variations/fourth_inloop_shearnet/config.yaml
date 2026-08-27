@@ -99,7 +99,8 @@ eval:
   evaluate:
     # ShearNet is always in the run -- a benchmark of it alone says nothing --
     # so the only choice is which baseline it is measured against:
-    #   ngmix   esheldon/ngmix. metacal + sim. ~1.2 h at n_obs 200000 on 18
+    #   ngmix   esheldon/ngmix. dilate/metacal R^gamma + R^PSF. ~1.2 h at
+    #           n_obs 200000 on 18
     #           workers, and the baseline the field reads.
     #   anacal  AnaCal's own C++ Gaussian model fit, which carries an ANALYTIC
     #           de/dgamma out of the fit via quintuple numbers (Li 2026,
@@ -111,24 +112,17 @@ eval:
     baseline: ngmix
 
     # Corrections:
-    #   metacal  shear the IMAGE: deconvolve, shear, reconvolve with a DILATED
-    #            PSF (ngmix's bootstrapper). ShearNet measures the same five
-    #            reconvolved stamps -- see shearnet_metacal below.
+    #   metacal  deconvolve, perturb, and reconvolve with a DILATED PSF. Both
+    #            estimators measure the same nine products. Rbar^PSF is
+    #            subtracted first; R^gamma then divides m and (with lin2026) c.
     #   anacal   the ANALYTIC response, exact rather than a finite difference,
     #            available only for AnaCal's own fit
-    #   sim      shear the SCENE -- re-render at gamma +/- response_step with
-    #            galaxies, PSFs and noise pinned. No deconvolution: this is the
-    #            "direct" route, and it is the physical response for a
-    #            non-deconvolving estimator. The universal column, and the
-    #            anacal row is what says whether it agrees with the exact answer.
+    #   sim      retained only for AnaCal as a check on its analytic response.
+    #            It is never measured or applied to ngmix or ShearNet.
     #   none     do not divide at all: R = I, so m is measured against the
-    #            APPLIED shear and nothing else. READ THIS ROW FOR SHEARNET.
-    #            The `sim` m divides the +/-shear_true secant by the
-    #            +/-(shear_true + response_step) secant of the SAME response
-    #            curve, so it vanishes identically for any linear estimator no
-    #            matter how miscalibrated -- it is a nonlinearity check, not a
-    #            calibration. The `none` row compares against shear_true, which
-    #            is an input to the render rather than an output of it. ngmix
+    #            APPLIED shear and nothing else. This is the completely
+    #            uncorrected row. It compares against shear_true, which is an
+    #            input to the render rather than an output of it. ngmix
     #            and anacal land near +1 here because they report an
     #            ellipticity rather than a shear; that is not a bias, it is what
     #            their metacal/analytic response exists to divide out.
@@ -183,33 +177,27 @@ eval:
     # The preflight prints the hours before the run commits to them.
     shape_noise_cancel: 4
     psf_model: gauss           # ngmix PSF model
-    c_convention: shearnet     # 'lin2026' to sit beside their Eq. 23
+    # lin2026 uses the sheared component and divides c by the same R^gamma as
+    # m. With 'shearnet', c is the raw unsheared component and R^gamma is not
+    # applied, which is not the fully response-corrected measurement wanted here.
+    c_convention: lin2026
     resample: jackknife        # 'bootstrap' to match their 20x bootstrap
 
-    # ---- PSF response: which estimators get it APPLIED ----------------------
-    # R^PSF is always MEASURED, for every estimator, the "direct"
-    # (skip-deconvolution) way: shear the real PSF by +/- response_step and
-    # re-render, no dilated reconvolution PSF anywhere.
-    #
-    # Applying it is a different question, and the answer is NO by default:
-    # applying it made things WORSE. On job 2180809 ngmix's raw leakage
-    # slope was -0.002 (consistent with zero -- it deconvolves), and subtracting
-    # gpsf * Rbar^PSF with Rbar = +0.455 turned that into -0.457 at 50 sigma.
-    # The finite-difference R^PSF and the regression slope alpha are different
-    # quantities; only alpha is what a leakage correction may subtract. R^PSF is
-    # still measured and stored for every estimator, next to e_<est>_raw.
-    psf_response_apply: none              # or a list of estimators, or 'all'
+    # ngmix and ShearNet now always use the full 2x2 dilate/metacal R^PSF in the
+    # corrected m/c and LEAKAGE products. This legacy selector affects only the
+    # optional AnaCal direct PSF diagnostic when baseline: anacal/both; it does
+    # not disable either requested estimator's metacal correction.
+    psf_response_apply: none
 
-    # ---- ShearNet's metacal response: an opt-in diagnostic -----------------
-    # OFF by default, because ShearNet's response is measured the DIRECT way:
-    # `sim` shears the scene and reconvolves with the REAL PSF, no deconvolution
-    # and no dilated reconvolution PSF anywhere, so the stamps stay in the
-    # distribution the network trained on. The metacal route feeds it
-    # deconvolved/dilated/reconvolved stamps instead -- out of distribution, and
-    # historically poor, which is why the skip-deconvolution route exists at all
-    # (c538a8c). Turn it on to carry that diagnostic column as well; ngmix keeps
-    # its own metacal either way.
-    shearnet_metacal: false
+    # ---- Complete metacal correction for BOTH estimators -------------------
+    # One psf='dilate' bootstrap produces nine reconvolved image/PSF pairs:
+    # noshear, +/-g1, +/-g2, +/-PSF-g1 and +/-PSF-g2. ngmix and ShearNet both
+    # measure those same pairs. The ordinary four finite differences give
+    # R^gamma; the four *_psf differences give R^PSF. A single ensemble
+    # Rbar^PSF over the paired +/- applied-shear populations is subtracted from
+    # the metacal noshear prediction, then m/c divide by R^gamma. The FITS also
+    # keeps the original completely uncorrected prediction and m/c row.
+    shearnet_metacal: true
     # AnaCal model fit. The window is what the fitter cuts around each source,
     # so an odd 53-pixel stamp needs no padding. ~12.6 ms/object and not
     # parallelised (see shearnet/methods/anacal_fit.py for why), so budget
@@ -228,14 +216,17 @@ eval:
 
     # One file, every time:
     #   TAB_P / TAB_M  the +/- shear populations, one row per object, carrying
-    #                  both e_<est> (plain measurement) and e_<est>_metacal
-    #                  (metacal's own noshear shape, which is what its m/c
-    #                  divides) alongside every response matrix; with
+    #                  e_<est>_uncorrected (original image),
+    #                  e_<est>_metacal_raw (metacal noshear before PSF
+    #                  subtraction), and e_<est>_metacal_corrected (the value
+    #                  used for corrected m/c), beside Rgamma_<est>_metacal,
+    #                  Rpsf_<est>_metacal and Rbarpsf_<est>_metacal; with
     #                  shape_noise_cancel on, also e_<est>_r45 / _r90 / _r135
     #                  and the matching R_ columns for each ring station, whose
     #                  mean is what the SUMMARY rows divide
-    #   LEAKAGE        the unsheared population: R^PSF, e_<est> as applied and
-    #                  e_<est>_raw; with shape_noise_cancel on, each ring
+    #   LEAKAGE        the unsheared population: metacal R^PSF,
+    #                  e_<est>_original, e_<est>_metacal_raw, and the corrected
+    #                  e_<est>; with shape_noise_cancel on, each ring
     #                  station beside them and the ring average under
     #                  e_<est>_raw_ring, which is the column the leakage panels
     #                  and the alpha-vs-size regression should read

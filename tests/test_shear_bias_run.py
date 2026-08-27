@@ -121,12 +121,11 @@ def test_evaluation_measures_every_estimator_under_every_correction(trained_run)
 
     assert result["backend"] == "jax-galsim"
     assert result["seed"] == 99 and result["seed"] != training.get("dataset.seed")
-    # the pairs the harness can actually measure: metacal shears images so it
-    # needs ngmix's bootstrapper, and anacal is analytic so only AnaCal's own
-    # fit has it. sim is universal.
-    expected = {("ngmix", "metacal"), ("ngmix", "sim"), ("ngmix", "none"),
+    # ngmix and ShearNet are deliberately metacal-only; sim remains solely as
+    # the independent renderer check on AnaCal's analytic derivative.
+    expected = {("ngmix", "metacal"), ("ngmix", "none"),
                 ("anacal", "anacal"), ("anacal", "sim"), ("anacal", "none"),
-                ("shearnet", "metacal"), ("shearnet", "sim"), ("shearnet", "none")}
+                ("shearnet", "metacal"), ("shearnet", "none")}
     for estimator, correction in sorted(expected):
         prefix = f"{estimator}_{correction}"
         for field in ("m", "m_err", "c", "c_err"):
@@ -168,8 +167,7 @@ def test_shearnet_keeps_metacal_when_ngmix_is_switched_off(trained_run):
     """
     benchmark, training = trained_run
     result = harness._run_evaluation(benchmark, training, ("anacal", "shearnet"))
-    for correction in ("metacal", "sim"):
-        assert np.isfinite(result[f"shearnet_{correction}_m"]), correction
+    assert np.isfinite(result["shearnet_metacal_m"])
     assert np.isfinite(result["anacal_anacal_m"])
     # ngmix contributes no estimator columns. (`ngmix_nproc` stays: it is the
     # worker count metacal ran on, which is metadata about the run either way.)
@@ -224,30 +222,58 @@ def test_evaluation_writes_one_fits_with_every_hdu(trained_run):
         assert hdul["TAB_P2"].header["COMPONEN"] == 1
         for column in ("g_th", "hlr_th", "flux_th", "gpsf", "Tpsf", "s2n",
                        "e_ngmix", "e_anacal", "e_shearnet",
-                       "R_ngmix_metacal", "R_ngmix_sim",
+                       "R_ngmix_metacal",
                        "R_anacal_anacal", "R_anacal_sim",
-                       "R_shearnet_metacal", "R_shearnet_sim",
-                       # metacal measures its own noshear shape on the
-                       # reconvolved stamp; that is what the metacal m/c
-                       # divides, so it cannot be reconstructed from e_<est>
+                       "R_shearnet_metacal",
+                       # Explicit original, raw-metacal and PSF-corrected
+                       # predictions plus both dilate/metacal responses.  The
+                       # compatibility e_<est>_metacal alias is the corrected
+                       # prediction consumed by SUMMARY.
+                       "e_ngmix_uncorrected", "e_shearnet_uncorrected",
+                       "e_ngmix_metacal_raw", "e_shearnet_metacal_raw",
+                       "e_ngmix_metacal_corrected", "e_shearnet_metacal_corrected",
                        "e_ngmix_metacal", "e_shearnet_metacal",
+                       "Rgamma_ngmix_metacal", "Rgamma_shearnet_metacal",
+                       "Rpsf_ngmix_metacal", "Rpsf_shearnet_metacal",
+                       "Rbarpsf_ngmix_metacal", "Rbarpsf_shearnet_metacal",
                        # the network predicts size and flux too; shear_measure()
                        # slices those off, so they need their own forward pass
                        "hlr_shearnet", "flux_shearnet"):
             assert column in hdul["TAB_P"].data.names, (column, hdul["TAB_P"].data.names)
         for column in ("gpsf", "s2n", "e_ngmix", "e_ngmix_raw",
                        "e_shearnet", "e_shearnet_raw",
-                       "Rpsf_ngmix_sim", "Rbar_psf_ngmix"):
+                       "e_ngmix_original", "e_shearnet_original",
+                       "e_ngmix_metacal_raw", "e_shearnet_metacal_raw",
+                       "e_ngmix_metacal_corrected", "e_shearnet_metacal_corrected",
+                       "Rpsf_ngmix_metacal", "Rpsf_shearnet_metacal",
+                       "Rbarpsf_ngmix_metacal", "Rbarpsf_shearnet_metacal"):
             assert column in hdul["LEAKAGE"].data.names, column
+        tab = hdul["TAB_P"].data
+        gpsf = np.asarray(tab["gpsf"], float)
+        for estimator in ("ngmix", "shearnet"):
+            raw = np.asarray(tab[f"e_{estimator}_metacal_raw"], float)
+            corrected = np.asarray(tab[f"e_{estimator}_metacal_corrected"], float)
+            rbar = np.asarray(tab[f"Rbarpsf_{estimator}_metacal"], float)
+            np.testing.assert_allclose(rbar, np.broadcast_to(rbar[0], rbar.shape))
+            np.testing.assert_allclose(
+                corrected,
+                raw - np.einsum("nij,nj->ni", rbar, gpsf),
+                equal_nan=True,
+            )
+            np.testing.assert_allclose(
+                np.asarray(tab[f"e_{estimator}_metacal"], float),
+                corrected,
+                equal_nan=True,
+            )
         header_primary = hdul["PRIMARY"].header
         summary = hdul["SUMMARY"].data
         assert set(summary["component"]) == {0, 1}
         assert header_primary["COMPONEN"] == 0            # the primary component
         assert str(header_primary["MEASURED"]).strip() == "0,1"
         pairs = set(zip(summary["estimator"], summary["correction"]))
-        assert {("ngmix", "metacal"), ("ngmix", "sim"),
+        assert {("ngmix", "metacal"),
                 ("anacal", "anacal"), ("anacal", "sim"),
-                ("shearnet", "metacal"), ("shearnet", "sim")} <= pairs, pairs
+                ("shearnet", "metacal")} <= pairs, pairs
         # the binned m/c was being computed and dropped; it is per flux
         # quantile, each bin dividing by its own within-bin response
         binned = hdul["BINNED"].data
@@ -290,7 +316,7 @@ def test_the_metacal_shapes_reproduce_the_summary_row(trained_run):
             ("ngmix", "metacal", "e_ngmix_metacal"),
             ("shearnet", "metacal", "e_shearnet_metacal"),
             ("anacal", "anacal", "e_anacal"),
-            ("ngmix", "sim", "e_ngmix"),
+            ("anacal", "sim", "e_anacal"),
         ):
             bias = paired_bias(
                 shape("plus", estimator, correction, column),
@@ -306,14 +332,44 @@ def test_the_metacal_shapes_reproduce_the_summary_row(trained_run):
             assert bias.c == pytest.approx(result[f"{prefix}_c"], rel=1e-9), prefix
 
 
-def test_psf_response_is_applied_to_deconvolvers_only(trained_run):
-    """ngmix's leakage is R^PSF-corrected; ShearNet's is deliberately not.
+def test_metacal_psf_response_is_pair_averaged_and_applied_before_rgamma():
+    """One ensemble R^PSF corrects both signs; R^gamma remains the divisor."""
+    from shearnet.methods.anacal import ShapeMeasurement, paired_bias
 
-    The metacal-family PSF response equals physical leakage only for an
-    estimator that explicitly deconvolves. Applying ShearNet's would fold the
-    network's own PSF sensitivity into the number the leakage plot exists to
-    show, so the default corrects ngmix and anacal and leaves ShearNet raw.
-    """
+    n, shear = 12, 0.01
+    r_gamma = np.broadcast_to(np.array([[1.8, 0.1], [-0.05, 1.7]]), (n, 2, 2))
+    r_psf_plus = np.broadcast_to(np.array([[0.4, 0.2], [0.1, 0.3]]), (n, 2, 2)).copy()
+    r_psf_minus = np.broadcast_to(np.array([[0.2, 0.0], [-0.1, 0.5]]), (n, 2, 2)).copy()
+    gpsf = np.tile(np.array([0.03, -0.02]), (n, 1))
+    intrinsic = np.tile(np.array([0.04, -0.06]), (n, 1))
+    raw = {
+        "plus": ShapeMeasurement(intrinsic + np.array([1.8 * shear, 0.0]), r_gamma),
+        "minus": ShapeMeasurement(intrinsic - np.array([1.8 * shear, 0.0]), r_gamma),
+    }
+
+    corrected, rbar = harness._paired_metacal_psf_correction(
+        raw,
+        {"plus": r_psf_plus, "minus": r_psf_minus},
+        {"plus": gpsf, "minus": gpsf},
+    )
+    expected_rbar = 0.5 * (r_psf_plus[0] + r_psf_minus[0])
+    expected_offset = expected_rbar @ gpsf[0]
+    np.testing.assert_allclose(rbar, expected_rbar)
+    np.testing.assert_allclose(corrected["plus"].e, raw["plus"].e - expected_offset)
+    np.testing.assert_allclose(corrected["minus"].e, raw["minus"].e - expected_offset)
+    np.testing.assert_allclose(corrected["plus"].dedg, r_gamma)
+
+    # The same additive correction on both signs cannot change m, while c is
+    # calculated from the corrected predictions. R^gamma is still the response
+    # paired_bias divides by rather than being folded into R^PSF.
+    before = paired_bias(raw["plus"], raw["minus"], shear, njac=4)
+    after = paired_bias(corrected["plus"], corrected["minus"], shear, njac=4)
+    assert after.m == pytest.approx(before.m)
+    assert after.c != pytest.approx(before.c)
+
+
+def test_metacal_psf_response_is_applied_to_ngmix_and_shearnet(trained_run):
+    """Both requested estimators use their own full metacal R^PSF matrix."""
     from astropy.io import fits
 
     benchmark, training = trained_run
@@ -327,34 +383,26 @@ def test_psf_response_is_applied_to_deconvolvers_only(trained_run):
         section.update(saved)
     assert result["ngmix_leakage_corrected"] is True
     assert result["anacal_leakage_corrected"] is True
-    assert result["shearnet_leakage_corrected"] is False
+    assert result["shearnet_leakage_corrected"] is True
 
     path = Path(benchmark.get("paths.root")) / benchmark.get("eval.evaluate.output")
     with fits.open(path) as hdul:
         leak = hdul["LEAKAGE"].data
         gpsf = np.asarray(leak["gpsf"], float)
-        rbar = np.asarray(leak["Rbar_psf_ngmix"], float)
-        assert np.allclose(rbar, rbar[0])
-        # the correction is the constant ensemble response, not the per-object one
-        assert np.allclose(
-            np.asarray(leak["e_ngmix"], float),
-            np.asarray(leak["e_ngmix_raw"], float) - gpsf * rbar[0],
-            equal_nan=True,
-        )
-        # ShearNet's corrected column IS its raw column
-        assert np.allclose(
-            np.asarray(leak["e_shearnet"], float),
-            np.asarray(leak["e_shearnet_raw"], float),
-            equal_nan=True,
-        )
+        for estimator in ("ngmix", "shearnet"):
+            rbar = np.asarray(leak[f"Rbarpsf_{estimator}_metacal"], float)
+            assert np.allclose(rbar, np.broadcast_to(rbar[0], rbar.shape))
+            # One full ensemble matrix, not a noisy per-object response.
+            assert np.allclose(
+                np.asarray(leak[f"e_{estimator}"], float),
+                np.asarray(leak[f"e_{estimator}_raw"], float)
+                - np.einsum("nij,nj->ni", rbar, gpsf),
+                equal_nan=True,
+            )
 
 
 def test_shearnet_metacal_can_be_switched_off(trained_run):
-    """The out-of-distribution diagnostic is optional; the physical one is not.
-
-    Turning it off must cost ShearNet only its metacal column -- ``sim`` is its
-    response, and ngmix keeps its own metacal either way.
-    """
+    """Turning it off leaves only ShearNet's completely uncorrected row."""
     benchmark, training = trained_run
     section = harness._section(benchmark, "evaluate")
     saved = dict(section)
@@ -365,17 +413,17 @@ def test_shearnet_metacal_can_be_switched_off(trained_run):
         section.clear()
         section.update(saved)
     assert "shearnet_metacal_m" not in result
-    assert np.isfinite(result["shearnet_sim_m"])
+    assert "shearnet_sim_m" not in result
+    assert np.isfinite(result["shearnet_none_m"])
     assert np.isfinite(result["ngmix_metacal_m"])
     # still measured and reported, just not applied
     assert result["shearnet_leakage_psf_response"].shape == (2, 2)
 
 
 def test_psf_response_apply_switch():
-    # nothing is corrected by default: on job 2180809 subtracting the
-    # finite-difference R^PSF turned ngmix's raw leakage slope of -0.002 into
-    # -0.457 at 50 sigma. R^PSF and the regression slope alpha are different
-    # quantities and only alpha may be subtracted.
+    # Legacy selector retained for the optional AnaCal direct diagnostic.
+    # ngmix and ShearNet's metacal corrections are always applied independently
+    # of this setting.
     assert harness._psf_response_apply({}) == frozenset()
     assert harness._psf_response_apply({"psf_response_apply": "none"}) == frozenset()
     assert harness._psf_response_apply({"psf_response_apply": ["ngmix"]}) == frozenset({"ngmix"})
@@ -387,20 +435,18 @@ def test_psf_response_apply_switch():
         harness._psf_response_apply({"psf_response_apply": ["fpfs"]})
 
 
-def test_shearnet_metacal_measures_the_reconvolved_images(trained_run):
-    """ShearNet's metacal response must come from metacal's own images.
-
-    Not from the scene protocol wearing a different name: the two are different
-    derivatives and the whole point of reporting both is that they can disagree.
-    The check is that the network's metacal response is NOT identical to its
-    anacal one, and that both are finite.
-    """
+def test_shearnet_metacal_measures_both_reconvolved_responses(trained_run):
+    """The network gets finite, distinct R^gamma and R^PSF from metacal."""
     benchmark, training = trained_run
     result = harness._run_evaluation(benchmark, training, harness.ESTIMATORS)
-    metacal = result["shearnet_metacal_response"]
-    anacal = result["shearnet_sim_response"]
-    assert np.isfinite(metacal).all() and np.isfinite(anacal).all()
-    assert not np.allclose(metacal, anacal), (metacal, anacal)
+    rgamma = result["shearnet_metacal_response"]
+    assert np.isfinite(rgamma).all()
+    path = Path(benchmark.get("paths.root")) / benchmark.get("eval.evaluate.output")
+    from astropy.io import fits
+    with fits.open(path) as hdul:
+        rpsf = np.asarray(hdul["TAB_P"].data["Rpsf_shearnet_metacal"], float)
+        assert np.isfinite(rpsf).all()
+        assert not np.allclose(np.nanmean(rpsf, axis=0), rgamma)
 
 
 def test_the_backend_requirement_fails_before_the_expensive_part(trained_run, monkeypatch):
@@ -444,7 +490,7 @@ def test_both_components_are_measured(trained_run):
     benchmark, training = trained_run
     result = harness._run_evaluation(benchmark, training, ("ngmix", "shearnet"))
     for estimator in ("ngmix", "shearnet"):
-        for correction in ("metacal", "sim"):
+        for correction in ("metacal", "none"):
             for k in (1, 2):
                 prefix = f"{estimator}_{correction}_g{k}"
                 for field in ("m", "m_err", "c", "c_err"):
@@ -454,7 +500,7 @@ def test_both_components_are_measured(trained_run):
                     != result[f"{estimator}_{correction}_g2_m"])
         # the unsuffixed alias is the first measured component, so every
         # existing caller keeps working
-        assert result[f"{estimator}_sim_m"] == result[f"{estimator}_sim_g1_m"]
+        assert result[f"{estimator}_metacal_m"] == result[f"{estimator}_metacal_g1_m"]
 
 
 def test_component_switch():
@@ -469,11 +515,7 @@ def test_component_switch():
 
 
 def test_shearnet_metacal_is_off_by_default(trained_run):
-    """The network's reported response is the direct one unless asked otherwise.
-
-    metacal feeds it reconvolved stamps that are out of its training
-    distribution, so it is opt-in. ngmix keeps its metacal regardless.
-    """
+    """Without opt-in, ShearNet has no corrected row and no direct substitute."""
     benchmark, training = trained_run
     section = harness._section(benchmark, "evaluate")
     saved = dict(section)
@@ -485,7 +527,8 @@ def test_shearnet_metacal_is_off_by_default(trained_run):
         section.clear()
         section.update(saved)
     assert "shearnet_metacal_m" not in result
-    assert np.isfinite(result["shearnet_sim_m"])
+    assert "shearnet_sim_m" not in result
+    assert np.isfinite(result["shearnet_none_m"])
     assert np.isfinite(result["ngmix_metacal_m"])
 
 
@@ -637,21 +680,21 @@ def test_average_rotations_averages_shapes_responses_and_unions_flags():
             flags=np.array([flag, False, False]),
         )
 
-    straight = {"shearnet": {"sim": {"plus": measurement(1.0, True),
+    straight = {"shearnet": {"metacal": {"plus": measurement(1.0, True),
                                      "minus": measurement(3.0, False)},
                              # measured at one station only -> dropped, not
                              # partly averaged
                              "metacal": {"plus": measurement(1.0, False)}}}
-    rotated = {"shearnet": {"sim": {"plus": measurement(5.0, False),
+    rotated = {"shearnet": {"metacal": {"plus": measurement(5.0, False),
                                     "minus": measurement(1.0, False)},
                             "metacal": {}}}
 
     merged = harness._average_rotations([straight, rotated])
-    assert set(merged["shearnet"]) == {"sim"}
-    plus = merged["shearnet"]["sim"]["plus"]
+    assert set(merged["shearnet"]) == {"metacal"}
+    plus = merged["shearnet"]["metacal"]["plus"]
     assert np.allclose(plus.e, 3.0) and np.allclose(plus.dedg, 3.0)
     assert plus.flags.tolist() == [True, False, False]
-    assert np.allclose(merged["shearnet"]["sim"]["minus"].e, 2.0)
+    assert np.allclose(merged["shearnet"]["metacal"]["minus"].e, 2.0)
 
 
 def test_shape_noise_cancellation_writes_the_twin_and_stays_reproducible(trained_run):
@@ -677,7 +720,8 @@ def test_shape_noise_cancellation_writes_the_twin_and_stays_reproducible(trained
             assert hdul["PRIMARY"].header["RING"] == "0,45,90,135"
             plus, minus = hdul["TAB_P"].data, hdul["TAB_M"].data
             summary = hdul["SUMMARY"].data
-            for column in ("e_ngmix", "e_shearnet", "R_ngmix_sim", "R_shearnet_sim"):
+            for column in ("e_ngmix", "e_shearnet",
+                           "Rgamma_ngmix_metacal", "Rgamma_shearnet_metacal"):
                 for suffix in ("_r45", "_r90", "_r135"):
                     assert f"{column}{suffix}" in plus.columns.names, column + suffix
                     assert f"{column}{suffix}" in minus.columns.names, column + suffix
@@ -736,8 +780,8 @@ def test_the_leakage_pass_rings_too_and_cancels_the_intrinsic_shape(trained_run)
                 # ...and it is a genuinely different measurement
                 assert not np.allclose(station0, station90)
                 # the PSF response is ringed the same way
-                assert f"Rpsf_{estimator}_sim_r90" in leak.columns.names
-                assert f"Rpsf_{estimator}_sim_ring" in leak.columns.names
+                assert f"Rpsf_{estimator}_metacal_r90" in leak.columns.names
+                assert f"Rpsf_{estimator}_metacal_ring" in leak.columns.names
                 # LEAKSUM reports the ring average, not station 0
                 reported = np.asarray(
                     result[f"{estimator}_leakage_mean_e_raw"], dtype=float

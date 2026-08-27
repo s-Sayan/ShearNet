@@ -543,7 +543,15 @@ def paired_bias(
                 continue
             sub_plus = ShapeMeasurement(plus.e[keep][mask], plus.dedg[keep][mask])
             sub_minus = ShapeMeasurement(minus.e[keep][mask], minus.dedg[keep][mask])
-            sub = paired_bias(sub_plus, sub_minus, applied_shear, component=component, njac=njac)
+            sub = paired_bias(
+                sub_plus,
+                sub_minus,
+                applied_shear,
+                component=component,
+                njac=njac,
+                c_convention=c_convention,
+                resample=resample,
+            )
             rows["m"].append(sub.m)
             rows["m_err"].append(sub.m_err)
             rows["c"].append(sub.c)

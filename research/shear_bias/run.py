@@ -12,12 +12,13 @@ knowing anything about backends.
 Every estimator is calibrated the same way
 ------------------------------------------
 ``m`` and ``c`` are the pair-matched jackknife estimates of
-:func:`shearnet.methods.anacal.paired_bias`, and the response that divides out
-comes from one protocol for all estimators: re-render the scene at
-``gamma +/- step`` with the noise held fixed and re-measure. metacal is kept
-alongside it for ngmix (it estimates the same derivative by shearing the image
-rather than the scene) and FPFS is additionally reported with its own analytic
-response, so the protocol has two independent checks on it.
+:func:`shearnet.methods.anacal.paired_bias`.  For ngmix and ShearNet the
+``metacal`` row uses the complete dilated-PSF metacal correction: the same
+nine metacal products measure both ``R^gamma`` and ``R^PSF``, the ensemble
+``R^PSF`` is subtracted from the metacal ``noshear`` prediction, and
+``R^gamma`` divides the corrected numerator.  The untouched original-stamp
+prediction is retained under ``none`` so the FITS always carries a completely
+uncorrected m/c measurement beside the corrected one.
 
 "direct" vs "dilate", and which estimator may use which
 -------------------------------------------------------
@@ -36,25 +37,20 @@ response correction with no deconvolution"), and they are not interchangeable:
     No deconvolution anywhere, so the stamps stay in the distribution an
     ordinary image estimator was built for.
 
-The rule, stated in ``psf_leakage/helpers.leakage_response_to_table``: the
-metacal PSF response equals the physical PSF leakage only for an estimator that
-*explicitly deconvolves*. For a black-box network it measures out-of-distribution
-sensitivity to the metacal manipulation, not leakage, so it must not be used to
-correct ShearNet. Hence in this harness:
+The older leakage helper warns that, for a black-box network, this metacal
+response measures sensitivity to the complete deconvolve/dilate/reconvolve
+operation rather than an in-distribution direct PSF perturbation.  This harness
+nevertheless exposes the deliberately matched experiment requested here: both
+ngmix and ShearNet are measured and corrected using the same metacal products.
+The raw predictions remain in the FITS so the effect is always auditable:
 
-* ``R^PSF`` (the ``LEAKAGE`` table) is measured the **direct** way for every
-  estimator -- the renderer shears the real PSF and re-renders.
-* The ensemble ``R^PSF`` is measured for every estimator and **applied to
-  none** by default. Applying it to ngmix turned a raw leakage slope of -0.002
-  into -0.457 at 50 sigma: the finite-difference ``R^PSF`` and the regression
-  slope ``alpha`` are different quantities and differ by ~200x here. See
-  :data:`DEFAULT_PSF_RESPONSE_APPLY`. Both shapes are always stored.
-* The shear response ``R^gamma`` is measured both ways. ``sim`` is the direct
-  one and is the physical response for every estimator. ``metacal`` is the
-  dilate one; for ngmix it is a genuine second estimate of the same derivative,
-  for ShearNet it is a *diagnostic* of how the network reacts to reconvolved
-  stamps and is expected to be noisier and biased. Switch it off with
-  ``eval.evaluate.shearnet_metacal: false``.
+* The metacal bias row for ngmix and ShearNet measures both response matrices
+  with ``psf='dilate'``.  No direct/scene ``R^PSF`` enters that correction.
+* The FITS stores the original prediction, raw metacal ``noshear`` prediction,
+  PSF-corrected metacal prediction, per-object ``R^gamma`` and ``R^PSF``, and
+  the constant ensemble ``Rbar^PSF`` used in the subtraction.
+* No direct/scene response is measured for ngmix or ShearNet.  ``sim`` remains
+  only for the optional AnaCal analytic-vs-renderer validation row.
 
 What ``sim`` m actually measures, and why there is a ``none`` row
 -----------------------------------------------------------------
@@ -430,10 +426,11 @@ def _metacal_pass(renderer, galaxy, psf, *, seed, psf_model, gal_model, step, np
     """One metacal pass serving BOTH estimators.
 
     metacal shears the *image*: it deconvolves by the PSF, applies +/- step,
-    and reconvolves with a dilated PSF. ngmix reads its response off its own
-    fits to those five images. A network gets a metacal response the same way --
-    by measuring the same five images -- which is why the reconvolved stamps
-    come back from the worker.
+    and reconvolves with a dilated PSF.  Its nine products contain the noshear
+    image, four galaxy-shear images for ``R^gamma``, and four PSF-shear images
+    for ``R^PSF``. ngmix reads both responses off its own fits. A network gets
+    the same responses by measuring the exact same nine galaxy/PSF pairs, which
+    is why both reconvolved stacks come back from the worker.
 
     What the network sees is an ordinary galaxy convolved with a *wider* PSF, so
     nothing here is deconvolved from its point of view -- but it is still out of
@@ -448,8 +445,11 @@ def _metacal_pass(renderer, galaxy, psf, *, seed, psf_model, gal_model, step, np
     ~156 ms/object; doing it twice would double the dominant cost of the whole
     evaluation to produce the identical images.
 
-    Returns ``(ngmix_shape, ngmix_extra, shearnet_shape)`` -- the last is None
-    when there is no predictor.
+    Returns ``(ngmix_shape, ngmix_rpsf, ngmix_extra, shearnet_shape,
+    shearnet_rpsf)``.  A network result is None when there is no predictor.
+    The shapes hold the raw metacal ``noshear`` prediction and ``R^gamma``;
+    :func:`_apply_metacal_psf_response` applies the paired-population ensemble
+    ``R^PSF`` after both signs have been measured.
     """
     from shearnet.methods.ngmix import METACAL_TYPES, _get_priors, mp_fit_one_single
 
@@ -457,9 +457,11 @@ def _metacal_pass(renderer, galaxy, psf, *, seed, psf_model, gal_model, step, np
     want_network = predictor is not None
     e = np.full((n, 2), np.nan)
     dedg = np.full((n, 2, 2), np.nan)
+    rpsf = np.full((n, 2, 2), np.nan)
     flags = np.ones(n, dtype=bool)
     sn_e = np.full((n, 2), np.nan)
     sn_dedg = np.full((n, 2, 2), np.nan)
+    sn_rpsf = np.full((n, 2, 2), np.nan)
     sn_flags = np.ones(n, dtype=bool)
     # Per-object scalars the diagnostics plot against. Free here -- they are
     # already in the struct -- and unrecoverable afterwards, because the fit
@@ -475,7 +477,11 @@ def _metacal_pass(renderer, galaxy, psf, *, seed, psf_model, gal_model, step, np
             np.random.RandomState(seed),
             psf_model=psf_model,
             gal_model=gal_model,
-            mcal_pars={"psf": "dilate", "mcal_shear": step},
+            mcal_pars={
+                "psf": "dilate",
+                "mcal_shear": step,
+                "types": METACAL_TYPES,
+            },
             nproc=nproc,
             return_images=want_network,
         )
@@ -493,22 +499,34 @@ def _metacal_pass(renderer, galaxy, psf, *, seed, psf_model, gal_model, step, np
             e[i] = by_type["noshear"]["g"]
             for b, (up, down) in enumerate((("1p", "1m"), ("2p", "2m"))):
                 dedg[i, :, b] = (by_type[up]["g"] - by_type[down]["g"]) / (2.0 * step)
+            for b, (up, down) in enumerate(
+                (("1p_psf", "1m_psf"), ("2p_psf", "2m_psf"))
+            ):
+                rpsf[i, :, b] = (
+                    by_type[up]["g"] - by_type[down]["g"]
+                ) / (2.0 * step)
             flags[i] = False
 
         if want_network and results:
-            # Five metacal images per object, measured in one batched forward:
-            # stack them as (5N, npix, npix) so the network sees one large batch
-            # rather than five small ones.
+            # Nine metacal images per object, measured in one batched forward:
+            # stack them as (9N, npix, npix) so the network sees one large batch
+            # rather than nine small ones.  r[2] is already the matching
+            # nine-plane PSF stack; repeating a single PSF here would make the
+            # network's *_psf response measure the wrong image/PSF pair.
             stack = np.concatenate([r[1] for r in results], axis=0)
-            psf_stack = np.repeat(
-                np.stack([r[2] for r in results], axis=0), len(METACAL_TYPES), axis=0
-            )
+            psf_stack = np.concatenate([r[2] for r in results], axis=0)
             measured = np.asarray(measure(stack, psf_stack), dtype=float)
             measured = measured.reshape(len(results), len(METACAL_TYPES), 2)
             block = slice(start, start + len(results))
             sn_e[block] = measured[:, index["noshear"], :]
             for b, (up, down) in enumerate((("1p", "1m"), ("2p", "2m"))):
                 sn_dedg[block, :, b] = (
+                    measured[:, index[up], :] - measured[:, index[down], :]
+                ) / (2.0 * step)
+            for b, (up, down) in enumerate(
+                (("1p_psf", "1m_psf"), ("2p_psf", "2m_psf"))
+            ):
+                sn_rpsf[block, :, b] = (
                     measured[:, index[up], :] - measured[:, index[down], :]
                 ) / (2.0 * step)
             sn_flags[block] = ~np.isfinite(measured).all(axis=(1, 2))
@@ -518,7 +536,58 @@ def _metacal_pass(renderer, galaxy, psf, *, seed, psf_model, gal_model, step, np
     network_shape = (
         ShapeMeasurement(e=sn_e, dedg=sn_dedg, flags=sn_flags) if want_network else None
     )
-    return ngmix_shape, extra, network_shape
+    return ngmix_shape, rpsf, extra, network_shape, (sn_rpsf if want_network else None)
+
+
+def _apply_metacal_psf_response(raw, rpsf, gpsf, *, rbar):
+    """Apply a constant ensemble metacal ``R^PSF`` to one population.
+
+    ``R^PSF`` is deliberately averaged before it is applied.  A per-object
+    finite difference is extremely noisy and correlated with the metacal
+    ``noshear`` value; multiplying each object by its own response injects that
+    noise into the prediction.  One response matrix is estimated over the
+    paired +/- population and applied to both signs, so an additive PSF term
+    cannot manufacture a multiplicative difference between them.
+    """
+    rpsf = np.asarray(rpsf, dtype=float)
+    gpsf = np.asarray(gpsf, dtype=float)
+    rbar = np.asarray(rbar, dtype=float)
+    corrected = raw.e - np.einsum("ij,nj->ni", rbar, gpsf)
+    failed = (
+        raw.flags
+        | ~np.isfinite(raw.e).all(axis=1)
+        | ~np.isfinite(raw.dedg).all(axis=(1, 2))
+        | ~np.isfinite(rpsf).all(axis=(1, 2))
+        | ~np.isfinite(gpsf).all(axis=1)
+        | (not np.isfinite(rbar).all())
+    )
+    return ShapeMeasurement(e=corrected, dedg=raw.dedg, flags=failed)
+
+
+def _paired_metacal_psf_correction(raw, rpsf, gpsf):
+    """Correct the +/- metacal predictions with one pair-matched ``Rbar^PSF``.
+
+    Only rows that survive in both signs enter the ensemble response.  That is
+    the same paired population the subsequent m/c calculation uses and avoids
+    letting a one-sided fit failure alter the correction.
+    """
+    plus, minus = raw["plus"], raw["minus"]
+    rp, rm = np.asarray(rpsf["plus"], float), np.asarray(rpsf["minus"], float)
+    gp, gm = np.asarray(gpsf["plus"], float), np.asarray(gpsf["minus"], float)
+    keep = ~(plus.flags | minus.flags)
+    keep &= np.isfinite(rp).all(axis=(1, 2)) & np.isfinite(rm).all(axis=(1, 2))
+    keep &= np.isfinite(gp).all(axis=1) & np.isfinite(gm).all(axis=1)
+    if not keep.any():
+        rbar = np.full((2, 2), np.nan)
+    else:
+        rbar = np.nanmean(0.5 * (rp[keep] + rm[keep]), axis=0)
+    corrected = {
+        label: _apply_metacal_psf_response(
+            raw[label], rpsf[label], gpsf[label], rbar=rbar
+        )
+        for label in ("plus", "minus")
+    }
+    return corrected, rbar
 
 
 # ----------------------------------------------------------------------
@@ -622,10 +691,12 @@ def _log_cost_estimate(samples, renderer, estimators, section, components=(0,)) 
         batch_gib = min(samples, NGMIX_CHUNK) * area * _OBS_BYTES_PER_PIXEL / gib
         lines.append(f"ngmix observations {batch_gib:.2f} GiB (batched at {NGMIX_CHUNK})")
         lines.append(f"metacal on {workers} worker(s)")
-        seconds += 2 * samples * area * _METACAL_SECONDS_PER_PIXEL / workers
+        # +/- bias populations plus the unsheared LEAKAGE population.
+        seconds += 3 * samples * area * _METACAL_SECONDS_PER_PIXEL / workers
     if "ngmix" in estimators:
-        # 2 populations + 2 axes x 2 signs, each fit once per population
-        seconds += 2 * (1 + 4) * samples * area * _FIT_SECONDS_PER_PIXEL / workers
+        # Completely uncorrected original-stamp predictions for +/- and
+        # LEAKAGE. No direct/scene response fits are run for ngmix.
+        seconds += 3 * samples * area * _FIT_SECONDS_PER_PIXEL / workers
     if "anacal" in estimators:
         # 2 analytic passes + 2 populations x 4 sim re-renders. Serial: see
         # shearnet/methods/anacal_fit.py for why it is not parallelised.
@@ -667,24 +738,20 @@ def _log_cost_estimate(samples, renderer, estimators, section, components=(0,)) 
 #: Correction schemes. Every estimator is measured under every correction it
 #: admits, at every evaluation -- there is no option to produce half a result.
 #:
-#:   metacal  shear the IMAGE: deconvolve, apply +/- step, reconvolve with a
-#:            DILATED PSF, re-measure. ngmix's MetacalBootstrapper. For ngmix
-#:            this is a second estimate of the same derivative `sim` measures.
-#:            ShearNet measures the same five reconvolved images, but for a
-#:            non-deconvolving network those stamps are out of its training
-#:            distribution, so its metacal column is a DIAGNOSTIC of that
-#:            sensitivity -- expect it noisier and biased against `sim`, and see
-#:            the "direct vs dilate" section of the module docstring. Drop it
-#:            with `eval.evaluate.shearnet_metacal: false`.
+#:   metacal  deconvolve, perturb, and reconvolve with a DILATED PSF.  The
+#:            ordinary 1p/1m/2p/2m products give R^gamma; the four matching
+#:            *_psf products give R^PSF.  A single ensemble Rbar^PSF, measured
+#:            over the paired +/- populations, is subtracted from metacal's
+#:            noshear prediction before paired_bias divides by R^gamma.  Both
+#:            raw and corrected predictions are stored in the FITS.
 #:   anacal   AnaCal's ANALYTIC response, differentiated symbolically through
 #:            the fit with quintuple numbers. Exact, not a finite difference --
 #:            but available only for an estimator AnaCal can differentiate,
 #:            which here is its own Gaussian model fit.
 #:   sim      shear the SCENE: re-render at gamma +/- step with the galaxies,
-#:            PSFs and noise realisation all held fixed. Works for any
-#:            estimator, black box or differentiable, so it is the one column
-#:            every row has -- and the `anacal` estimator, which carries both,
-#:            is what says whether `sim` agrees with the exact answer.
+#:            PSFs and noise realisation all held fixed. Retained only for
+#:            AnaCal as an independent check of its analytic response. It is
+#:            never measured or applied for ngmix or ShearNet.
 #:   none     divide by R = I, i.e. do not divide at all. m is then measured
 #:            against the KNOWN applied shear and nothing else:
 #:            m = <(e+ - e-)/2> / gamma_true - 1. This is the only row in the
@@ -804,6 +871,7 @@ def _run_evaluation(benchmark: Config, training: Config, estimators) -> dict:
         "ngmix_nproc": resolve_nproc(nproc, n_tasks=samples),
         "n_jackknife": njac,
         "psf_response_apply": ",".join(sorted(psf_apply)) or "none",
+        "metacal_psf_response_apply": "ngmix,shearnet",
         "shearnet_metacal": want_shearnet_metacal,
         "shape_noise_cancel": len(rotations),
         "ring": ",".join(f"{d:g}" for d in rotations),
@@ -870,7 +938,7 @@ def _run_evaluation(benchmark: Config, training: Config, estimators) -> dict:
     leakage_columns = _leakage_pass(
         renderer, measures, predictor, samples=samples, seed=seed, step=step,
         njac=njac, noise_sd=noise_sd, result=result, apply_to=psf_apply,
-        rotations=rotations,
+        rotations=rotations, psf_model=psf_model, gal_model=gal_model, nproc=nproc,
     )
     result.update(_timing_pass(renderer, predictor, samples=samples, seed=seed, batch=batch))
     _write_evaluation_fits(benchmark, section, tables, leakage_columns, result)
@@ -908,6 +976,12 @@ def _measure_shear_pair(
     shapes = {name: {c: {} for c in CORRECTIONS} for name in estimators}
     columns = {"plus": {}, "minus": {}}
     bin_values = np.sum(plus.galaxy_images, axis=(1, 2))
+    # Filled by the two population passes, then combined below so the same
+    # ensemble Rbar^PSF is applied to +gamma and -gamma.  Applying a separately
+    # estimated response to each sign could turn PSF leakage into a spurious m.
+    metacal_raw = {name: {} for name in ("ngmix", "shearnet") if name in estimators}
+    metacal_rpsf = {name: {} for name in metacal_raw}
+    metacal_gpsf = {}
 
     for label, stamps, sign in (("plus", plus, 1.0), ("minus", minus, -1.0)):
         col = columns[label]
@@ -923,6 +997,7 @@ def _measure_shear_pair(
             col["flux_th"] = labels[:, 3]
         gpsf, tpsf = _psf_moments(renderer, stamps.psf_images)
         col["gpsf"], col["Tpsf"] = gpsf, tpsf
+        metacal_gpsf[label] = gpsf
         gal = np.asarray(stamps.galaxy_images, dtype=float)
         col["s2n"] = np.sqrt(np.sum(gal**2, axis=(1, 2))) / max(noise_sd, 1e-12)
         del gal
@@ -942,7 +1017,7 @@ def _measure_shear_pair(
             col["R_anacal_anacal"] = analytic.dedg
             col["flag_anacal"] = analytic.flags.astype(np.int32)
 
-        # --- the sim (direct/scene) response, shared across every estimator
+        # --- original-stamp predictions: the completely uncorrected row -----
         raw = {}
         for name, measure in measures.items():
             if name == "anacal" and analytic is not None:
@@ -951,17 +1026,27 @@ def _measure_shear_pair(
                 raw[name] = np.asarray(
                     measure(stamps.galaxy_images, stamps.psf_images), dtype=float
                 )
-        responses = _shared_shear_responses(
-            renderer, measures, samples=samples, seed=seed, base_shear=base, step=step,
-            intrinsic_rotation=intrinsic_rotation,
+        # Only AnaCal keeps the renderer finite difference as an independent
+        # check on its analytic derivative. ngmix and ShearNet are deliberately
+        # metacal-only: no direct/scene response is measured for either one.
+        scene_measures = {name: measure for name, measure in measures.items() if name == "anacal"}
+        responses = (
+            _shared_shear_responses(
+                renderer, scene_measures, samples=samples, seed=seed,
+                base_shear=base, step=step,
+                intrinsic_rotation=intrinsic_rotation,
+            )
+            if scene_measures else {}
         )
         for name in measures:
             e = raw[name][:, :2]
             bad = ~np.isfinite(e).all(axis=1)
             identity = np.broadcast_to(np.eye(2), (len(e), 2, 2))
-            shapes[name]["sim"][label] = ShapeMeasurement(
-                e=e, dedg=responses[name], flags=bad
-            )
+            if name in responses:
+                shapes[name]["sim"][label] = ShapeMeasurement(
+                    e=e, dedg=responses[name], flags=bad
+                )
+                col[f"R_{name}_sim"] = responses[name]
             # The SAME shape, divided by the identity instead of by a finite
             # difference of the simulator. That makes m a comparison against
             # `shear`, which is an input to the render rather than an output of
@@ -972,7 +1057,7 @@ def _measure_shear_pair(
                 e=e, dedg=identity, flags=bad
             )
             col[f"e_{name}"] = e
-            col[f"R_{name}_sim"] = responses[name]
+            col[f"e_{name}_uncorrected"] = e
         if predictor is not None:
             # shear_measure() slices to (g1, g2) because that is all the
             # response protocol needs, so the size and flux the network also
@@ -995,7 +1080,7 @@ def _measure_shear_pair(
         # actually in the table.
         metacal_predictor = predictor if want_shearnet_metacal else None
         if metacal_predictor is not None or "ngmix" in estimators:
-            ngmix_shape, ngmix_extra, network_shape = _metacal_pass(
+            ngmix_shape, ngmix_rpsf, ngmix_extra, network_shape, network_rpsf = _metacal_pass(
                 renderer, stamps.galaxy_images, stamps.psf_images,
                 seed=seed + (1 if label == "plus" else 2),
                 psf_model=psf_model, gal_model=gal_model, step=step, nproc=nproc,
@@ -1007,18 +1092,47 @@ def _measure_shear_pair(
             # measurements, so both are stored; without this the metacal rows of
             # SUMMARY cannot be reproduced from the table.
             if "ngmix" in estimators:
-                shapes["ngmix"]["metacal"][label] = ngmix_shape
-                col["e_ngmix_metacal"] = ngmix_shape.e
+                metacal_raw["ngmix"][label] = ngmix_shape
+                metacal_rpsf["ngmix"][label] = ngmix_rpsf
+                col["e_ngmix_metacal_raw"] = ngmix_shape.e
                 col["R_ngmix_metacal"] = ngmix_shape.dedg
+                col["Rgamma_ngmix_metacal"] = ngmix_shape.dedg
+                col["Rpsf_ngmix_metacal"] = ngmix_rpsf
                 col["flag_ngmix"] = ngmix_shape.flags.astype(np.int32)
                 col["s2n_ngmix"] = ngmix_extra["s2n"]
                 col["T_ngmix"] = ngmix_extra["T"]
                 col["flux_ngmix"] = ngmix_extra["flux"]
             if network_shape is not None:
-                shapes["shearnet"]["metacal"][label] = network_shape
-                col["e_shearnet_metacal"] = network_shape.e
+                metacal_raw["shearnet"][label] = network_shape
+                metacal_rpsf["shearnet"][label] = network_rpsf
+                col["e_shearnet_metacal_raw"] = network_shape.e
                 col["R_shearnet_metacal"] = network_shape.dedg
+                col["Rgamma_shearnet_metacal"] = network_shape.dedg
+                col["Rpsf_shearnet_metacal"] = network_rpsf
                 col["flag_shearnet"] = network_shape.flags.astype(np.int32)
+
+    # The metacal correction is completed only after both signs exist.  The
+    # ``metacal`` SUMMARY row now means BOTH pieces were applied: Rbar^PSF was
+    # subtracted from the raw noshear prediction and paired_bias divides the
+    # result by R^gamma.  The completely uncorrected original-stamp prediction
+    # remains under ``none`` and e_<est>; no data product is overwritten.
+    for name, by_label in metacal_raw.items():
+        if set(by_label) != {"plus", "minus"}:
+            continue
+        corrected, rbar = _paired_metacal_psf_correction(
+            by_label, metacal_rpsf[name], metacal_gpsf
+        )
+        shapes[name]["metacal"].update(corrected)
+        for label in ("plus", "minus"):
+            col = columns[label]
+            # Compatibility: e_<est>_metacal is still the prediction consumed
+            # by the metacal SUMMARY row.  It is now the PSF-corrected value;
+            # the former raw value has the explicit *_metacal_raw name.
+            col[f"e_{name}_metacal"] = corrected[label].e
+            col[f"e_{name}_metacal_corrected"] = corrected[label].e
+            col[f"Rbarpsf_{name}_metacal"] = np.broadcast_to(
+                rbar, (samples, 2, 2)
+            )
 
     return columns, shapes, bin_values
 
@@ -1144,47 +1258,17 @@ def _average_rotations(per_rotation):
 
 
 def _leakage_pass(renderer, measures, predictor, *, samples, seed, step, njac,
-                  noise_sd, result, apply_to=(), rotations=(0.0,)):
-    """``R^PSF`` per estimator on an unsheared population, and its correction.
+                  noise_sd, result, psf_model, gal_model, nproc,
+                  apply_to=(), rotations=(0.0,)):
+    """Metacal ``R^PSF`` and corrected/raw leakage shapes on zero-shear stamps.
 
-    The response is measured the **direct** (skip-deconvolution) way for every
-    estimator: offset each object's *real* PSF shear by ``+/- step`` with the
-    galaxies and the noise pinned, and re-render. No deconvolution and no
-    dilated reconvolution PSF anywhere, so the stamps stay in distribution for a
-    network as much as for a fitter -- which is exactly why ``c538a8c`` added
-    this route alongside metacal's. metacal has no counterpart here unless the
-    bootstrapper is configured with the ``*_psf`` shear types, which it is not;
-    neither does the analytic route, whose quintuple numbers carry ``d/dgamma``
-    and ``d/dx`` but not ``d/de^PSF``.
-
-    The **ensemble** response is then subtracted from the estimators named in
-    ``apply_to``::
-
-        e = e_raw - gpsf * Rbar^PSF_11
-
-    matching ``psf_leakage/helpers.leakage_response_direct_to_table``: one
-    constant per population, not the per-object finite difference. The
-    per-object response is a difference of two noisy shapes over ``2*step`` and
-    has enormous variance; subtracting ``gpsf * R_per_object`` would inject that
-    variance, and a noise bias, into every corrected shape. The scalar ``R_11``
-    is used on both components, as the legacy pipeline did.
-
-    ``apply_to`` should hold only estimators that explicitly deconvolve -- see
-    :data:`DEFAULT_PSF_RESPONSE_APPLY`. Both shapes are always stored:
-    ``e_<est>`` is what the leakage plot reads, ``e_<est>_raw`` is the
-    uncorrected measurement.
-
-    ``rotations`` runs the whole pass once per ring station and averages. This
-    is where the ring pays for itself most: the leakage slope ``alpha`` is
-    regressed on ``e^PSF`` and its error is shape-noise limited at
-    ``sigma_e / (sqrt(N) sigma_ePSF)`` -- 1.2e-2 at N = 200000, which is a
-    *bound* on alpha rather than a measurement of it. Removing the intrinsic
-    ellipticity removes that floor. It is also much cheaper here than in the
-    bias pass, because no metacal runs in this one. Every station's shapes and
-    responses are stored under ``_r45`` / ``_r90`` / ... alongside the unrotated
-    ones, and the ring average -- which is what the reported ``alpha`` and the
-    ``LEAKSUM`` row divide -- is written under ``_ring`` so a plot does not have
-    to reassemble it.
+    ngmix and ShearNet use the same ``psf='dilate'`` nine-product metacal pass
+    as the m/c tables.  The ring-averaged per-object ``R^PSF`` is averaged once
+    more over the ensemble, and that one full 2x2 matrix is applied to every
+    metacal ``noshear`` prediction.  Original-stamp, raw-metacal and corrected
+    predictions are all retained.  AnaCal has no metacal model-fit response, so
+    its pre-existing direct diagnostic is kept only when that optional baseline
+    is present; it never enters the ngmix or ShearNet corrections.
     """
     stamps = renderer.render(samples, seed=seed)
     columns = {}
@@ -1201,63 +1285,108 @@ def _leakage_pass(renderer, measures, predictor, *, samples, seed, step, njac,
         for degrees in rotations[1:]
     }
 
+    # One metacal run at each ring station serves ngmix and ShearNet together.
+    # This is also what guarantees they see identical reconvolved images.
+    metacal = {}
+    if any(name in measures for name in ("ngmix", "shearnet")):
+        for station, degrees in enumerate(rotations):
+            images = stamps if station == 0 else turned[degrees]
+            ng, ng_rpsf, _, sn, sn_rpsf = _metacal_pass(
+                renderer, images.galaxy_images, images.psf_images,
+                seed=seed + 100 + station,
+                psf_model=psf_model, gal_model=gal_model, step=step, nproc=nproc,
+                predictor=predictor if "shearnet" in measures else None,
+            )
+            metacal[degrees] = {
+                "ngmix": (ng, ng_rpsf),
+                "shearnet": (sn, sn_rpsf),
+            }
+
     for name, measure in measures.items():
+        # AnaCal does not expose metacal R^PSF for its analytic model fit. Keep
+        # its old, clearly labelled direct diagnostic without allowing it into
+        # either requested estimator's correction.
+        if name not in ("ngmix", "shearnet"):
+            by_station = []
+            for degrees in rotations:
+                images = stamps if degrees == rotations[0] else turned[degrees]
+                response = renderer_shear_response(
+                    renderer.response_renderer(
+                        samples, seed=seed, psf=True, intrinsic_rotation=degrees
+                    ),
+                    measure, step=step, psf=True,
+                )
+                shape = np.asarray(
+                    measure(images.galaxy_images, images.psf_images), dtype=float
+                )[:, :2]
+                by_station.append((degrees, shape, response))
+            psf_response = np.mean([r for _, _, r in by_station], axis=0)
+            e_raw = np.mean([s for _, s, _ in by_station], axis=0)
+            keep = (np.isfinite(e_raw).all(axis=1)
+                    & np.isfinite(psf_response).all(axis=(1, 2)))
+            rbar = np.nanmean(psf_response[keep], axis=0) if keep.any() else np.full((2, 2), np.nan)
+            corrected = bool(name in apply_to and np.isfinite(rbar).all())
+            e = e_raw - np.einsum("ij,nj->ni", rbar, gpsf) if corrected else e_raw
+            stats = leakage(e, psf_response, njac=njac)
+            result.update({f"{name}_leakage_{k}": v for k, v in stats.items()})
+            result[f"{name}_leakage_corrected"] = corrected
+            result[f"{name}_leakage_mean_e_raw"] = np.nanmean(e_raw, axis=0)
+            for degrees, shape, response in by_station:
+                suffix = "" if degrees == rotations[0] else _rotation_suffix(degrees)
+                columns[f"e_{name}{suffix}"] = (
+                    shape - np.einsum("ij,nj->ni", rbar, gpsf) if corrected else shape
+                )
+                columns[f"e_{name}_raw{suffix}"] = shape
+                columns[f"Rpsf_{name}_sim{suffix}"] = response
+            if len(rotations) > 1:
+                columns[f"e_{name}_ring"] = e
+                columns[f"e_{name}_raw_ring"] = e_raw
+                columns[f"Rpsf_{name}_sim_ring"] = psf_response
+            columns[f"Rbarpsf_{name}_sim"] = np.broadcast_to(rbar, (samples, 2, 2))
+            continue
+
         by_station = []
         for degrees in rotations:
             images = (stamps if degrees == rotations[0] else turned[degrees])
-            response = renderer_shear_response(
-                renderer.response_renderer(
-                    samples, seed=seed, psf=True, intrinsic_rotation=degrees
-                ),
-                measure, step=step, psf=True,
-            )
-            shape = np.asarray(
+            raw, response = metacal[degrees][name]
+            original = np.asarray(
                 measure(images.galaxy_images, images.psf_images), dtype=float
             )[:, :2]
-            by_station.append((degrees, shape, response))
+            by_station.append((degrees, raw, response, original))
 
-        # LEAKSUM and the reported alpha divide the RING AVERAGE -- that is the
-        # point of measuring the ring. The unsuffixed columns below stay the
-        # unrotated station, exactly as before, and the extra stations are
-        # written beside them, so a reader averages the same way the notebook's
-        # `_ringed` does and reproduces LEAKSUM from the table.
-        psf_response = np.mean([r for _, _, r in by_station], axis=0)
-        e_raw = np.mean([s for _, s, _ in by_station], axis=0)
-        # Over exactly the rows `leakage` keeps, so the response that is applied
-        # is the one that gets reported -- subtracting a constant leaves the
-        # keep mask unchanged, so `stats["psf_response"][0, 0]` below equals this.
+        psf_response = np.mean([r for _, _, r, _ in by_station], axis=0)
+        e_raw = np.mean([shape.e for _, shape, _, _ in by_station], axis=0)
         keep = (np.isfinite(e_raw).all(axis=1)
                 & np.isfinite(psf_response).all(axis=(1, 2)))
-        rbar = float(np.nanmean(psf_response[keep, 0, 0])) if keep.any() else float("nan")
-        # bool(), not np.bool_: this lands in a FITS header and a Table column
-        corrected = bool(name in apply_to and np.isfinite(rbar))
-        e = e_raw - gpsf * rbar if corrected else e_raw
+        rbar = np.nanmean(psf_response[keep], axis=0) if keep.any() else np.full((2, 2), np.nan)
+        corrected = bool(np.isfinite(rbar).all())
+        e = e_raw - np.einsum("ij,nj->ni", rbar, gpsf) if corrected else e_raw
 
         stats = leakage(e, psf_response, njac=njac)
         result.update({f"{name}_leakage_{k}": v for k, v in stats.items()})
         result[f"{name}_leakage_corrected"] = corrected
         result[f"{name}_leakage_mean_e_raw"] = np.nanmean(e_raw, axis=0)
-        for degrees, shape, response in by_station:
+        for degrees, shape, response, original in by_station:
             suffix = "" if degrees == rotations[0] else _rotation_suffix(degrees)
-            columns[f"e_{name}{suffix}"] = (
-                shape - gpsf * rbar if corrected else shape
+            corrected_shape = (
+                shape.e - np.einsum("ij,nj->ni", rbar, gpsf)
+                if corrected else shape.e
             )
-            columns[f"e_{name}_raw{suffix}"] = shape
-            columns[f"Rpsf_{name}_sim{suffix}"] = response
+            columns[f"e_{name}{suffix}"] = corrected_shape
+            columns[f"e_{name}_raw{suffix}"] = shape.e
+            columns[f"e_{name}_original{suffix}"] = original
+            columns[f"e_{name}_metacal_raw{suffix}"] = shape.e
+            columns[f"e_{name}_metacal_corrected{suffix}"] = corrected_shape
+            columns[f"Rpsf_{name}_metacal{suffix}"] = response
         if len(rotations) > 1:
-            # The ring average, written out under its own name rather than left
-            # for each reader to reassemble. The leakage panels and the
-            # alpha-vs-size regression are the whole reason the ring is run, and
-            # they should not have to know how many stations there were: they
-            # read `e_<est>_ring` and get the shape-noise-cancelled shape. It is
-            # exactly the mean of the station columns above, and it is what the
-            # LEAKSUM row for this estimator reports.
             columns[f"e_{name}_ring"] = e
             columns[f"e_{name}_raw_ring"] = e_raw
-            columns[f"Rpsf_{name}_sim_ring"] = psf_response
-        columns[f"Rbar_psf_{name}"] = np.full(samples, rbar)
+            columns[f"e_{name}_metacal_raw_ring"] = e_raw
+            columns[f"e_{name}_metacal_corrected_ring"] = e
+            columns[f"Rpsf_{name}_metacal_ring"] = psf_response
+        columns[f"Rbarpsf_{name}_metacal"] = np.broadcast_to(rbar, (samples, 2, 2))
         logger.info(
-            "%s R^PSF = [[%+.3e %+.3e] [%+.3e %+.3e]] +/- %.1e  (%s)%s",
+            "%s metacal R^PSF = [[%+.3e %+.3e] [%+.3e %+.3e]] +/- %.1e  (%s)%s",
             name, *stats["psf_response"].ravel(),
             float(np.max(stats["psf_response_err"])),
             "applied" if corrected else "reported, not applied",
@@ -1419,7 +1548,10 @@ def _leakage_summary_table(result):
 
 
 #: Result keys whose 8-character FITS truncation would be unreadable.
-_HEADER_KEYS = {"shape_noise_cancel": "SNC"}
+_HEADER_KEYS = {
+    "shape_noise_cancel": "SNC",
+    "metacal_psf_response_apply": "MCPSFAPL",
+}
 
 
 def _write_evaluation_fits(benchmark, section, tables, leakage_columns, result):
@@ -1452,7 +1584,8 @@ def _write_evaluation_fits(benchmark, section, tables, leakage_columns, result):
     for key in ("backend", "generation", "exp", "seed", "samples", "shear_true",
                 "component", "measured_components", "response_step",
                 "c_convention", "resample",
-                "n_jackknife", "bin_by", "psf_response_apply", "shearnet_metacal",
+                "n_jackknife", "bin_by", "psf_response_apply",
+                "metacal_psf_response_apply", "shearnet_metacal",
                 "shape_noise_cancel", "ring",
                 "ngmix_nproc", "render_seconds", "inference_seconds"):
         if key in result:

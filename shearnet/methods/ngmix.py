@@ -409,18 +409,33 @@ def _metacal_bootstrapper(prior, rng, psf_model, gal_model, mcal_pars, Tguess):
     runner, psf_runner = build_runners(
         rng, psf_model=psf_model, gal_model=gal_model, Tguess=Tguess, prior=prior
     )
-    return ngmix.metacal.MetacalBootstrapper(
+    metacal_kws = dict(
         runner=runner,
         psf_runner=psf_runner,
         rng=rng,
         psf=mcal_pars["psf"],
         step=mcal_pars["mcal_shear"],
     )
+    # ``psf='dilate'`` normally makes ngmix request the full set by default,
+    # but pass an explicit list when the caller supplied one.  This keeps the
+    # response contract independent of ngmix defaults and is required when a
+    # caller needs the four ``*_psf`` products for R^PSF.
+    if mcal_pars.get("types") is not None:
+        metacal_kws["types"] = list(mcal_pars["types"])
+    return ngmix.metacal.MetacalBootstrapper(**metacal_kws)
 
 
-#: The metacal shear types, in the order their images are stacked when
-#: ``return_images`` is set. Fixed so a caller can index the stack by position.
-METACAL_TYPES = ("noshear", "1p", "1m", "2p", "2m")
+#: The metacal shear and PSF-shear types, in the order their images are stacked
+#: when ``return_images`` is set.  ``psf='dilate'`` leaves an anisotropic
+#: reconvolution PSF, so ngmix's four ``*_psf`` products are needed for the
+#: explicit PSF-response correction in addition to the ordinary R^gamma terms.
+#: Fixed ordering lets both ngmix and a caller such as ShearNet index the same
+#: nine-image stack by position.
+METACAL_TYPES = (
+    "noshear",
+    "1p", "1m", "2p", "2m",
+    "1p_psf", "1m_psf", "2p_psf", "2m_psf",
+)
 
 
 def _metacal_struct(boot, obs, return_images=False):
@@ -435,10 +450,11 @@ def _metacal_struct(boot, obs, return_images=False):
     whether the caller is looping or draining a pool.
 
     ``return_images`` additionally returns the reconvolved stamps as float32 --
-    the five galaxy images and the single dilated PSF they all share, 67 kB per
-    object rather than the 3.6 MB of the full observations. That is what a
-    non-deconvolving estimator needs in order to have a metacal response at all:
-    it measures the same sheared images ngmix does. Missing shear types come
+    nine galaxy images and their nine matching PSF images, still far smaller
+    than the full observations.  The PSF cannot be represented by one shared
+    plane once the ``*_psf`` products are included: each of those products has
+    its own sheared dilated reconvolution PSF.  A second estimator such as
+    ShearNet must see the exact galaxy/PSF pair ngmix fitted. Missing types come
     back as NaN planes so the stack shape never depends on the object.
     """
     resdict, obsdict = boot.go(obs)
@@ -449,11 +465,13 @@ def _metacal_struct(boot, obs, return_images=False):
         return struct
     reference = next(iter(obsdict.values()))
     shape = np.asarray(reference.image).shape
+    psf_shape = np.asarray(reference.psf.image).shape
     gal = np.full((len(METACAL_TYPES),) + shape, np.nan, dtype=np.float32)
+    psf = np.full((len(METACAL_TYPES),) + psf_shape, np.nan, dtype=np.float32)
     for i, stype in enumerate(METACAL_TYPES):
         if stype in obsdict:
             gal[i] = np.asarray(obsdict[stype].image, dtype=np.float32)
-    psf = np.asarray(reference.psf.image, dtype=np.float32)
+            psf[i] = np.asarray(obsdict[stype].psf.image, dtype=np.float32)
     return struct, gal, psf
 
 
@@ -485,7 +503,8 @@ def _metacal_pool_worker_images(obs):
 def _metacal_map(boot, obslist, workers, chunksize=16, return_images=False):
     """``[struct per object]``, serially or over a spawn pool.
 
-    With ``return_images`` each entry is ``(struct, galaxy_stack, psf)`` instead.
+    With ``return_images`` each entry is
+    ``(struct, galaxy_stack, psf_stack)`` instead.
     """
     worker = _metacal_pool_worker_images if return_images else _metacal_pool_worker
     if workers == 1:

@@ -121,7 +121,10 @@ def test_metacal_returns_only_structs(nproc):
     assert resdict_list == [], "the pool shipped back the sheared observations"
     for rows in data_list:
         types = {str(row["shear_type"]) for row in rows}
-        assert {"noshear", "1p", "1m", "2p", "2m"}.issubset(types)
+        assert {
+            "noshear", "1p", "1m", "2p", "2m",
+            "1p_psf", "1m_psf", "2p_psf", "2m_psf",
+        }.issubset(types)
         assert rows.nbytes < 4096, rows.nbytes  # a struct, not an image
 
 
