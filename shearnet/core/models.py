@@ -1272,10 +1272,20 @@ def attention_pool_diagnostics(attention, eps=1e-12):
 
     unit = flat / jnp.maximum(jnp.linalg.norm(flat, axis=1, keepdims=True), eps)
     similarity = jnp.mean(jnp.einsum("bnh,bnk->bhk", unit, unit), axis=0)
-    offdiag = ~jnp.eye(heads, dtype=bool)
-    offdiag_values = similarity[offdiag]
-    mean_similarity = jnp.mean(offdiag_values) if heads > 1 else jnp.asarray(0.0)
-    max_similarity = jnp.max(offdiag_values) if heads > 1 else jnp.asarray(0.0)
+    if heads > 1:
+        # Weight the off-diagonal entries rather than indexing them out.
+        # `similarity[~jnp.eye(heads, dtype=bool)]` selects a number of entries
+        # that depends on the mask's VALUES, so it raises
+        # NonConcreteBooleanIndexError inside a trace -- and the only caller,
+        # `train_inloop.attention_report`, is `@jax.jit`. `heads` is a static
+        # Python int, so the off-diagonal count is static too and the mean is an
+        # ordinary weighted sum.
+        offdiag = 1.0 - jnp.eye(heads, dtype=similarity.dtype)
+        mean_similarity = jnp.sum(similarity * offdiag) / (heads * (heads - 1))
+        max_similarity = jnp.max(jnp.where(offdiag > 0, similarity, -jnp.inf))
+    else:
+        mean_similarity = jnp.asarray(0.0, similarity.dtype)
+        max_similarity = jnp.asarray(0.0, similarity.dtype)
 
     eigenvalues = jnp.maximum(jnp.linalg.eigvalsh(similarity), 0.0)
     spectrum = eigenvalues / jnp.maximum(jnp.sum(eigenvalues), eps)

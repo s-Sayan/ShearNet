@@ -295,6 +295,34 @@ def test_attention_pool_diagnostics_distinguish_independent_heads():
     assert float(diagnostics["effective_rank"]) == pytest.approx(4.0, abs=1e-5)
 
 
+def test_attention_pool_diagnostics_run_under_jit():
+    """The only caller is jitted, so the diagnostics must trace.
+
+    ``train_inloop.attention_report`` wraps this in ``jax.jit``, so anything
+    whose output shape depends on array *values* -- boolean mask indexing in
+    particular -- fails at the first validation pass rather than at import. The
+    three tests above all call the function eagerly, which is why that failure
+    reached a GPU run. This one traces it.
+    """
+    jitted = jax.jit(attention_pool_diagnostics)
+    for maps in (jnp.full((3, 2, 2, 4), 0.25), jnp.eye(4).reshape(1, 2, 2, 4)):
+        eager = attention_pool_diagnostics(maps)
+        traced = jitted(maps)
+        assert set(traced) == set(eager)
+        for key, value in eager.items():
+            assert jnp.allclose(traced[key], value, atol=1e-6), key
+
+
+def test_attention_pool_diagnostics_handle_a_single_head():
+    """One head has no off-diagonal, so the similarity statistics are zero."""
+    maps = jnp.full((2, 3, 3, 1), 1.0 / 9.0)
+    for diagnostics in (attention_pool_diagnostics(maps),
+                        jax.jit(attention_pool_diagnostics)(maps)):
+        assert float(diagnostics["mean_similarity"]) == pytest.approx(0.0)
+        assert float(diagnostics["max_similarity"]) == pytest.approx(0.0)
+        assert float(diagnostics["effective_rank"]) == pytest.approx(1.0, abs=1e-5)
+
+
 def test_single_branch_accepts_unbatched_input():
     """A single 2-D stamp gets a batch axis added (shape (1, n))."""
     model = build_model("cnn")
