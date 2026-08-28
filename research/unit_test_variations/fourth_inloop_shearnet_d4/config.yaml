@@ -43,7 +43,7 @@ train:
   seed: 42
   samples: 3000
   epochs: 60
-  batch_size: 128
+  batch_size: 8
   learning_rate: 1.0e-4
   weight_decay: 1.0e-2
   patience: 10
@@ -56,7 +56,7 @@ train:
   backend: jax-galsim
   generation: inloop
   jax_fft_size: 256
-  jax_batch_size: 128
+  jax_batch_size: 8
 
   response:
     gamma_weight: 1.0e-2
