@@ -39,11 +39,62 @@ model:
   gap: true
   dropout: 0.0
 
+  # ---- the D4 schedule ----------------------------------------------------
+  # Stage widths and residual depths of the shearnet-d4 backbones. The report's
+  # values are features [32, 48, 64], galaxy depths [2, 2, 1] and PSF depths
+  # [1, 1, 1]; the trims below are all at the FULL 53x53 stage, which is where
+  # the activations are. A block at 53x53 costs 4x one at 26x26 and 16x one at
+  # 13x13, and the orbit multiplies every one of them by eight, so the first
+  # stage is essentially the whole memory bill.
+  #
+  #   features[0] 32 -> 16   halves the stem map, which every 53x53 block then
+  #                          carries. Stages 2 and 3 are untouched, so the
+  #                          13x13 map the fusion sees is still 64 channels.
+  #   psf depths[0] 1 -> 0   the PSF is a smooth, known, low-frequency profile.
+  #                          Its branch does not need residual refinement at
+  #                          full resolution to describe it; the 26x26 and
+  #                          13x13 blocks remain.
+  #   galaxy depths[0] 2 -> 1  the galaxy branch keeps a full-resolution block,
+  #                          because that is where the shear signal lives, but
+  #                          not two of them.
+  #
+  # Set any of these to null (or delete the key) to get the report's values.
+  #
+  # The whole memory ladder, measured end to end on THIS config's fused
+  # training step -- XLA's compiled temp_size_in_bytes, fp32, stamp 53, all six
+  # response terms on, orbit_k 4. It is exactly linear in batch size (75.9
+  # MB/sample at batch 8 and at batch 16), so the batch-128 column is a
+  # multiplication, not an extrapolation:
+  #
+  #                                        MB/sample    GB at batch 128
+  #   as it OOMed                             4468.9        572.0
+  #   + orbit_scan                             456.2         58.4    (9.8x)
+  #   + response.batch 32 of 128               114.5         14.7    (39x)
+  #   + the schedule below                      75.9          9.7    (59x)
+  #
+  # 9.7 GB is a 24 GB consumer card with room to spare. Note where the factors
+  # actually came from: the two layout changes are 39x of the 59x and cost no
+  # capacity at all, and the schedule trim -- the only one that removes
+  # parameters -- is the last 1.5x.
+  d4_features: [16, 48, 64]
+  d4_depths_galaxy: [1, 2, 1]
+  d4_depths_psf: [0, 1, 1]
+  # Run the eight-element D4 orbit as a rematerialised lax.scan instead of
+  # stacking it on the batch axis. The parameter tree is bit-identical and the
+  # outputs agree to float reassociation (7e-07); what changes is that the
+  # eight members are computed in sequence with their internals recomputed in
+  # the backward pass rather than all eight kept live at once. Measured 7.8x
+  # less activation memory on this model. false restores the stacked orbit.
+  orbit_scan: true
+
 train:
   seed: 42
   samples: 3000
   epochs: 60
-  batch_size: 8
+  # Back to 128 now that the orbit scans and the response terms run on a
+  # sub-batch (see train.response.batch below). The 8 here was an OOM
+  # workaround, not a choice.
+  batch_size: 128
   learning_rate: 1.0e-4
   weight_decay: 1.0e-2
   patience: 10
@@ -56,7 +107,7 @@ train:
   backend: jax-galsim
   generation: inloop
   jax_fft_size: 256
-  jax_batch_size: 8
+  jax_batch_size: 128
 
   response:
     gamma_weight: 1.0e-2
@@ -79,8 +130,21 @@ train:
     # See ISOTROPY_NOTE in shearnet/core/inloop.py.
     isotropy_weight: 1.0e-2
     every_n_steps: 2
+    # Kept at 4. It was the obvious thing to cut for memory and it turns out not
+    # to be worth cutting: once `batch` below puts the orbit on 32 objects
+    # instead of 128, going from K=4 to K=2 saves 0.5 of 114 MB per sample, i.e.
+    # nothing. K=4 still costs three extra renders and forwards in RUNTIME --
+    # that is a real price, just not the one this config was OOMing on -- and it
+    # buys the spin-4 term eps^2 conj(gamma) that K=2 structurally cannot reach.
     orbit_k: 4
     gamma_target: analytic
+    # Evaluate the response terms on 32 of the 128 objects. Every one of them is
+    # an ensemble 2x2 matrix, so this widens their standard error by sqrt(4) = 2
+    # and nothing else; the supervised MSE still sees all 128. What it buys is
+    # the second render and the JVP through it, which is the dominant term in a
+    # fused step -- the response block costs roughly an order of magnitude more
+    # per object than the plain forward pass.
+    batch: 32
     report: true
 
   noise:

@@ -230,6 +230,18 @@ class ResponseRegularization:
         every_n_steps: evaluate the response terms every N optimiser steps. The
             graph is compiled either way (both branches of the ``lax.cond`` are
             traced); only the runtime is saved.
+        batch: evaluate the response terms on the first N objects of the batch
+            rather than all of it. ``0`` (default) means the whole batch. The
+            supervised loss always keeps every object; this only narrows the
+            response terms, which is where the memory goes -- each one carries a
+            second render plus a JVP through it, so the response block costs
+            roughly an order of magnitude more per object than the supervised
+            forward pass. Every response term is an *ensemble* statistic (a 2x2
+            matrix averaged over the batch), so its standard error scales as
+            ``1/sqrt(N)`` and nothing else changes: 32 of 128 objects costs a
+            factor of two on the response gradient's noise and buys a factor of
+            four on the response block's activation memory. Set it when a run
+            OOMs at the batch size you want for the supervised term.
 
     A caveat worth stating once: under noise the Bayes-optimal estimator has a
     *shrunk* response, so forcing ``R^gamma`` to its noiseless value trades
@@ -246,10 +258,13 @@ class ResponseRegularization:
     every_n_steps: int = 1
     orbit_k: int = 2
     gamma_target: str = "analytic"
+    batch: int = 0
 
     def __post_init__(self):
         if self.every_n_steps < 1:
             raise ValueError("response every_n_steps must be at least one")
+        if self.batch < 0:
+            raise ValueError(f"response batch must be non-negative, got {self.batch!r}")
         if self.orbit_k not in (2, 4):
             raise ValueError(f"response orbit_k must be 2 or 4, got {self.orbit_k!r}")
         if self.gamma_target not in ("analytic", "identity"):
@@ -271,6 +286,7 @@ class ResponseRegularization:
         "every_n_steps",
         "orbit_k",
         "gamma_target",
+        "batch",
         "report",
     )
 
@@ -812,15 +828,35 @@ def make_fused_train_step(
                 return supervised, idle.at[0].set(supervised.astype(net_dtype))
 
             def response_terms(_):
+                # The response terms run on a leading slice of the batch when
+                # `response.batch` asks for one. They are ensemble 2x2 matrices,
+                # so a smaller N only widens their standard error; the memory
+                # they save is the second render plus the JVP through it, which
+                # is where a fused step actually spends its activations. The
+                # supervised term above keeps every object either way.
+                n = int(response.batch) or idx.shape[0]
+                n = min(n, idx.shape[0])
+                if n == idx.shape[0]:
+                    p_r, models_r = p, models
+                    gal_r, psf_r, noise_r, preds_r = gal, psf, noise, preds
+                else:
+                    p_r = {key: value[:n] for key, value in p.items()}
+                    models_r = (
+                        None
+                        if models is None
+                        else jax.tree_util.tree_map(lambda a: a[:n], models)
+                    )
+                    gal_r, psf_r, noise_r, preds_r = gal[:n], psf[:n], noise[:n], preds[:n]
+
                 def predict_from_params(q):
                     return forward(
                         params,
-                        *_normalize_with_noise(*render_batch(q, models), noise, noise_sd),
+                        *_normalize_with_noise(*render_batch(q, models_r), noise_r, noise_sd),
                         dropout_key,
                     )
 
                 def image_from_params(q):
-                    return _normalize_noiseless(*render_batch(q, models))
+                    return _normalize_noiseless(*render_batch(q, models_r))
 
                 # One linearisation, reused for every direction. jax.jvp per
                 # direction would re-render the whole batch once per tangent --
@@ -831,10 +867,12 @@ def make_fused_train_step(
                     or response.shift_weight
                     or response.isotropy_weight
                 )
-                predict_jvp = jax.linearize(predict_from_params, p)[1] if need_output_jvp else None
+                predict_jvp = (
+                    jax.linearize(predict_from_params, p_r)[1] if need_output_jvp else None
+                )
 
                 def output_jvp(name):
-                    return predict_jvp(_unit_tangent(p, name))[:, shear_indices]
+                    return predict_jvp(_unit_tangent(p_r, name))[:, shear_indices]
 
                 def response_matrix(name1, name2):
                     """``R[a, b] = d output_a / d param_b`` for the named pair."""
@@ -848,7 +886,7 @@ def make_fused_train_step(
                     gamma = None
 
                 if response.gamma_weight:
-                    gamma_loss = jnp.mean((gamma - gamma_target(p)) ** 2)
+                    gamma_loss = jnp.mean((gamma - gamma_target(p_r)) ** 2)
                 else:
                     gamma_loss = jnp.array(0.0, net_dtype)
 
@@ -862,7 +900,7 @@ def make_fused_train_step(
                 # makes. Subtracting the target first leaves a term that is zero
                 # exactly when the response is right.
                 if response.isotropy_weight:
-                    deviation = gamma - gamma_target(p)
+                    deviation = gamma - gamma_target(p_r)
                     isotropy_loss = jnp.mean(
                         (deviation[:, 0, 0] - deviation[:, 1, 1]) ** 2
                         + (deviation[:, 0, 1] + deviation[:, 1, 0]) ** 2
@@ -885,34 +923,34 @@ def make_fused_train_step(
                 # ||J P_perp||_F^2. Done per object, so no object's tangent
                 # basis leaks into another's projection.
                 if response.complement_weight:
-                    _, image_jvp = jax.linearize(image_from_params, p)
-                    tangents = [image_jvp(_unit_tangent(p, name)) for name in protected_names]
+                    _, image_jvp = jax.linearize(image_from_params, p_r)
+                    tangents = [image_jvp(_unit_tangent(p_r, name)) for name in protected_names]
                     nrows = len(protected_names)
                     basis = jnp.concatenate(
                         [
                             jnp.stack([t[0] for t in tangents], axis=1).reshape(
-                                gal.shape[0], nrows, -1
+                                gal_r.shape[0], nrows, -1
                             ),
                             jnp.stack([t[1] for t in tangents], axis=1).reshape(
-                                psf.shape[0], nrows, -1
+                                psf_r.shape[0], nrows, -1
                             ),
                         ],
                         axis=-1,
                     )
                     zkey_gal, zkey_psf = jax.random.split(jax.random.fold_in(noise_key, 1))
-                    zgal = jax.random.normal(zkey_gal, gal.shape, net_dtype)
-                    zpsf = jax.random.normal(zkey_psf, psf.shape, net_dtype)
+                    zgal = jax.random.normal(zkey_gal, gal_r.shape, net_dtype)
+                    zpsf = jax.random.normal(zkey_psf, psf_r.shape, net_dtype)
                     z = jnp.concatenate(
                         [zgal.reshape(zgal.shape[0], -1), zpsf.reshape(zpsf.shape[0], -1)], axis=-1
                     )
                     z_perp = _project_out(basis, z)
-                    split = gal.shape[1] * gal.shape[2]
+                    split = gal_r.shape[1] * gal_r.shape[2]
                     complement_jvp = jax.jvp(
                         lambda g, r: forward(params, g, r, dropout_key),
-                        (gal, psf),
+                        (gal_r, psf_r),
                         (
-                            z_perp[:, :split].reshape(gal.shape),
-                            z_perp[:, split:].reshape(psf.shape),
+                            z_perp[:, :split].reshape(gal_r.shape),
+                            z_perp[:, split:].reshape(psf_r.shape),
                         ),
                     )[1][:, shear_indices]
                     complement_loss = jnp.mean(complement_jvp**2)
@@ -927,10 +965,10 @@ def make_fused_train_step(
                     # PSF-leakage term contributes and a correct estimate does
                     # not, so penalise the variance rather than one difference:
                     # it treats every orbit member alike and generalises to K=4.
-                    members = [preds[:, shear_indices]] + [
+                    members = [preds_r[:, shear_indices]] + [
                         forward(
                             params,
-                            *_normalize_with_noise(*rb(p, models), noise, noise_sd),
+                            *_normalize_with_noise(*rb(p_r, models_r), noise_r, noise_sd),
                             dropout_key,
                         )[:, shear_indices]
                         for rb in orbit_render_batches

@@ -1204,7 +1204,14 @@ def _rotations(section: dict):
 #: every number in SUMMARY can be recomputed from the tables: ``e_<est>``
 #: averaged with its ``e_<est>_r45`` / ``_r90`` / ``_r135`` siblings is the
 #: shape the ring-averaged m/c divides.
-ROTATED_COLUMN_PREFIXES = ("e_", "R_", "flag_", "g_th")
+#:
+#: The response prefix is bare ``"R"``, not ``"R_"``: the columns are named
+#: ``Rgamma_<est>_<corr>``, ``Rpsf_<est>_<corr>`` and the legacy alias
+#: ``R_<est>_<corr>``, so ``"R_"`` matched only the alias and silently left the
+#: ring stations without the R^gamma the SUMMARY rows divide by --
+#: :func:`_average_rotations` averages ``dedg`` over the stations, so without
+#: those columns the file could not reproduce its own m.
+ROTATED_COLUMN_PREFIXES = ("e_", "R", "flag_", "g_th")
 
 
 def _rotation_suffix(degrees):

@@ -139,6 +139,15 @@ training:
     # identity -> the ensemble target I, correct only after averaging over an
     #             isotropic shape distribution
     gamma_target: "analytic"
+    # Evaluate the response terms on the first N objects of the batch. 0 = the
+    # whole batch. The supervised loss always keeps every object. Every response
+    # term is an ensemble 2x2 matrix, so shrinking N only widens its standard
+    # error by sqrt(batch/N) -- what it buys is memory, because each term
+    # carries a second render plus a JVP through it and those activations
+    # dominate a fused step. 32 out of 128 costs 2x on the response gradient's
+    # noise and saves 4x on the response block. Reach for it when a run OOMs at
+    # the batch size the supervised term wants.
+    batch: 0
     # Log the measured response matrices at every validation pass. null = on
     # whenever any weight above is nonzero. Validation MSE cannot see a drifting
     # R^gamma or a growing PSF leakage, so this is the actual selection signal.

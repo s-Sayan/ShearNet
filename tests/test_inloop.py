@@ -339,6 +339,59 @@ def test_response_regularisation_can_be_staggered():
     assert float(second[1:-1].sum()) == 0.0
 
 
+def test_response_sub_batch_narrows_the_response_and_not_the_supervised_loss():
+    """``response.batch`` is a memory knob, not a change to the training signal.
+
+    The response terms are ensemble 2x2 matrices, so evaluating them on a slice
+    of the batch only widens their standard error -- but the supervised MSE has
+    to keep every object, because that is the term the batch size was chosen
+    for. Pin both halves of that: the supervised metric is bit-identical with
+    and without the slice, while the response terms move (a slice that produced
+    the same numbers would not be slicing anything).
+    """
+    gen, state, forward, loss_fn, labels = _harness(n=16, batch=8, apply_psf_shear=True)
+    weights = dict(
+        gamma_weight=0.1,
+        psf_weight=0.1,
+        shift_weight=0.1,
+        complement_weight=0.1,
+        orbit_weight=0.1,
+        isotropy_weight=0.1,
+    )
+
+    def run(**extra):
+        step = make_fused_train_step(
+            gen,
+            forward,
+            loss_fn,
+            labels,
+            12.7,
+            response=ResponseRegularization(**weights, **extra),
+            shear_indices=(0, 1),
+            return_metrics=True,
+        )
+        idx = gen.epoch_indices(jax.random.PRNGKey(0))[0]
+        _, _, metrics = step(
+            normalize_state(state), idx, jax.random.PRNGKey(1), jax.random.PRNGKey(2)
+        )
+        return np.asarray(metrics)
+
+    full = run()
+    sliced = run(batch=2)
+
+    # the supervised term still sees all eight objects
+    assert float(sliced[0]) == float(full[0])
+    # every response term is still live on the slice
+    for name, value in zip(RESPONSE_TERMS, sliced[1:-1]):
+        assert np.isfinite(value) and float(value) > 0.0, f"{name} term died on the sub-batch"
+    # and they are genuinely computed on fewer objects
+    assert not np.allclose(sliced[1:-1], full[1:-1])
+
+    # a request for at least the whole batch is the whole batch
+    assert np.array_equal(run(batch=8), full)
+    assert np.array_equal(run(batch=64), full)
+
+
 def test_response_config_validation():
     with pytest.raises(ValueError, match="orbit_k"):
         ResponseRegularization(orbit_weight=1.0, orbit_k=3)
@@ -346,6 +399,8 @@ def test_response_config_validation():
         ResponseRegularization(gamma_weight=1.0, gamma_target="ensemble")
     with pytest.raises(ValueError, match="every_n_steps"):
         ResponseRegularization(gamma_weight=1.0, every_n_steps=0)
+    with pytest.raises(ValueError, match="batch"):
+        ResponseRegularization(gamma_weight=1.0, batch=-1)
     assert ResponseRegularization().orbit_angles == (90.0,)
     assert ResponseRegularization(orbit_k=4).orbit_angles == (45.0, 90.0, 135.0)
     assert not ResponseRegularization().enabled

@@ -113,6 +113,15 @@ def load_config(args):
         "psf_type": config.get("model.psf.type", "forklens_psf"),
         "fusion": config.get("model.fusion", "concat"),
         "head": config.get("model.head", "gap"),
+        # Architecture shape. These have to survive into the flat dict or
+        # load_model rebuilds the model at its defaults and the checkpoint no
+        # longer fits it -- a loud failure rather than a wrong answer, but a
+        # failure on a run that trained fine.
+        "branch_features": config.get("model.branch_features", None),
+        "d4_features": config.get("model.d4_features", None),
+        "d4_depths_galaxy": config.get("model.d4_depths_galaxy", None),
+        "d4_depths_psf": config.get("model.d4_depths_psf", None),
+        "orbit_scan": config.get("model.orbit_scan", True),
         "output_keys": tuple(config.get("model.output_keys", ("g1", "g2"))),
         "mcal": args.mcal,
         "plot": args.plot or config.get("plotting.plot", False),
@@ -180,6 +189,10 @@ def load_model(config, gal_images, psf_images):
         fusion=config.get("fusion", "concat"),
         head=config.get("head", "gap"),
         branch_features=config.get("branch_features", None),
+        d4_features=config.get("d4_features", None),
+        d4_depths_galaxy=config.get("d4_depths_galaxy", None),
+        d4_depths_psf=config.get("d4_depths_psf", None),
+        orbit_scan=config.get("orbit_scan", True),
     )
 
     output_keys = tuple(config["output_keys"])

@@ -161,6 +161,143 @@ def test_d4_fork_like_branches_are_equivariant(galaxy_branch, psf_branch):
     assert jnp.allclose(out_mir, out * jnp.array([1.0, -1.0]), atol=1e-5)
 
 
+@pytest.mark.parametrize("galaxy_branch,psf_branch", D4_BRANCH_PAIRS)
+def test_orbit_scan_is_the_same_model_as_the_stacked_orbit(galaxy_branch, psf_branch):
+    """``orbit_scan`` is a memory layout, not a different network.
+
+    Stacking the eight orbit members on the batch axis and scanning over them
+    with shared parameters compute the same Reynolds average; the scan just
+    does it one member at a time and rematerialises the internals in the
+    backward pass. So the parameter tree has to be *identical* -- not merely
+    the same shapes, or a checkpoint would not load across the switch -- and
+    the outputs have to agree to float reassociation.
+    """
+    kw = dict(galaxy_type=galaxy_branch, psf_type=psf_branch, fusion="transformer")
+    stacked = build_model("d4-fork-like", orbit_scan=False, **kw)
+    scanned = build_model("d4-fork-like", orbit_scan=True, **kw)
+    gal = random.normal(random.PRNGKey(2), (3, 24, 24))
+    psf = random.normal(random.PRNGKey(3), (3, 24, 24))
+    output_keys = ("g1", "g2", "hlr", "flux")
+
+    p_stacked = stacked.init(random.PRNGKey(0), gal, psf, output_keys=output_keys)
+    p_scanned = scanned.init(random.PRNGKey(0), gal, psf, output_keys=output_keys)
+
+    stacked_leaves = jax.tree_util.tree_leaves_with_path(p_stacked)
+    scanned_leaves = jax.tree_util.tree_leaves_with_path(p_scanned)
+    assert [k for k, _ in stacked_leaves] == [k for k, _ in scanned_leaves]
+    for (_, a), (_, b) in zip(stacked_leaves, scanned_leaves):
+        assert a.shape == b.shape
+        assert jnp.array_equal(a, b)
+
+    # and the same params run through either layout give the same answer
+    a = stacked.apply(p_stacked, gal, psf, output_keys=output_keys, deterministic=True)
+    b = scanned.apply(p_stacked, gal, psf, output_keys=output_keys, deterministic=True)
+    assert jnp.allclose(a, b, atol=1e-5)
+
+
+def test_orbit_scan_keeps_the_equivariance():
+    """The scan must not break the property the orbit exists to provide."""
+    model = build_model(
+        "d4-fork-like",
+        galaxy_type="shearnet-d4",
+        psf_type="shearnet-d4",
+        fusion="transformer",
+        orbit_scan=True,
+    )
+    gal = random.normal(random.PRNGKey(2), (3, 24, 24))
+    psf = random.normal(random.PRNGKey(3), (3, 24, 24))
+    output_keys = ("g1", "g2", "hlr", "flux")
+    params = model.init(random.PRNGKey(0), gal, psf, output_keys=output_keys)
+    out = model.apply(params, gal, psf, output_keys=output_keys, deterministic=True)
+    out_rot = model.apply(
+        params,
+        jnp.rot90(gal, 1, axes=(1, 2)),
+        jnp.rot90(psf, 1, axes=(1, 2)),
+        output_keys=output_keys,
+        deterministic=True,
+    )
+    # shape components flip sign; hlr and flux are scalars and must not move
+    assert jnp.allclose(out_rot[:, :2], -out[:, :2], atol=1e-5)
+    assert jnp.allclose(out_rot[:, 2:], out[:, 2:], atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "d4_features,d4_depths_galaxy,d4_depths_psf",
+    [
+        ((32, 48, 64), (2, 2, 1), (1, 1, 1)),  # the report's schedule
+        ((16, 48, 64), (1, 2, 1), (0, 1, 1)),  # the trimmed one
+        ((16, 24, 32), (1, 1, 1), (0, 0, 1)),  # aggressively trimmed
+    ],
+)
+def test_d4_schedule_is_configurable_and_stays_equivariant(
+    d4_features, d4_depths_galaxy, d4_depths_psf
+):
+    """Trimming the stage widths and depths must not cost the symmetry.
+
+    A depth of zero at a stage means that stage is a pooling and a 1x1
+    transition with no residual block, which is the cheapest way to drop the
+    full-resolution activations the orbit multiplies by eight. Equivariance
+    comes from the Reynolds average over the orbit, not from the backbone, so
+    it must survive any schedule -- including one with an empty first stage.
+    """
+    model = build_model(
+        "d4-fork-like",
+        galaxy_type="shearnet-d4",
+        psf_type="shearnet-d4",
+        fusion="transformer",
+        d4_features=d4_features,
+        d4_depths_galaxy=d4_depths_galaxy,
+        d4_depths_psf=d4_depths_psf,
+    )
+    gal = random.normal(random.PRNGKey(2), (2, 24, 24))
+    psf = random.normal(random.PRNGKey(3), (2, 24, 24))
+    output_keys = ("g1", "g2")
+    params = model.init(random.PRNGKey(0), gal, psf, output_keys=output_keys)
+    out = model.apply(params, gal, psf, output_keys=output_keys, deterministic=True)
+    assert out.shape == (2, 2)
+
+    out_rot = model.apply(
+        params,
+        jnp.rot90(gal, 1, axes=(1, 2)),
+        jnp.rot90(psf, 1, axes=(1, 2)),
+        output_keys=output_keys,
+        deterministic=True,
+    )
+    assert jnp.allclose(out_rot, -out, atol=1e-5)
+
+    out_mir = model.apply(
+        params,
+        jnp.flip(gal, axis=1),
+        jnp.flip(psf, axis=1),
+        output_keys=output_keys,
+        deterministic=True,
+    )
+    assert jnp.allclose(out_mir, out * jnp.array([1.0, -1.0]), atol=1e-5)
+
+
+def test_trimmed_d4_schedule_is_actually_smaller():
+    """The knobs have to buy something, or they are just extra surface area."""
+    gal = jnp.ones((2, 24, 24))
+    psf = jnp.ones((2, 24, 24))
+
+    def n_params(**kw):
+        model = build_model(
+            "d4-fork-like",
+            galaxy_type="shearnet-d4",
+            psf_type="shearnet-d4",
+            fusion="transformer",
+            **kw,
+        )
+        params = model.init(random.PRNGKey(0), gal, psf, output_keys=("g1", "g2"))
+        return sum(x.size for x in jax.tree_util.tree_leaves(params))
+
+    report = n_params()
+    trimmed = n_params(
+        d4_features=(16, 48, 64), d4_depths_galaxy=(1, 2, 1), d4_depths_psf=(0, 1, 1)
+    )
+    assert trimmed < report
+
+
 @pytest.mark.parametrize("head", ["gap", "attention"])
 @pytest.mark.parametrize(
     "galaxy_branch,psf_branch",

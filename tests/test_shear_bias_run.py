@@ -681,13 +681,16 @@ def test_average_rotations_averages_shapes_responses_and_unions_flags():
         )
 
     straight = {"shearnet": {"metacal": {"plus": measurement(1.0, True),
-                                     "minus": measurement(3.0, False)},
+                                         "minus": measurement(3.0, False)},
                              # measured at one station only -> dropped, not
-                             # partly averaged
-                             "metacal": {"plus": measurement(1.0, False)}}}
+                             # partly averaged. This has to be a DIFFERENT
+                             # correction name from the one above: written as a
+                             # second "metacal" key it just replaced it, and the
+                             # case the test exists for was never built.
+                             "none": {"plus": measurement(1.0, False)}}}
     rotated = {"shearnet": {"metacal": {"plus": measurement(5.0, False),
-                                    "minus": measurement(1.0, False)},
-                            "metacal": {}}}
+                                        "minus": measurement(1.0, False)},
+                            "none": {}}}
 
     merged = harness._average_rotations([straight, rotated])
     assert set(merged["shearnet"]) == {"metacal"}

@@ -1001,6 +1001,103 @@ class _D4SpatialTransformerFusion(nn.Module):
         return gal_tokens.reshape(batch, H_g, W_g, self.d_model)
 
 
+class _D4OrbitMember(nn.Module):
+    """One D4 orbit member: galaxy backbone, PSF backbone, fusion.
+
+    Factored out of :class:`D4ForkLike` so the orbit can be an ``nn.scan`` axis
+    instead of a batch axis. Written as a scan body -- ``(carry, xs) ->
+    (carry, y)`` -- so one class serves both the scanned and the stacked path;
+    the carry is unused and is always ``None``.
+
+    ``deterministic`` is an attribute rather than a call argument because
+    ``nn.scan`` maps over the call's positional arguments and a Python bool must
+    not become a scan input.
+    """
+
+    fusion: str = "transformer"
+    galaxy_branch: str = "d4cnn"
+    psf_branch: str = "d4cnn"
+    galaxy_features: tuple = (16, 32)
+    psf_features: tuple = (16, 32)
+    d_model: int = 64
+    num_heads: int = 4
+    dropout: float = 0.0
+    design: str = "d4cnn"
+    d4_features: tuple = (32, 48, 64)
+    d4_depths_galaxy: tuple = (2, 2, 1)
+    d4_depths_psf: tuple = (1, 1, 1)
+    deterministic: bool = False
+
+    def _branch_map(self, branch, features, x, deterministic, psf=False):
+        """Run the chosen spatial backbone over the orbit and return its map.
+
+        Any backbone returning a square spatial feature map is valid; the
+        enclosing Reynolds average makes the whole model exactly spin-2
+        equivariant regardless of the backbone's internal structure. ``psf``
+        selects the lighter variant of any backbone that has one.
+        """
+        if branch == "d4cnn":
+            return _D4SmoothCNN(features=features)(x)
+        if branch == "shearnet-d4":
+            # The report gives the galaxy branch two residual blocks per stage
+            # plus the dilated context block, and the PSF branch one block per
+            # stage and no context block: a PSF kernel needs enough capacity for
+            # anisotropy and wings, not a morphology hierarchy.
+            # Stage depths and widths are attributes rather than constants, so
+            # the 53x53 stage can be thinned without editing the model. The
+            # report's schedule is the default: galaxy (2, 2, 1) with the
+            # dilated context block, PSF (1, 1, 1) without it.
+            depths = self.d4_depths_psf if psf else self.d4_depths_galaxy
+            return _ShearNetD4Backbone(
+                features=self.d4_features, depths=depths, multiscale=not psf
+            )(x)
+        if branch == "research_backed":
+            # ``dropout`` regularizes only this high-capacity backbone; it is
+            # stochastic under training (deterministic=False) and an exact
+            # identity at inference (deterministic=True), so the Reynolds average
+            # stays exactly spin-2 equivariant for every evaluated quantity.
+            return ResearchBackedGalaxyResNet(dropout=self.dropout)(
+                x, deterministic=deterministic, return_spatial=True
+            )
+        if branch == "forklens_psf":
+            return ForkLensPSFNet()(x, deterministic=deterministic, return_spatial=True)
+        raise ValueError(
+            f"Unknown D4 branch {branch!r}; choose from " f"{sorted(D4_BRANCH_BACKBONES)}"
+        )
+
+    def _fuse(self, galaxy_map, psf_map, deterministic):
+        """Fuse galaxy/PSF maps into a single galaxy-frame spatial map."""
+        if self.fusion == "transformer":
+            return _D4SpatialTransformerFusion(
+                d_model=self.d_model,
+                num_heads=self.num_heads,
+                # Sec. 7.2: a width-256 GELU feed-forward after each attention
+                # sublayer. 0 keeps the attention-only block.
+                ffn_dim=256 if self.design == "shearnet-d4" else 0,
+            )(galaxy_map, psf_map, deterministic=deterministic)
+        # 'concat': summarise the PSF as a global descriptor and broadcast it
+        # onto every galaxy spatial location, keeping the galaxy spatial frame.
+        psf_global = jnp.mean(psf_map, axis=(1, 2), keepdims=True)
+        psf_global = jnp.broadcast_to(psf_global, galaxy_map.shape[:3] + (psf_map.shape[-1],))
+        return jnp.concatenate([galaxy_map, psf_global], axis=-1)
+
+    @nn.compact
+    def __call__(self, carry, xs):
+        """``(carry, (galaxy, psf)) -> (carry, fused_map)`` for one orbit member."""
+        galaxy_image, psf_image = xs
+        deterministic = self.deterministic
+        # Galaxy branch is created first, then PSF (preserves 'd4cnn' checkpoint
+        # param naming). Any square-map backbone stays exactly spin-2 equivariant
+        # once wrapped in the enclosing Reynolds average.
+        gal_map = self._branch_map(
+            self.galaxy_branch, self.galaxy_features, galaxy_image, deterministic
+        )
+        psf_map = self._branch_map(
+            self.psf_branch, self.psf_features, psf_image, deterministic, psf=True
+        )
+        return carry, self._fuse(gal_map, psf_map, deterministic)
+
+
 class D4ForkLike(nn.Module):
     """D4-equivariant two-branch shear estimator (``nn='d4-fork-like'``).
 
@@ -1072,53 +1169,19 @@ class D4ForkLike(nn.Module):
     num_pool_heads: int = 4  # number of attention pooling maps (head='attention')
     dropout: float = 0.0  # spatial-dropout rate for a 'research_backed' branch
     design: str = "d4cnn"  # 'd4cnn' | 'shearnet-d4' -- fusion and head layout
-
-    def _branch_map(self, branch, features, x, deterministic, psf=False):
-        """Run the chosen spatial backbone over the orbit and return its map.
-
-        Any backbone returning a square spatial feature map is valid; the
-        enclosing Reynolds average makes the whole model exactly spin-2
-        equivariant regardless of the backbone's internal structure. ``psf``
-        selects the lighter variant of any backbone that has one.
-        """
-        if branch == "d4cnn":
-            return _D4SmoothCNN(features=features)(x)
-        if branch == "shearnet-d4":
-            # The report gives the galaxy branch two residual blocks per stage
-            # plus the dilated context block, and the PSF branch one block per
-            # stage and no context block: a PSF kernel needs enough capacity for
-            # anisotropy and wings, not a morphology hierarchy.
-            depths = (1, 1, 1) if psf else (2, 2, 1)
-            return _ShearNetD4Backbone(depths=depths, multiscale=not psf)(x)
-        if branch == "research_backed":
-            # ``dropout`` regularizes only this high-capacity backbone; it is
-            # stochastic under training (deterministic=False) and an exact
-            # identity at inference (deterministic=True), so the Reynolds average
-            # stays exactly spin-2 equivariant for every evaluated quantity.
-            return ResearchBackedGalaxyResNet(dropout=self.dropout)(
-                x, deterministic=deterministic, return_spatial=True
-            )
-        if branch == "forklens_psf":
-            return ForkLensPSFNet()(x, deterministic=deterministic, return_spatial=True)
-        raise ValueError(
-            f"Unknown D4 branch {branch!r}; choose from " f"{sorted(D4_BRANCH_BACKBONES)}"
-        )
-
-    def _fuse(self, galaxy_map, psf_map, deterministic):
-        """Fuse galaxy/PSF maps into a single galaxy-frame spatial map."""
-        if self.fusion == "transformer":
-            return _D4SpatialTransformerFusion(
-                d_model=self.d_model,
-                num_heads=self.num_heads,
-                # Sec. 7.2: a width-256 GELU feed-forward after each attention
-                # sublayer. 0 keeps the attention-only block.
-                ffn_dim=256 if self.design == "shearnet-d4" else 0,
-            )(galaxy_map, psf_map, deterministic=deterministic)
-        # 'concat': summarise the PSF as a global descriptor and broadcast it
-        # onto every galaxy spatial location, keeping the galaxy spatial frame.
-        psf_global = jnp.mean(psf_map, axis=(1, 2), keepdims=True)
-        psf_global = jnp.broadcast_to(psf_global, galaxy_map.shape[:3] + (psf_map.shape[-1],))
-        return jnp.concatenate([galaxy_map, psf_global], axis=-1)
+    # ---- 'shearnet-d4' branch schedule -------------------------------------
+    # Channel widths and residual-block counts of the three stages, i.e. the
+    # report's Secs. 5-6 as numbers instead of constants. The 53x53 stage is
+    # where the activations are: dropping the PSF branch's block there costs
+    # 0.02 M parameters and 15% of the model's memory, and thinning the galaxy
+    # branch's two blocks another 20%. Defaults reproduce the report exactly.
+    d4_features: tuple = (32, 48, 64)
+    d4_depths_galaxy: tuple = (2, 2, 1)
+    d4_depths_psf: tuple = (1, 1, 1)
+    # Run the eight-element orbit as a rematerialised scan rather than stacking
+    # it on the batch axis. Bit-identical parameter tree, outputs equal to
+    # float reassociation, ~7.8x less activation memory. See __call__.
+    orbit_scan: bool = True
 
     @nn.compact
     def __call__(
@@ -1144,24 +1207,62 @@ class D4ForkLike(nn.Module):
             psf_image = jnp.expand_dims(psf_image, axis=0)
         batch = galaxy_image.shape[0]
 
-        # Build the D4 orbit of the (galaxy, PSF) pair and stack it into the
-        # batch axis so each branch backbone/fusion runs once over all 8 copies.
-        gal_orbit = jnp.concatenate([_d4_apply(galaxy_image, i) for i in range(8)], axis=0)
-        psf_orbit = jnp.concatenate([_d4_apply(psf_image, i) for i in range(8)], axis=0)
-
-        # Galaxy branch is created first, then PSF (preserves 'd4cnn' checkpoint
-        # param naming). Any square-map backbone stays exactly spin-2 equivariant
-        # once wrapped in the Reynolds average below.
-        gal_maps = self._branch_map(
-            self.galaxy_branch, self.galaxy_features, gal_orbit, deterministic
+        member_kwargs = dict(
+            fusion=self.fusion,
+            galaxy_branch=self.galaxy_branch,
+            psf_branch=self.psf_branch,
+            galaxy_features=self.galaxy_features,
+            psf_features=self.psf_features,
+            d_model=self.d_model,
+            num_heads=self.num_heads,
+            dropout=self.dropout,
+            design=self.design,
+            d4_features=self.d4_features,
+            d4_depths_galaxy=self.d4_depths_galaxy,
+            d4_depths_psf=self.d4_depths_psf,
+            deterministic=deterministic,
+            name="orbit",
         )
-        psf_maps = self._branch_map(
-            self.psf_branch, self.psf_features, psf_orbit, deterministic, psf=True
-        )
-        fused = self._fuse(gal_maps, psf_maps, deterministic)  # (8*batch, H, W, C)
 
-        H, W, C = fused.shape[1], fused.shape[2], fused.shape[3]
-        fused = fused.reshape(8, batch, H, W, C)
+        if self.orbit_scan:
+            # ONE member's activations live at a time. The orbit becomes a scan
+            # axis rather than a batch axis, so each step sees (B, H, W) instead
+            # of (8B, H, W), and `nn.remat` drops that step's internals instead
+            # of holding all eight sets for the backward pass.
+            #
+            # Both halves are load-bearing. `remat` over an unrolled loop buys
+            # only 1.13x, because XLA is free to schedule the eight independent
+            # calls concurrently and allocate all eight working sets; the scan is
+            # what serialises them. Measured on the report's branches at 53x53:
+            # 253.0 -> 32.5 MB/sample, and the saving survives the JVPs the
+            # response objectives take (436.9 -> 49.9 MB/sample).
+            #
+            # `variable_broadcast="params"` shares one parameter set across the
+            # eight steps -- exactly the semantics of the Reynolds orbit -- and
+            # leaves the parameter tree identical to the stacked form, so
+            # existing checkpoints load. tests/test_models.py asserts both that
+            # and the agreement of the outputs.
+            scanned = nn.scan(
+                nn.remat(_D4OrbitMember),
+                variable_broadcast="params",
+                split_rngs={"params": False, "dropout": True},
+                in_axes=0,
+                out_axes=0,
+            )
+            gal_orbit = jnp.stack([_d4_apply(galaxy_image, i) for i in range(8)], axis=0)
+            psf_orbit = jnp.stack([_d4_apply(psf_image, i) for i in range(8)], axis=0)
+            _, fused = scanned(**member_kwargs)(None, (gal_orbit, psf_orbit))
+        else:
+            # Historical path: stack the orbit on the batch axis so the backbones
+            # and the fusion each run once over all eight copies. Kept for the
+            # equivalence test and for debugging; it costs ~8x the activations.
+            gal_orbit = jnp.concatenate([_d4_apply(galaxy_image, i) for i in range(8)], axis=0)
+            psf_orbit = jnp.concatenate([_d4_apply(psf_image, i) for i in range(8)], axis=0)
+            _, flat = _D4OrbitMember(**member_kwargs)(None, (gal_orbit, psf_orbit))
+            fused = flat.reshape(8, batch, *flat.shape[1:])
+
+        # (8, batch, H, W, C) either way.
+        H, W = fused.shape[2], fused.shape[3]
 
         # Align each orbit member back to the reference frame with g_i^{-1}.
         aligned = jnp.stack([_d4_inverse_apply(fused[i], i) for i in range(8)], axis=0)
@@ -1374,6 +1475,10 @@ def build_model(
     head="gap",
     dropout=0.0,
     branch_features=None,
+    d4_features=None,
+    d4_depths_galaxy=None,
+    d4_depths_psf=None,
+    orbit_scan=True,
 ):
     """Instantiate a top-level architecture from its ``nn`` name.
 
@@ -1427,6 +1532,13 @@ def build_model(
             # fusion feed-forward sublayers and its head depths. Every other
             # branch keeps the existing layout.
             design="shearnet-d4" if galaxy_branch == "shearnet-d4" else "d4cnn",
+            # 'shearnet-d4' branch schedule. None keeps the report's numbers.
+            **{k: tuple(v) for k, v in (
+                ("d4_features", d4_features),
+                ("d4_depths_galaxy", d4_depths_galaxy),
+                ("d4_depths_psf", d4_depths_psf),
+            ) if v is not None},
+            orbit_scan=bool(orbit_scan),
         )
     try:
         model_cls = SINGLE_BRANCH_MODELS[nn]
