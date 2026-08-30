@@ -817,3 +817,44 @@ def test_shape_noise_cancellation_is_off_by_default(trained_run):
         section.clear()
         section.update(saved)
     assert result["shape_noise_cancel"] == 1
+
+
+def test_shearnet_batch_size_reaches_every_network_forward(trained_run, monkeypatch):
+    """`eval.evaluate.shearnet_batch_size` has to reach the predictor.
+
+    The population is handed to the predictor whole and chunked inside it, so
+    the config value is the ONLY thing standing between a 200k benchmark and a
+    forward pass of 4096 stamps. It is also invisible when it breaks: the run
+    does not fail, it just quietly ignores the setting and OOMs on a big
+    population -- which is exactly what happened once, when the value was
+    parsed into a local and then never passed down.
+
+    So this asserts on the mechanism rather than on a result: every
+    `shear_measure` the harness builds, on every pass, must carry the
+    configured batch size. The metacal pass is the one that matters most -- it
+    forwards the same population nine times.
+    """
+    from shearnet.benchmarking import SavedModelPredictor
+
+    benchmark, training = trained_run
+    section = harness._section(benchmark, "evaluate")
+    saved = dict(section)
+    section["shearnet_batch_size"] = 7  # nothing else would produce a 7
+    section["component"] = 0
+
+    seen = []
+    original = SavedModelPredictor.shear_measure
+
+    def recording(self, batch_size=4096):
+        seen.append(batch_size)
+        return original(self, batch_size=batch_size)
+
+    monkeypatch.setattr(SavedModelPredictor, "shear_measure", recording)
+    try:
+        harness._run_evaluation(benchmark, training, ("ngmix", "shearnet"))
+    finally:
+        section.clear()
+        section.update(saved)
+
+    assert seen, "no network measure callable was built at all"
+    assert set(seen) == {7}, seen

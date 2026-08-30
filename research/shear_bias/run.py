@@ -356,19 +356,26 @@ def _ngmix_batches(renderer, galaxy, psf, chunk=NGMIX_CHUNK):
 
 
 def _measure_callables(
-    renderer, estimators, *, seed, psf_model, gal_model, anacal_kw, predictor, nproc=None
+    renderer, estimators, *, seed, psf_model, gal_model, anacal_kw, predictor, nproc=None,
+    batch=4096,
 ):
     """``{name: measure(galaxy, psf) -> (N, 2)}`` for the requested estimators.
 
     One callable per estimator, so the shared response pass can hand every one
     of them the same rendered stamps instead of each re-rendering the
     population for itself.
+
+    ``batch`` is ``eval.evaluate.shearnet_batch_size``: the number of stamps the
+    network forwards in one device call. It has to be threaded all the way down
+    here, because the population is handed over whole and the predictor chunks
+    it internally -- left at the default, a 200k run forwards 4096 stamps at a
+    time no matter what the config says.
     """
     from shearnet.methods.ngmix import fit_shapes
 
     measures = {}
     if "shearnet" in estimators:
-        measures["shearnet"] = predictor.shear_measure()
+        measures["shearnet"] = predictor.shear_measure(batch_size=batch)
     if "ngmix" in estimators:
 
         def ngmix_measure(galaxy, psf):
@@ -422,7 +429,8 @@ def _shared_shear_responses(
     return {name: np.stack(cols, axis=-1) for name, cols in columns.items()}
 
 
-def _metacal_pass(renderer, galaxy, psf, *, seed, psf_model, gal_model, step, nproc, predictor):
+def _metacal_pass(renderer, galaxy, psf, *, seed, psf_model, gal_model, step, nproc, predictor,
+                  batch=4096):
     """One metacal pass serving BOTH estimators.
 
     metacal shears the *image*: it deconvolves by the PSF, applies +/- step,
@@ -467,7 +475,10 @@ def _metacal_pass(renderer, galaxy, psf, *, seed, psf_model, gal_model, step, np
     # already in the struct -- and unrecoverable afterwards, because the fit
     # results are not kept.
     extra = {key: np.full(n, np.nan) for key in ("s2n", "T", "flux", "Tpsf")}
-    measure = predictor.shear_measure() if want_network else None
+    # eval.evaluate.shearnet_batch_size. This is the pass that OOMs first: it
+    # forwards the same population NINE times (noshear, +/-g1, +/-g2 and the
+    # four *_psf products), so it is where an ignored batch size shows up.
+    measure = predictor.shear_measure(batch_size=batch) if want_network else None
     index = {name: i for i, name in enumerate(METACAL_TYPES)}
 
     for start, obs in _ngmix_batches(renderer, galaxy, psf):
@@ -848,7 +859,7 @@ def _run_evaluation(benchmark: Config, training: Config, estimators) -> dict:
     )
     measures = _measure_callables(
         renderer, estimators, seed=seed, psf_model=psf_model, gal_model=gal_model,
-        anacal_kw=anacal_kw, predictor=predictor, nproc=nproc,
+        anacal_kw=anacal_kw, predictor=predictor, nproc=nproc, batch=batch,
     )
 
     result = {
@@ -939,6 +950,7 @@ def _run_evaluation(benchmark: Config, training: Config, estimators) -> dict:
         renderer, measures, predictor, samples=samples, seed=seed, step=step,
         njac=njac, noise_sd=noise_sd, result=result, apply_to=psf_apply,
         rotations=rotations, psf_model=psf_model, gal_model=gal_model, nproc=nproc,
+        batch=batch,
     )
     result.update(_timing_pass(renderer, predictor, samples=samples, seed=seed, batch=batch))
     _write_evaluation_fits(benchmark, section, tables, leakage_columns, result)
@@ -1084,7 +1096,7 @@ def _measure_shear_pair(
                 renderer, stamps.galaxy_images, stamps.psf_images,
                 seed=seed + (1 if label == "plus" else 2),
                 psf_model=psf_model, gal_model=gal_model, step=step, nproc=nproc,
-                predictor=metacal_predictor,
+                predictor=metacal_predictor, batch=batch,
             )
             # metacal's own *noshear* shape, measured on the reconvolved stamp,
             # is what the metacal m/c divides -- not `e_<est>` above, which is
@@ -1266,7 +1278,7 @@ def _average_rotations(per_rotation):
 
 def _leakage_pass(renderer, measures, predictor, *, samples, seed, step, njac,
                   noise_sd, result, psf_model, gal_model, nproc,
-                  apply_to=(), rotations=(0.0,)):
+                  apply_to=(), rotations=(0.0,), batch=4096):
     """Metacal ``R^PSF`` and corrected/raw leakage shapes on zero-shear stamps.
 
     ngmix and ShearNet use the same ``psf='dilate'`` nine-product metacal pass
@@ -1302,7 +1314,7 @@ def _leakage_pass(renderer, measures, predictor, *, samples, seed, step, njac,
                 renderer, images.galaxy_images, images.psf_images,
                 seed=seed + 100 + station,
                 psf_model=psf_model, gal_model=gal_model, step=step, nproc=nproc,
-                predictor=predictor if "shearnet" in measures else None,
+                predictor=predictor if "shearnet" in measures else None, batch=batch,
             )
             metacal[degrees] = {
                 "ngmix": (ng, ng_rpsf),
