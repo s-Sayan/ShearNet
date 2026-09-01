@@ -1,9 +1,9 @@
 meta:
-  model_name: fourth_inloop_shearnet_d4
-  description: "shearnet-d4 with the LEARNED absolute fusion encoding (job 2237219)"
+  model_name: fourth_inloop_shearnet_d4_2drope
+  description: "shearnet-d4 with the D4-covariant relative 2D RoPE fusion encoding"
 
 paths:
-  root: /home/adfield/ShearNet/research/unit_test_variations/fourth_inloop_shearnet_d4
+  root: /home/adfield/ShearNet/research/unit_test_variations/fourth_inloop_shearnet_d4_2drope
   psfex_model_file: /home/adfield/weak_lensing/superbit-lensing-jax-test/simulated_data/sim_utils/emp_psfs/emp_psfs_best/psfex_all_except_best
   train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
   eval_catalog: /home/adfield/ShearNet/cosmos_catalog_eval.fits
@@ -36,13 +36,50 @@ model:
   galaxy_branch: shearnet-d4
   psf_branch: shearnet-d4
   output_keys: [g1, g2, hlr, flux]
-  # Was `true` when job 2237219 was submitted, and was silently IGNORED --
-  # d4-fork-like never read it. It now raises, so it is written honestly
-  # here. This changes nothing about that run: the pooling was, and is,
-  # selected by `head`. The run's authoritative record is the resolved
-  # config saved to plots/<model_name>/training_config.yaml at startup.
+  # d4-fork-like refuses gap=True: the orbit alignment needs spatial
+  # maps. Pooling is chosen by `head`. This was always ignored here.
   gap: false
   dropout: 0.0
+
+  # ---- fusion positional encoding -----------------------------------------
+  # The cross-attention is where the galaxy map meets the PSF map, and it is the
+  # one place the architecture had a component chosen by convention rather than
+  # by the problem. 'learned' is a free vector per raster cell added to the
+  # tokens: absolute, additive, and not D4 covariant.
+  #
+  # 'rope2d' derives the encoding from the physics instead. The observation is
+  # galaxy (*) PSF, so the PSF's contribution to the image at p depends only on
+  # the offset d = p - p'; both maps reach the fusion through the same
+  # downsampling of the same centred stamp, so d is well defined between them.
+  # That fixes the encoding to be relative and to act on the queries and keys.
+  # D4 then adds one constraint: under the 90-degree element d = (du, dv) ->
+  # (-dv, du), which is realisable on the channel space only if the x- and
+  # y-pairs of each group SHARE a frequency -- the usual axial RoPE, with
+  # independently tuned per-axis schedules, is not covariant. The frequencies
+  # themselves are set by the extent of the map (one to three cycles over 12
+  # cells), not by the base-10000 schedule of text models, which on a 13-cell
+  # axis would put every high-k frequency at the identity.
+  #
+  # Three physical constraints, one design, no free parameters left over.
+  # tests/test_models.py pins the relative property, the covariance, and the
+  # failure of the independent-frequency control.
+  fusion_pos: rope2d
+
+  # ---- the design, stated rather than inferred -----------------------------
+  # `design` names a published SPECIFICATION -- branches, fusion and heads
+  # together. It used to be inferred from galaxy_branch, which meant swapping
+  # the backbone for an ablation ALSO swapped the fusion feed-forward (256 ->
+  # 0), the odd-MLP depth (two hidden layers -> one) and the scalar head
+  # (per-key linear -> one shared layer): five changes reported as one. Naming
+  # it here makes the backbone arm a single-variable arm.
+  design: shearnet-d4
+  # Fusion and head sizes, all settable. Omit any of them to take this design's
+  # value; nothing about the model is inferred behind your back.
+  d_model: 64
+  num_heads: 4
+  num_self_attn_layers: 1
+  ffn_dim: 256              # Sec. 7.2; 0 is the attention-only block
+  num_pool_heads: 4         # head: attention -- see the pooling diagnostic
 
   # ---- the D4 schedule ----------------------------------------------------
   # Stage widths and residual depths of the shearnet-d4 backbones. The report's
@@ -134,7 +171,12 @@ train:
     # matrix gamma_weight already builds, so it costs no extra render.
     # See ISOTROPY_NOTE in shearnet/core/inloop.py.
     isotropy_weight: 1.0e-2
-    every_n_steps: 2
+    # 4, not 2. The response block is ~90% of the training step, and this is
+    # the only knob that moves it much: measured 9.81x -> 6.35x of a plain step
+    # (fourth_shearnet_k4/README.md), i.e. about -35% per epoch. orbit_k is not
+    # the lever (9.81 -> 9.0) and complement_weight is deliberately left on --
+    # it is the one term with no bias/variance trade against it.
+    every_n_steps: 4
     # Kept at 4. It was the obvious thing to cut for memory and it turns out not
     # to be worth cutting: once `batch` below puts the orbit on 32 objects
     # instead of 128, going from K=4 to K=2 saves 0.5 of 114 MB per sample, i.e.
