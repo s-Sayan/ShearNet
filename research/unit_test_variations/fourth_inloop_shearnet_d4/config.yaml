@@ -39,6 +39,30 @@ model:
   gap: true
   dropout: 0.0
 
+  # ---- fusion positional encoding -----------------------------------------
+  # The cross-attention is where the galaxy map meets the PSF map, and it is the
+  # one place the architecture had a component chosen by convention rather than
+  # by the problem. 'learned' is a free vector per raster cell added to the
+  # tokens: absolute, additive, and not D4 covariant.
+  #
+  # 'rope2d' derives the encoding from the physics instead. The observation is
+  # galaxy (*) PSF, so the PSF's contribution to the image at p depends only on
+  # the offset d = p - p'; both maps reach the fusion through the same
+  # downsampling of the same centred stamp, so d is well defined between them.
+  # That fixes the encoding to be relative and to act on the queries and keys.
+  # D4 then adds one constraint: under the 90-degree element d = (du, dv) ->
+  # (-dv, du), which is realisable on the channel space only if the x- and
+  # y-pairs of each group SHARE a frequency -- the usual axial RoPE, with
+  # independently tuned per-axis schedules, is not covariant. The frequencies
+  # themselves are set by the extent of the map (one to three cycles over 12
+  # cells), not by the base-10000 schedule of text models, which on a 13-cell
+  # axis would put every high-k frequency at the identity.
+  #
+  # Three physical constraints, one design, no free parameters left over.
+  # tests/test_models.py pins the relative property, the covariance, and the
+  # failure of the independent-frequency control.
+  fusion_pos: rope2d
+
   # ---- the D4 schedule ----------------------------------------------------
   # Stage widths and residual depths of the shearnet-d4 backbones. The report's
   # values are features [32, 48, 64], galaxy depths [2, 2, 1] and PSF depths
@@ -129,7 +153,12 @@ train:
     # matrix gamma_weight already builds, so it costs no extra render.
     # See ISOTROPY_NOTE in shearnet/core/inloop.py.
     isotropy_weight: 1.0e-2
-    every_n_steps: 2
+    # 4, not 2. The response block is ~90% of the training step, and this is
+    # the only knob that moves it much: measured 9.81x -> 6.35x of a plain step
+    # (fourth_shearnet_k4/README.md), i.e. about -35% per epoch. orbit_k is not
+    # the lever (9.81 -> 9.0) and complement_weight is deliberately left on --
+    # it is the one term with no bias/variance trade against it.
+    every_n_steps: 4
     # Kept at 4. It was the obvious thing to cut for memory and it turns out not
     # to be worth cutting: once `batch` below puts the orbit on 32 objects
     # instead of 128, going from K=4 to K=2 saves 0.5 of 114 MB per sample, i.e.

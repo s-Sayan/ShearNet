@@ -701,6 +701,7 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
         d4_depths_galaxy=config.get("model.d4_depths_galaxy", None),
         d4_depths_psf=config.get("model.d4_depths_psf", None),
         orbit_scan=config.get("model.orbit_scan", True),
+        fusion_pos=config.get("model.fusion_pos", "learned"),
         response=response,
         noise_range=noise_range,
         noise_condition=noise_condition,

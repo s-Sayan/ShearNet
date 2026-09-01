@@ -122,6 +122,7 @@ def load_config(args):
         "d4_depths_galaxy": config.get("model.d4_depths_galaxy", None),
         "d4_depths_psf": config.get("model.d4_depths_psf", None),
         "orbit_scan": config.get("model.orbit_scan", True),
+        "fusion_pos": config.get("model.fusion_pos", "learned"),
         "output_keys": tuple(config.get("model.output_keys", ("g1", "g2"))),
         "mcal": args.mcal,
         "plot": args.plot or config.get("plotting.plot", False),
@@ -193,6 +194,7 @@ def load_model(config, gal_images, psf_images):
         d4_depths_galaxy=config.get("d4_depths_galaxy", None),
         d4_depths_psf=config.get("d4_depths_psf", None),
         orbit_scan=config.get("orbit_scan", True),
+        fusion_pos=config.get("fusion_pos", "learned"),
     )
 
     output_keys = tuple(config["output_keys"])

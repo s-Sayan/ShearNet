@@ -103,6 +103,21 @@ model:
   output_keys: ['g1', 'g2']
   gap: False
   fusion: "concat"  # Options: concat, transformer (fork-like / d4-fork-like only)
+  # Positional encoding of the transformer fusion's attention.
+  #   learned  one free vector per raster cell, added to the tokens (default,
+  #            so every existing checkpoint loads). Absolute, additive and
+  #            unstructured: neither a function of the displacement nor D4
+  #            covariant.
+  #   rope2d   relative 2D RoPE applied to the projected queries and keys. The
+  #            observation is galaxy (*) PSF, so the PSF's contribution at
+  #            offset d depends on d alone, and both maps reach the fusion
+  #            through the same downsampling of the same centred stamp. D4 then
+  #            forces the x- and y-pairs of each channel group to SHARE a
+  #            frequency (see _RoPE2DAttention), and the frequency schedule is
+  #            set by the extent of the map rather than copied from a text
+  #            model. No free parameters.
+  #   none     no positional information at all.
+  fusion_pos: "learned"
   
 # Training configuration
 training:

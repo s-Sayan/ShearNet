@@ -527,6 +527,7 @@ class SavedModelPredictor:
                 "d4_depths_galaxy": self.config.get("model.d4_depths_galaxy", None),
                 "d4_depths_psf": self.config.get("model.d4_depths_psf", None),
                 "orbit_scan": self.config.get("model.orbit_scan", True),
+                "fusion_pos": self.config.get("model.fusion_pos", "learned"),
                 "save_path": self.config.get("output.save_path"),
             },
             dummy,

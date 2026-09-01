@@ -935,6 +935,125 @@ class _ShearNetD4Backbone(nn.Module):
         return x
 
 
+#: Positional encodings available to the spatial fusion attention.
+FUSION_POSITIONAL = ("learned", "rope2d", "none")
+
+
+def _rope2d_frequencies(n_groups, extent, min_cycles=1.0, max_cycles=3.0):
+    """Geometric RoPE frequency schedule set by the GRID, not by a text default.
+
+    ``extent`` is the largest displacement along an axis -- 12 for the 13x13
+    map the fusion sees. The lowest frequency completes ``min_cycles`` over that
+    extent and the highest ``max_cycles``.
+
+    This is not a detail. The usual RoPE schedule (``base=10000``) is built for
+    sequences of thousands of tokens; transplanted onto a 13-cell axis it puts
+    every high-k frequency far below one cycle over the whole map, i.e. at the
+    identity, and the encoding would carry almost nothing. Tying the schedule to
+    the extent of the map is what makes the frequencies mean something here.
+    """
+    lo = 2.0 * jnp.pi * min_cycles / extent
+    hi = 2.0 * jnp.pi * max_cycles / extent
+    if n_groups == 1:
+        return jnp.asarray([lo])
+    k = jnp.arange(n_groups, dtype=jnp.float32) / (n_groups - 1)
+    return lo * (hi / lo) ** k
+
+
+def _rope2d_positions(h, w):
+    """``(h*w, 2)`` centred grid positions, row-major to match the token reshape."""
+    u = jnp.arange(h, dtype=jnp.float32) - (h - 1) / 2.0
+    v = jnp.arange(w, dtype=jnp.float32) - (w - 1) / 2.0
+    uu, vv = jnp.meshgrid(u, v, indexing="ij")
+    return jnp.stack([uu.reshape(-1), vv.reshape(-1)], axis=-1)
+
+
+def _apply_rope2d(x, pos, freqs):
+    """Rotate ``x`` ``(B, T, heads, d_head)`` by the 2D RoPE at positions ``pos``.
+
+    Channels are grouped in fours -- an x-pair and a y-pair -- and **both pairs
+    of a group use the same frequency**. That single constraint is the whole D4
+    content of the encoding, and it is what the usual "axial RoPE" (independent
+    frequency schedules per axis) gets wrong.
+
+    Why it is forced: under the 90-degree element the displacement transforms as
+    ``(du, dv) -> (-dv, du)``, so the rotated x-pair carries ``-w*dv`` and the
+    rotated y-pair ``w*du``. That is the original encoding with the two pairs
+    swapped and one conjugated -- realisable as an orthogonal map on the channel
+    space (``rho(r): (X, Y) -> (conj(Y), X)``, a signed permutation of four real
+    coordinates) **only if the two pairs share w**. With independent schedules no
+    such map exists and covariance fails outright.
+    """
+    d = x.shape[-1]
+    if d % 4:
+        raise ValueError(f"rope2d needs d_head divisible by 4, got {d}")
+    n_groups = d // 4
+    ang = jnp.stack(
+        [pos[:, 0][:, None] * freqs[None, :], pos[:, 1][:, None] * freqs[None, :]],
+        axis=-1,
+    ).reshape(pos.shape[0], 2 * n_groups)
+    cos = jnp.cos(ang)[None, :, None, :]
+    sin = jnp.sin(ang)[None, :, None, :]
+    xr = x.reshape(*x.shape[:-1], 2 * n_groups, 2)
+    a, b = xr[..., 0], xr[..., 1]
+    return jnp.stack([a * cos - b * sin, a * sin + b * cos], axis=-1).reshape(x.shape)
+
+
+class _RoPE2DAttention(nn.Module):
+    """Multi-head attention whose positional information is a relative 2D RoPE.
+
+    Flax's :class:`~flax.linen.MultiHeadDotProductAttention` exposes no hook on
+    the projected queries and keys, and RoPE has to act *there* -- not on the
+    tokens -- for the score to come out a function of the displacement alone. So
+    this is the same block written out.
+
+    The motivation is the measurement, not convention. The observation is a
+    convolution: the PSF's contribution to the image at position ``p`` depends
+    only on the offset ``d = p - p'``. Both maps reach the fusion through the
+    same downsampling of the same centred stamp, so ``d`` is well defined between
+    them, and an encoding that depends on anything else is describing something
+    the physics does not have.
+    """
+
+    d_model: int = 64
+    num_heads: int = 4
+    min_cycles: float = 1.0
+    max_cycles: float = 3.0
+
+    @nn.compact
+    def __call__(self, q_tokens, kv_tokens, q_grid, kv_grid):
+        if q_grid != kv_grid:
+            raise ValueError(
+                f"rope2d fusion needs the galaxy and PSF maps on the SAME grid "
+                f"(the displacement between them is the convolution variable); "
+                f"got {q_grid} and {kv_grid}"
+            )
+        batch, t_q = q_tokens.shape[0], q_tokens.shape[1]
+        t_kv = kv_tokens.shape[1]
+        heads = self.num_heads
+        d_head = self.d_model // heads
+
+        q = nn.Dense(self.d_model, use_bias=False, name="query")(q_tokens)
+        k = nn.Dense(self.d_model, use_bias=False, name="key")(kv_tokens)
+        v = nn.Dense(self.d_model, use_bias=False, name="value")(kv_tokens)
+        q = q.reshape(batch, t_q, heads, d_head)
+        k = k.reshape(batch, t_kv, heads, d_head)
+        v = v.reshape(batch, t_kv, heads, d_head)
+
+        freqs = _rope2d_frequencies(
+            d_head // 4, max(q_grid) - 1, self.min_cycles, self.max_cycles
+        )
+        q = _apply_rope2d(q, _rope2d_positions(*q_grid), freqs)
+        k = _apply_rope2d(k, _rope2d_positions(*kv_grid), freqs)
+
+        scores = jnp.einsum("bqhd,bkhd->bhqk", q, k) / jnp.sqrt(
+            jnp.asarray(d_head, q.dtype)
+        )
+        attn = jax.nn.softmax(scores, axis=-1)
+        out = jnp.einsum("bhqk,bkhd->bqhd", attn, v).reshape(batch, t_q, self.d_model)
+        return nn.Dense(self.d_model, use_bias=False, name="out")(out)
+
+
 class _D4SpatialTransformerFusion(nn.Module):
     """Transformer fusion that returns a *spatial* galaxy-frame feature map.
 
@@ -956,6 +1075,7 @@ class _D4SpatialTransformerFusion(nn.Module):
     num_heads: int = 4
     num_self_attn_layers: int = 1
     ffn_dim: int = 0
+    fusion_pos: str = "learned"
 
     def _ffn(self, tokens):
         """Pre-normalised residual feed-forward sublayer."""
@@ -965,6 +1085,11 @@ class _D4SpatialTransformerFusion(nn.Module):
     @nn.compact
     def __call__(self, galaxy_map, psf_map, deterministic: bool = True):
         """Fuse the two maps and return a galaxy-frame spatial feature map."""
+        if self.fusion_pos not in FUSION_POSITIONAL:
+            raise ValueError(
+                f"fusion_pos must be one of {list(FUSION_POSITIONAL)}, "
+                f"got {self.fusion_pos!r}"
+            )
         batch, H_g, W_g = galaxy_map.shape[0], galaxy_map.shape[1], galaxy_map.shape[2]
         H_p, W_p = psf_map.shape[1], psf_map.shape[2]
 
@@ -974,25 +1099,40 @@ class _D4SpatialTransformerFusion(nn.Module):
         gal_tokens = gal_proj.reshape(batch, H_g * W_g, self.d_model)
         psf_tokens = psf_proj.reshape(batch, H_p * W_p, self.d_model)
 
-        gal_pos = self.param(
-            "gal_pos_embed", nn.initializers.normal(0.02), (1, H_g * W_g, self.d_model)
-        )
-        psf_pos = self.param(
-            "psf_pos_embed", nn.initializers.normal(0.02), (1, H_p * W_p, self.d_model)
-        )
-        gal_tokens = gal_tokens + gal_pos
-        psf_tokens = psf_tokens + psf_pos
+        if self.fusion_pos == "learned":
+            # One free vector per raster cell, added to the tokens. Absolute,
+            # additive and unstructured: it is neither a function of the
+            # displacement (which is what a convolution depends on) nor D4
+            # covariant. Kept as the default so every existing checkpoint loads,
+            # and as the ablation arm against 'rope2d'.
+            gal_pos = self.param(
+                "gal_pos_embed", nn.initializers.normal(0.02), (1, H_g * W_g, self.d_model)
+            )
+            psf_pos = self.param(
+                "psf_pos_embed", nn.initializers.normal(0.02), (1, H_p * W_p, self.d_model)
+            )
+            gal_tokens = gal_tokens + gal_pos
+            psf_tokens = psf_tokens + psf_pos
+
+        def _attend(q_tokens, kv_tokens, q_grid, kv_grid):
+            if self.fusion_pos == "rope2d":
+                return _RoPE2DAttention(d_model=self.d_model, num_heads=self.num_heads)(
+                    q_tokens, kv_tokens, q_grid, kv_grid
+                )
+            return nn.MultiHeadDotProductAttention(num_heads=self.num_heads)(
+                q_tokens, kv_tokens
+            )
 
         gal_norm = nn.LayerNorm()(gal_tokens)
         psf_norm = nn.LayerNorm()(psf_tokens)
-        cross_out = nn.MultiHeadDotProductAttention(num_heads=self.num_heads)(gal_norm, psf_norm)
+        cross_out = _attend(gal_norm, psf_norm, (H_g, W_g), (H_p, W_p))
         gal_tokens = gal_tokens + cross_out
         if self.ffn_dim:
             gal_tokens = self._ffn(gal_tokens)
 
         for _ in range(self.num_self_attn_layers):
             gal_norm = nn.LayerNorm()(gal_tokens)
-            self_out = nn.MultiHeadDotProductAttention(num_heads=self.num_heads)(gal_norm, gal_norm)
+            self_out = _attend(gal_norm, gal_norm, (H_g, W_g), (H_g, W_g))
             gal_tokens = gal_tokens + self_out
             if self.ffn_dim:
                 gal_tokens = self._ffn(gal_tokens)
@@ -1026,6 +1166,7 @@ class _D4OrbitMember(nn.Module):
     d4_features: tuple = (32, 48, 64)
     d4_depths_galaxy: tuple = (2, 2, 1)
     d4_depths_psf: tuple = (1, 1, 1)
+    fusion_pos: str = "learned"
     deterministic: bool = False
 
     def _branch_map(self, branch, features, x, deterministic, psf=False):
@@ -1071,6 +1212,7 @@ class _D4OrbitMember(nn.Module):
             return _D4SpatialTransformerFusion(
                 d_model=self.d_model,
                 num_heads=self.num_heads,
+                fusion_pos=self.fusion_pos,
                 # Sec. 7.2: a width-256 GELU feed-forward after each attention
                 # sublayer. 0 keeps the attention-only block.
                 ffn_dim=256 if self.design == "shearnet-d4" else 0,
@@ -1178,6 +1320,11 @@ class D4ForkLike(nn.Module):
     d4_features: tuple = (32, 48, 64)
     d4_depths_galaxy: tuple = (2, 2, 1)
     d4_depths_psf: tuple = (1, 1, 1)
+    # Positional encoding of the fusion attention. See FUSION_POSITIONAL and
+    # _RoPE2DAttention: 'learned' is the historical absolute table (default, so
+    # every existing checkpoint loads), 'rope2d' the D4-covariant relative
+    # encoding, 'none' no positional information at all.
+    fusion_pos: str = "learned"
     # Run the eight-element orbit as a rematerialised scan rather than stacking
     # it on the batch axis. Bit-identical parameter tree, outputs equal to
     # float reassociation, ~7.8x less activation memory. See __call__.
@@ -1220,6 +1367,7 @@ class D4ForkLike(nn.Module):
             d4_features=self.d4_features,
             d4_depths_galaxy=self.d4_depths_galaxy,
             d4_depths_psf=self.d4_depths_psf,
+            fusion_pos=self.fusion_pos,
             deterministic=deterministic,
             name="orbit",
         )
@@ -1479,6 +1627,7 @@ def build_model(
     d4_depths_galaxy=None,
     d4_depths_psf=None,
     orbit_scan=True,
+    fusion_pos="learned",
 ):
     """Instantiate a top-level architecture from its ``nn`` name.
 
@@ -1539,6 +1688,7 @@ def build_model(
                 ("d4_depths_psf", d4_depths_psf),
             ) if v is not None},
             orbit_scan=bool(orbit_scan),
+            fusion_pos=str(fusion_pos or "learned"),
         )
     try:
         model_cls = SINGLE_BRANCH_MODELS[nn]

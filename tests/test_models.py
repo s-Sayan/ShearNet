@@ -10,6 +10,7 @@ pytest.importorskip("jax")
 pytest.importorskip("flax")
 
 import jax  # noqa: E402
+import numpy as np  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 import jax.random as random  # noqa: E402
 
@@ -485,3 +486,175 @@ def test_registries_build_instances():
         assert isinstance(build_model(name), cls)
     for name, cls in BRANCH_MODELS.items():
         assert isinstance(build_branch_model(name), cls)
+
+
+# ----------------------------------------------------------------------
+# relative 2D RoPE in the fusion attention
+# ----------------------------------------------------------------------
+def _rope_scores(x_q, x_k, pos_q, pos_k, freqs):
+    """Single-head attention logits under the 2D RoPE, without the softmax."""
+    from shearnet.core.models import _apply_rope2d
+
+    q = _apply_rope2d(x_q[None, :, None, :], pos_q, freqs)[0, :, 0]
+    k = _apply_rope2d(x_k[None, :, None, :], pos_k, freqs)[0, :, 0]
+    return q @ k.T
+
+
+def test_rope2d_score_depends_only_on_the_displacement():
+    """The convolution argument, made structural.
+
+    The observation is galaxy (*) PSF, so the PSF's contribution at offset d
+    depends on d alone. A positional encoding that respects that has to give an
+    attention score which is unchanged when both grids are translated together.
+    """
+    from shearnet.core.models import _rope2d_frequencies, _rope2d_positions
+
+    h = w = 13
+    d_head = 16
+    freqs = _rope2d_frequencies(d_head // 4, h - 1)
+    pos = _rope2d_positions(h, w)
+    q = random.normal(random.PRNGKey(1), (h * w, d_head))
+    k = random.normal(random.PRNGKey(2), (h * w, d_head))
+
+    base = _rope_scores(q, k, pos, pos, freqs)
+    shift = jnp.array([3.0, -2.0])
+    moved = _rope_scores(q, k, pos + shift, pos + shift, freqs)
+
+    scale = float(jnp.std(base))
+    assert scale > 1.0, "degenerate test: the scores carry no signal"
+    assert float(jnp.max(jnp.abs(base - moved))) < 1e-4 * scale
+
+
+def test_rope2d_is_d4_covariant_only_with_shared_axis_frequencies():
+    """The one constraint D4 imposes on the encoding, and its control.
+
+    Under the 90-degree element d = (du, dv) -> (-dv, du), so the rotated x-pair
+    carries -w*dv and the rotated y-pair w*du: the original with the pairs
+    swapped and one conjugated. That is realisable on the channel space by
+    rho(r): (X, Y) -> (conj(Y), X) -- a signed permutation of four real
+    coordinates, hence orthogonal, hence score-preserving -- but ONLY if both
+    pairs of a group share the frequency. Independent per-axis schedules (the
+    usual "axial RoPE") admit no such map, and this pins that difference rather
+    than trusting the derivation.
+    """
+    from shearnet.core.models import _rope2d_frequencies, _rope2d_positions
+
+    h = w = 13
+    d_head = 16
+    freqs = _rope2d_frequencies(d_head // 4, h - 1)
+    pos = _rope2d_positions(h, w)
+    q = random.normal(random.PRNGKey(1), (h * w, d_head))
+    k = random.normal(random.PRNGKey(2), (h * w, d_head))
+
+    def rho_r(x):
+        xr = x.reshape(*x.shape[:-1], -1, 4)
+        x_a, x_b, y_a, y_b = xr[..., 0], xr[..., 1], xr[..., 2], xr[..., 3]
+        return jnp.stack([y_a, -y_b, x_a, x_b], axis=-1).reshape(x.shape)
+
+    rot = jnp.rot90(jnp.arange(h * w).reshape(h, w), 1).reshape(-1)
+    base = _rope_scores(q, k, pos, pos, freqs)
+    scale = float(jnp.std(base))
+
+    covariant = _rope_scores(rho_r(q)[rot], rho_r(k)[rot], pos, pos, freqs)
+    assert float(jnp.max(jnp.abs(covariant - base[jnp.ix_(rot, rot)]))) < 1e-4 * scale
+
+    # the control: tune the two axes independently and covariance is destroyed
+    def split_scores(x_q, x_k):
+        fx, fy = freqs, freqs * 1.7
+        n = d_head // 4
+
+        def enc(x, p):
+            ang = jnp.stack(
+                [p[:, 0][:, None] * fx[None, :], p[:, 1][:, None] * fy[None, :]], axis=-1
+            ).reshape(p.shape[0], 2 * n)
+            xr = x.reshape(*x.shape[:-1], 2 * n, 2)
+            a, b = xr[..., 0], xr[..., 1]
+            c, s = jnp.cos(ang), jnp.sin(ang)
+            return jnp.stack([a * c - b * s, a * s + b * c], axis=-1).reshape(x.shape)
+
+        return enc(x_q, pos) @ enc(x_k, pos).T
+
+    split = split_scores(q, k)
+    split_rot = split_scores(rho_r(q)[rot], rho_r(k)[rot])
+    assert float(jnp.max(jnp.abs(split_rot - split[jnp.ix_(rot, rot)]))) > 0.5 * scale
+
+
+def test_rope2d_frequencies_are_set_by_the_grid_not_a_text_default():
+    """Frequencies must resolve the map, not a thousand-token sequence."""
+    from shearnet.core.models import _rope2d_frequencies
+
+    freqs = _rope2d_frequencies(4, extent=12, min_cycles=1.0, max_cycles=3.0)
+    cycles = np.asarray(freqs) * 12 / (2 * np.pi)
+    assert np.isclose(cycles[0], 1.0) and np.isclose(cycles[-1], 3.0)
+    # every frequency completes at least one cycle over the map: none is inert
+    assert (cycles >= 1.0).all()
+    assert _rope2d_frequencies(1, extent=12).shape == (1,)
+
+
+@pytest.mark.parametrize("fusion_pos", ["learned", "rope2d", "none"])
+def test_fusion_pos_keeps_the_model_equivariant(fusion_pos):
+    """Whatever the encoding, the spin-2 contract is not negotiable."""
+    model = build_model(
+        "d4-fork-like",
+        galaxy_type="shearnet-d4",
+        psf_type="shearnet-d4",
+        fusion="transformer",
+        fusion_pos=fusion_pos,
+    )
+    gal = random.normal(random.PRNGKey(2), (2, 24, 24))
+    psf = random.normal(random.PRNGKey(3), (2, 24, 24))
+    output_keys = ("g1", "g2", "hlr", "flux")
+    params = model.init(random.PRNGKey(0), gal, psf, output_keys=output_keys)
+    out = model.apply(params, gal, psf, output_keys=output_keys, deterministic=True)
+    assert out.shape == (2, 4)
+
+    out_rot = model.apply(
+        params,
+        jnp.rot90(gal, 1, axes=(1, 2)),
+        jnp.rot90(psf, 1, axes=(1, 2)),
+        output_keys=output_keys,
+        deterministic=True,
+    )
+    assert jnp.allclose(out_rot[:, :2], -out[:, :2], atol=1e-5)
+    assert jnp.allclose(out_rot[:, 2:], out[:, 2:], atol=1e-5)
+
+    out_mir = model.apply(
+        params,
+        jnp.flip(gal, axis=1),
+        jnp.flip(psf, axis=1),
+        output_keys=output_keys,
+        deterministic=True,
+    )
+    assert jnp.allclose(out_mir[:, :2], out[:, :2] * jnp.array([1.0, -1.0]), atol=1e-5)
+
+
+def test_fusion_pos_default_is_the_historical_learned_table():
+    """The default must stay 'learned', or every saved checkpoint stops loading."""
+    kw = dict(
+        galaxy_type="shearnet-d4", psf_type="shearnet-d4", fusion="transformer"
+    )
+    gal, psf = jnp.ones((2, 24, 24)), jnp.ones((2, 24, 24))
+
+    def tree(**extra):
+        model = build_model("d4-fork-like", **kw, **extra)
+        p = model.init(random.PRNGKey(0), gal, psf, output_keys=("g1", "g2"))
+        return jax.tree_util.tree_leaves_with_path(p)
+
+    default, explicit = tree(), tree(fusion_pos="learned")
+    assert [k for k, _ in default] == [k for k, _ in explicit]
+    for (_, a), (_, b) in zip(default, explicit):
+        assert jnp.array_equal(a, b)
+
+    names = " ".join(str(k) for k, _ in default)
+    assert "pos_embed" in names, "the learned table should exist under 'learned'"
+    for pos in ("rope2d", "none"):
+        assert "pos_embed" not in " ".join(str(k) for k, _ in tree(fusion_pos=pos))
+
+
+def test_unknown_fusion_pos_is_rejected():
+    model = build_model(
+        "d4-fork-like", galaxy_type="shearnet-d4", psf_type="shearnet-d4",
+        fusion="transformer", fusion_pos="sinusoidal",
+    )
+    with pytest.raises(ValueError, match="fusion_pos"):
+        model.init(random.PRNGKey(0), jnp.ones((1, 24, 24)), jnp.ones((1, 24, 24)))
