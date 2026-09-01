@@ -658,3 +658,118 @@ def test_unknown_fusion_pos_is_rejected():
     )
     with pytest.raises(ValueError, match="fusion_pos"):
         model.init(random.PRNGKey(0), jnp.ones((1, 24, 24)), jnp.ones((1, 24, 24)))
+
+
+# ----------------------------------------------------------------------
+# nothing about the model is inferred behind the config's back
+# ----------------------------------------------------------------------
+def _n_params(**kw):
+    model = build_model("d4-fork-like", **kw)
+    p = model.init(
+        random.PRNGKey(0), jnp.ones((2, 24, 24)), jnp.ones((2, 24, 24)),
+        output_keys=("g1", "g2", "hlr", "flux"),
+    )
+    return sum(x.size for x in jax.tree_util.tree_leaves(p))
+
+
+def test_design_defaults_to_the_historical_inference():
+    """``design=None`` must reproduce what was previously inferred.
+
+    Every existing config and checkpoint depends on it, so the explicit key is
+    additive: naming the design cannot change a model that did not name it.
+    """
+    for branch, expected in (("shearnet-d4", "shearnet-d4"), ("d4cnn", "d4cnn")):
+        kw = dict(galaxy_type=branch, psf_type=branch, fusion="transformer")
+        assert _n_params(**kw) == _n_params(design=expected, **kw)
+
+
+def test_design_is_separable_from_the_backbone():
+    """The point of exposing it: swap ONE thing at a time.
+
+    ``design`` fixes the fusion feed-forward, the odd-MLP depth and the scalar
+    head. Inferring it from the backbone made the 'old backbone' ablation five
+    simultaneous changes, so the two must now be independently settable.
+    """
+    kw = dict(fusion="transformer")
+    backbone_only = _n_params(galaxy_type="d4cnn", psf_type="d4cnn",
+                              design="shearnet-d4", **kw)
+    both = _n_params(galaxy_type="d4cnn", psf_type="d4cnn", design="d4cnn", **kw)
+    shearnet = _n_params(galaxy_type="shearnet-d4", psf_type="shearnet-d4",
+                         design="shearnet-d4", **kw)
+    # holding the design fixed, the backbone swap is a smaller change than the
+    # package deal -- i.e. the two axes are genuinely separate
+    assert backbone_only != both
+    assert backbone_only != shearnet
+
+
+_FUSION_KW = dict(galaxy_type="shearnet-d4", psf_type="shearnet-d4",
+                  fusion="transformer", head="attention", design="shearnet-d4")
+
+
+@pytest.mark.parametrize(
+    "knob,value",
+    [("d_model", 32), ("num_pool_heads", 2), ("num_self_attn_layers", 2),
+     ("ffn_dim", 0)],
+)
+def test_every_fusion_knob_actually_reaches_the_model(knob, value):
+    """A config key that changes nothing is worse than no key at all."""
+    assert _n_params(**_FUSION_KW) != _n_params(**{knob: value}, **_FUSION_KW)
+
+
+def test_num_heads_reaches_the_model_even_though_it_adds_no_parameters():
+    """``num_heads`` splits d_model; it does not change the projection sizes.
+
+    The parameter COUNT is therefore identical either way, which makes a count
+    a useless probe for this knob. Flax stores the attention projections as
+    ``(d_model, heads, head_dim)``, so the leaf shapes do differ -- same total,
+    different tree. Assert both halves, so the test says what it means.
+    """
+    gal = psf = jnp.ones((2, 24, 24))
+
+    def shapes(heads):
+        model = build_model("d4-fork-like", num_heads=heads, **_FUSION_KW)
+        p = model.init(random.PRNGKey(0), gal, psf, output_keys=("g1", "g2"))
+        return [x.shape for x in jax.tree_util.tree_leaves(p)]
+
+    four, two = shapes(4), shapes(2)
+    assert sum(np.prod(s) for s in four) == sum(np.prod(s) for s in two)
+    assert four != two, "num_heads did not reach the attention blocks"
+
+
+def test_d4_fork_like_refuses_gap():
+    """It was accepted and silently ignored; a config asking for it got something
+    else without being told. The orbit alignment needs spatial maps."""
+    model = build_model("d4-fork-like", galaxy_type="shearnet-d4",
+                        psf_type="shearnet-d4", fusion="transformer")
+    gal = psf = jnp.ones((2, 24, 24))
+    with pytest.raises(ValueError, match="gap"):
+        model.init(random.PRNGKey(0), gal, psf, ("g1", "g2"), False, True)
+    # and the supported path is unaffected
+    assert model.init(random.PRNGKey(0), gal, psf, ("g1", "g2"), False, False)
+
+
+def test_the_lin_et_al_model_is_reachable_from_config_alone():
+    """The acceptance criterion: no setting is implicit.
+
+    Their specification is the d4cnn backbone at five layers of width 32, its
+    own fusion and head layout (no feed-forward sublayer, one hidden layer in
+    the odd MLP, a shared scalar head), and the fixed Gaussian pooling window.
+    """
+    model = build_model(
+        "d4-fork-like",
+        galaxy_type="d4cnn", psf_type="d4cnn",
+        branch_features=[32, 32, 32, 32, 32],
+        fusion="transformer", head="gap", design="d4cnn",
+        d_model=64, num_heads=4, num_self_attn_layers=1, ffn_dim=0,
+        fusion_pos="learned",
+    )
+    gal = random.normal(random.PRNGKey(2), (2, 24, 24))
+    psf = random.normal(random.PRNGKey(3), (2, 24, 24))
+    params = model.init(random.PRNGKey(0), gal, psf, output_keys=("g1", "g2"))
+    out = model.apply(params, gal, psf, output_keys=("g1", "g2"), deterministic=True)
+    assert out.shape == (2, 2)
+    out_rot = model.apply(
+        params, jnp.rot90(gal, 1, axes=(1, 2)), jnp.rot90(psf, 1, axes=(1, 2)),
+        output_keys=("g1", "g2"), deterministic=True,
+    )
+    assert jnp.allclose(out_rot, -out, atol=1e-5)

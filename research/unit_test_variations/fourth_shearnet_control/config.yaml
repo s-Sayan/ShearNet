@@ -48,7 +48,9 @@ model:
   # smaller backbone than the architecture it is named for.
   branch_features: [32, 32, 32, 32, 32]
   output_keys: [g1, g2, hlr, flux]
-  gap: true
+  # d4-fork-like refuses gap=True: the orbit alignment needs spatial
+  # maps. Pooling is chosen by `head`. This was always ignored here.
+  gap: false
   # dropout is a genuine no-op for d4cnn branches -- only `research_backed`
   # consumes it -- so it is left off rather than set for appearance.
   dropout: 0.0

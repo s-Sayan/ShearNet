@@ -38,7 +38,9 @@ model:
   psf_branch: d4cnn
   branch_features: [32, 32, 32, 32, 32]
   output_keys: [g1, g2, hlr, flux]
-  gap: true
+  # d4-fork-like refuses gap=True: the orbit alignment needs spatial
+  # maps. Pooling is chosen by `head`. This was always ignored here.
+  gap: false
   dropout: 0.0
 
 train:

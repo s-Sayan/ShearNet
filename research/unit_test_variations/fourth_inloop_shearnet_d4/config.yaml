@@ -36,7 +36,9 @@ model:
   galaxy_branch: shearnet-d4
   psf_branch: shearnet-d4
   output_keys: [g1, g2, hlr, flux]
-  gap: true
+  # d4-fork-like refuses gap=True: the orbit alignment needs spatial
+  # maps. Pooling is chosen by `head`. This was always ignored here.
+  gap: false
   dropout: 0.0
 
   # ---- fusion positional encoding -----------------------------------------
@@ -62,6 +64,22 @@ model:
   # tests/test_models.py pins the relative property, the covariance, and the
   # failure of the independent-frequency control.
   fusion_pos: rope2d
+
+  # ---- the design, stated rather than inferred -----------------------------
+  # `design` names a published SPECIFICATION -- branches, fusion and heads
+  # together. It used to be inferred from galaxy_branch, which meant swapping
+  # the backbone for an ablation ALSO swapped the fusion feed-forward (256 ->
+  # 0), the odd-MLP depth (two hidden layers -> one) and the scalar head
+  # (per-key linear -> one shared layer): five changes reported as one. Naming
+  # it here makes the backbone arm a single-variable arm.
+  design: shearnet-d4
+  # Fusion and head sizes, all settable. Omit any of them to take this design's
+  # value; nothing about the model is inferred behind your back.
+  d_model: 64
+  num_heads: 4
+  num_self_attn_layers: 1
+  ffn_dim: 256              # Sec. 7.2; 0 is the attention-only block
+  num_pool_heads: 4         # head: attention -- see the pooling diagnostic
 
   # ---- the D4 schedule ----------------------------------------------------
   # Stage widths and residual depths of the shearnet-d4 backbones. The report's

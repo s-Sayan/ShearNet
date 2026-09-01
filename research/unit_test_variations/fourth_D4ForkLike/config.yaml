@@ -36,8 +36,9 @@ model:
   galaxy_branch: d4cnn
   psf_branch:    d4cnn
   output_keys: [g1, g2, hlr, flux]
-  gap: true
-
+  # d4-fork-like refuses gap=True: the orbit alignment needs spatial
+  # maps. Pooling is chosen by `head`. This was always ignored here.
+  gap: false
 train:
   seed: 42
   samples: 300000

@@ -1167,6 +1167,8 @@ class _D4OrbitMember(nn.Module):
     d4_depths_galaxy: tuple = (2, 2, 1)
     d4_depths_psf: tuple = (1, 1, 1)
     fusion_pos: str = "learned"
+    num_self_attn_layers: int = 1
+    ffn_dim: int = 0
     deterministic: bool = False
 
     def _branch_map(self, branch, features, x, deterministic, psf=False):
@@ -1213,9 +1215,11 @@ class _D4OrbitMember(nn.Module):
                 d_model=self.d_model,
                 num_heads=self.num_heads,
                 fusion_pos=self.fusion_pos,
+                num_self_attn_layers=self.num_self_attn_layers,
                 # Sec. 7.2: a width-256 GELU feed-forward after each attention
-                # sublayer. 0 keeps the attention-only block.
-                ffn_dim=256 if self.design == "shearnet-d4" else 0,
+                # sublayer. 0 keeps the attention-only block. Set explicitly by
+                # D4ForkLike -- no longer inferred here.
+                ffn_dim=self.ffn_dim,
             )(galaxy_map, psf_map, deterministic=deterministic)
         # 'concat': summarise the PSF as a global descriptor and broadcast it
         # onto every galaxy spatial location, keeping the galaxy spatial frame.
@@ -1325,6 +1329,10 @@ class D4ForkLike(nn.Module):
     # every existing checkpoint loads), 'rope2d' the D4-covariant relative
     # encoding, 'none' no positional information at all.
     fusion_pos: str = "learned"
+    # Fusion block structure. Both are part of a `design`, but they are settable
+    # on their own so an ablation can move one without the package.
+    num_self_attn_layers: int = 1
+    ffn_dim: int = 0
     # Run the eight-element orbit as a rematerialised scan rather than stacking
     # it on the batch axis. Bit-identical parameter tree, outputs equal to
     # float reassociation, ~7.8x less activation memory. See __call__.
@@ -1342,12 +1350,30 @@ class D4ForkLike(nn.Module):
     ):
         """Run the D4 orbit, build equivariant features, and return predictions.
 
+        ``gap`` must be false here. For :class:`ForkLike` it makes the branches
+        return a globally averaged vector instead of a spatial map; this model
+        cannot accept that, because the orbit alignment
+        (``_d4_inverse_apply``) acts on spatial maps and a pooled vector has no
+        spatial structure left to un-rotate. The equivariant construction is
+        the pooling, and it happens after alignment. It was previously accepted
+        and silently ignored, so a config asking for it got something else
+        without being told; it is now refused. Choose the pooling with ``head``
+        (``'gap'`` for the fixed D4 Gaussian window, ``'attention'`` for the
+        learned maps).
+
         When ``capture_attention`` is true, the four spatial pooling maps are
         exposed in Flax's ``intermediates`` collection under
         ``"pool_attention"``.  The default is false so model initialisation and
         ordinary prediction keep exactly the same variable tree and return
         value as before.
         """
+        if gap:
+            raise ValueError(
+                "d4-fork-like does not support gap=True: the orbit alignment "
+                "needs spatial maps, and the equivariant pooling happens after "
+                "it. Set model.gap false and choose the pooling with "
+                "model.head ('gap' or 'attention')."
+            )
         if galaxy_image.ndim == 2:
             galaxy_image = jnp.expand_dims(galaxy_image, axis=0)
         if psf_image.ndim == 2:
@@ -1368,6 +1394,8 @@ class D4ForkLike(nn.Module):
             d4_depths_galaxy=self.d4_depths_galaxy,
             d4_depths_psf=self.d4_depths_psf,
             fusion_pos=self.fusion_pos,
+            num_self_attn_layers=self.num_self_attn_layers,
+            ffn_dim=self.ffn_dim,
             deterministic=deterministic,
             name="orbit",
         )
@@ -1628,6 +1656,12 @@ def build_model(
     d4_depths_psf=None,
     orbit_scan=True,
     fusion_pos="learned",
+    design=None,
+    d_model=None,
+    num_heads=None,
+    num_pool_heads=None,
+    num_self_attn_layers=None,
+    ffn_dim=None,
 ):
     """Instantiate a top-level architecture from its ``nn`` name.
 
@@ -1668,6 +1702,10 @@ def build_model(
         # to say so rather than inherit a smaller network silently.
         widths = tuple(branch_features) if branch_features else (16, 32)
         galaxy_branch = _d4_branch(galaxy_type)
+        resolved_design = design or (
+            "shearnet-d4" if galaxy_branch == "shearnet-d4" else "d4cnn"
+        )
+        default_ffn = 256 if resolved_design == "shearnet-d4" else 0
         return D4ForkLike(
             fusion=fusion,
             galaxy_branch=galaxy_branch,
@@ -1676,11 +1714,14 @@ def build_model(
             psf_features=widths,
             head=head or "gap",
             dropout=dropout or 0.0,
-            # The ShearNet-D4 report specifies branches, fusion and heads as one
-            # architecture, so selecting its galaxy backbone also selects its
-            # fusion feed-forward sublayers and its head depths. Every other
-            # branch keeps the existing layout.
-            design="shearnet-d4" if galaxy_branch == "shearnet-d4" else "d4cnn",
+            # `design` names a published SPECIFICATION -- branches, fusion and
+            # heads together -- and so it also fixes the head depths and the
+            # scalar-head layout. It is an explicit setting: None reproduces the
+            # historical inference from the galaxy backbone so every existing
+            # config and checkpoint is unchanged, and naming it lets an ablation
+            # swap the backbone WITHOUT also swapping the fusion and the head,
+            # which is otherwise five changes reported as one.
+            design=str(resolved_design),
             # 'shearnet-d4' branch schedule. None keeps the report's numbers.
             **{k: tuple(v) for k, v in (
                 ("d4_features", d4_features),
@@ -1689,6 +1730,15 @@ def build_model(
             ) if v is not None},
             orbit_scan=bool(orbit_scan),
             fusion_pos=str(fusion_pos or "learned"),
+            # Fusion/head sizes. None keeps this design's value; an explicit
+            # number overrides it, so nothing about the model is inferred.
+            **{k: v for k, v in (
+                ("d_model", d_model),
+                ("num_heads", num_heads),
+                ("num_pool_heads", num_pool_heads),
+                ("num_self_attn_layers", num_self_attn_layers),
+                ("ffn_dim", ffn_dim if ffn_dim is not None else default_ffn),
+            ) if v is not None},
         )
     try:
         model_cls = SINGLE_BRANCH_MODELS[nn]

@@ -117,6 +117,12 @@ def train_model_inloop(
     d4_depths_psf=None,
     orbit_scan=True,
     fusion_pos="learned",
+    design=None,
+    d_model=None,
+    num_heads=None,
+    num_pool_heads=None,
+    num_self_attn_layers=None,
+    ffn_dim=None,
 ):
     """Train with stamps generated inside the jitted step.
 
@@ -211,6 +217,12 @@ def train_model_inloop(
         d4_depths_psf=d4_depths_psf,
         orbit_scan=orbit_scan,
         fusion_pos=fusion_pos,
+        design=design,
+        d_model=d_model,
+        num_heads=num_heads,
+        num_pool_heads=num_pool_heads,
+        num_self_attn_layers=num_self_attn_layers,
+        ffn_dim=ffn_dim,
     )
     use_dropout = bool(dropout) and dropout > 0.0
     if use_dropout:

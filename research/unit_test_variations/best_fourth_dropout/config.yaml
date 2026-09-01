@@ -38,7 +38,9 @@ model:
   galaxy_branch: research_backed
   psf_branch:    forklens_psf
   output_keys: [g1, g2, hlr, flux]
-  gap: true
+  # d4-fork-like refuses gap=True: the orbit alignment needs spatial
+  # maps. Pooling is chosen by `head`. This was always ignored here.
+  gap: false
   # Spatial-dropout rate on the (high-capacity) research_backed galaxy branch.
   # This is the STRONGER anti-overfit lever after weight_decay. 0.0 = off (no
   # dropout layer created; identical to before). It is stochastic only during
