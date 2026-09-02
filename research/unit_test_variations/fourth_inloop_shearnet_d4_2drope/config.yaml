@@ -131,7 +131,7 @@ model:
 
 train:
   seed: 42
-  samples: 3000
+  samples: 300000
   epochs: 60
   # Back to 128 now that the orbit scans and the response terms run on a
   # sub-batch (see train.response.batch below). The 8 here was an OOM
@@ -201,7 +201,7 @@ train:
 
 eval:
   seed: 150
-  n_obs: 2000
+  n_obs: 200000
   gal_model: gauss
 
   evaluate:

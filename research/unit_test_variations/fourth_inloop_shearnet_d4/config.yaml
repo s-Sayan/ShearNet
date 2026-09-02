@@ -159,7 +159,7 @@ train:
 
 eval:
   seed: 150
-  n_obs: 2000
+  n_obs: 200000
   gal_model: gauss
 
   evaluate:
