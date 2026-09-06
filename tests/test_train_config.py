@@ -1,7 +1,7 @@
 """Unit tests for the training CLI config resolver (``build_train_config``).
 
-These exercise pure configuration resolution and the ``process_psf`` /
-``fork-like`` fixup, so they do not need the heavy GalSim/ngmix runtime. The
+These exercise pure configuration resolution, so they do not need the heavy
+GalSim/ngmix runtime. The
 ``importorskip`` guards keep collection clean where those import-time
 dependencies of the package are unavailable.
 """
@@ -43,7 +43,6 @@ _SHARED_KEYS = {
     "eval_interval": "training.eval_interval",
     "stamp_size": "dataset.stamp_size",
     "pixel_size": "dataset.pixel_size",
-    "process_psf": "model.process_psf",
     "galaxy_type": "model.galaxy.type",
     "psf_type": "model.psf.type",
     "fusion": "model.fusion",
@@ -93,19 +92,47 @@ def test_cli_overrides_apply(tmp_path, monkeypatch):
     assert cfg.get("dataset.samples") == 256
 
 
-def test_process_psf_forces_fork_like(tmp_path, monkeypatch):
-    monkeypatch.setenv("SHEARNET_DATA_PATH", str(tmp_path))
-    cfg = build_train_config(create_parser().parse_args(["--process_psf"]))
-    assert cfg.get("model.type") == "fork-like"
-    assert cfg.get("model.galaxy.type") == _CLI_DEFAULTS["galaxy_type"]
-    assert cfg.get("model.psf.type") == _CLI_DEFAULTS["psf_type"]
+def test_fork_like_is_honoured_as_asked_for(tmp_path, monkeypatch):
+    """The architecture is the request; nothing rewrites it behind the caller.
 
-
-def test_fork_like_reverts_without_process_psf(tmp_path, monkeypatch):
+    The old ``--process_psf`` flag asked the same question as ``--nn`` and the
+    two could contradict each other, which the CLI resolved by silently
+    replacing the model. A config could therefore train something it did not
+    name.
+    """
     monkeypatch.setenv("SHEARNET_DATA_PATH", str(tmp_path))
     cfg = build_train_config(create_parser().parse_args(["--nn", "fork-like"]))
-    # Without --process_psf the fork-like model is unsupported and reverts.
-    assert cfg.get("model.type") == "cnn"
+    assert cfg.get("model.type") == "fork-like"
+
+
+def test_legacy_process_psf_key_still_loads(tmp_path, monkeypatch):
+    """Every training_config.yaml written before the removal carries this key.
+
+    Those runs have to stay re-evaluable, so the key is inert rather than
+    rejected.
+    """
+    monkeypatch.setenv("SHEARNET_DATA_PATH", str(tmp_path))
+    path = tmp_path / "legacy.yaml"
+    path.write_text(
+        "model:\n  type: d4-fork-like\n  process_psf: true\n  output_keys: [g1, g2]\n"
+    )
+    cfg = build_train_config(create_parser().parse_args(["--config", str(path)]))
+    assert cfg.get("model.type") == "d4-fork-like"
+
+
+def test_disagreeing_legacy_key_warns_and_does_not_rewrite_the_model(
+    tmp_path, monkeypatch, caplog
+):
+    """A contradiction is worth saying out loud, not worth acting on."""
+    monkeypatch.setenv("SHEARNET_DATA_PATH", str(tmp_path))
+    path = tmp_path / "legacy.yaml"
+    path.write_text(
+        "model:\n  type: d4-fork-like\n  process_psf: false\n  output_keys: [g1, g2]\n"
+    )
+    with caplog.at_level("WARNING"):
+        cfg = build_train_config(create_parser().parse_args(["--config", str(path)]))
+    assert cfg.get("model.type") == "d4-fork-like"
+    assert "process_psf" in caplog.text
 
 
 def test_config_file_mode(tmp_path, monkeypatch):

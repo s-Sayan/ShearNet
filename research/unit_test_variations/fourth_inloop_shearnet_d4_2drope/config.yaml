@@ -319,6 +319,26 @@ eval:
     # the worker count, so reproducing an m bit-for-bit means reproducing this.
     ngmix_nproc: null
 
+    # ---- how much per-object detail reaches the file -----------------------
+    # The measurement is the same at every level; this only chooses what
+    # survives to disk. The derived tables (SUMMARY / BINNED / LEAKSUM) are
+    # computed upstream at full precision and are byte-identical either way.
+    #
+    #   paper    (default) every shape and response measured, minus the crossed
+    #            pairs no reported number divides by (ngmix's direct R^gamma,
+    #            ShearNet's metacal columns) and the auxiliaries no table
+    #            carries, stored float32. Everything m, c, alpha, beta and the
+    #            binned trends are derived from. ~3.1x smaller.
+    #   summary  no per-object tables at all -- kilobytes. The right level for
+    #            an ablation arm, which reports four scalars and nothing else.
+    #   full     every column, still float32. For debugging a response.
+    #
+    # Measured on the production schema at n_obs 200000: 1.59 GB -> 512 MB at
+    # `paper` with component: both, 256 MB with component: 0, 25 kB at
+    # `summary`. research/shear_bias/shrink_fits.py applies the same policy to
+    # files already written.
+    catalog_level: paper
+
     # One file, every time:
     #   TAB_P / TAB_M  the +/- shear populations, one row per object, carrying
     #                  e_<est>_uncorrected (original image),

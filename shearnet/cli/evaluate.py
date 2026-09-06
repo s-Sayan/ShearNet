@@ -26,6 +26,7 @@ from ..utils.normalization import (
 )
 
 from ..logging_utils import ansi, get_logger
+from shearnet.core.models import is_fork_model
 
 logger = get_logger(__name__)
 
@@ -107,7 +108,7 @@ def load_config(args):
         "pixel_size": config.get("dataset.pixel_size", 0.141),
         "apply_psf_shear": config.get("dataset.apply_psf_shear", False),
         "psf_shear_range": config.get("dataset.psf_shear_range", 0.05),
-        "process_psf": config.get("model.process_psf", False),
+        "process_psf": is_fork_model(config.get("model.type")),
         "nn": config.get("model.type", "cnn"),
         "galaxy_type": config.get("model.galaxy.type", "research_backed"),
         "psf_type": config.get("model.psf.type", "forklens_psf"),

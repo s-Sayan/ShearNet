@@ -124,6 +124,14 @@ from shearnet.methods.anacal import (
 )
 from shearnet.methods.anacal_fit import measure_gauss_fit
 
+try:  # a sibling module; this file is run both as a script and as a module
+    from .catalog import resolve_level, write_evaluation_fits
+except ImportError:  # pragma: no cover - direct-script invocation
+    import sys as _sys
+
+    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from catalog import resolve_level, write_evaluation_fits
+
 logger = get_logger(__name__)
 
 #: Estimators this harness runs.
@@ -783,12 +791,18 @@ def _run_evaluation(benchmark: Config, training: Config, estimators) -> dict:
 
     One pass produces: the plus/minus shear populations with per-object
     ellipticities and both response matrices, the PSF-leakage table, the
-    ensemble m/c for each (estimator, correction) pair, and the timing. There
-    is deliberately no way to ask for a subset -- a benchmark that sometimes
-    writes half its columns is a benchmark whose outputs cannot be compared.
+    ensemble m/c for each (estimator, correction) pair, and the timing. Every
+    estimator is always measured under every correction -- a benchmark that
+    sometimes measures half its columns is one whose outputs cannot be
+    compared. ``catalog_level`` chooses how much of the per-object detail
+    survives to the file, which is a storage decision taken after the fact and
+    never a measurement one; the derived tables are identical at every level.
     """
     renderer = _renderer(benchmark, training)
     section = _section(benchmark, "evaluate")
+    # Validated here rather than at write time: a typo should cost a second,
+    # not the two hours of measurement that precede the write.
+    resolve_level(section.get("catalog_level"))
     seed = int(_eval(benchmark, "seed"))
     samples = int(_eval(benchmark, "n_obs", benchmark.get("evaluation.test_samples")))
     shear = float(section.get("shear_true", 0.01))
@@ -1580,8 +1594,24 @@ def _write_evaluation_fits(benchmark, section, tables, leakage_columns, result):
     measured component, one row per object; a second measured component adds
     ``TAB_P2`` / ``TAB_M2``. ``LEAKAGE`` is the unsheared population with
     ``R^PSF``; ``SUMMARY`` is one row per (estimator, correction, component);
-    ``BINNED`` adds the flux bin; ``LEAKSUM`` is one row per estimator. Written
-    unconditionally: there is no config switch that produces a partial file.
+    ``BINNED`` adds the flux bin; ``LEAKSUM`` is one row per estimator.
+
+    How much of the per-object detail is written is set by
+    ``eval.evaluate.catalog_level`` (see :mod:`catalog`):
+
+    ``paper`` (default)
+        the columns every number in the paper is derived from -- one
+        (shape, response) pair per estimator, the truth, the PSF moments the
+        leakage fit regresses against, and the S/N the binned tables stratify
+        by -- in float32.
+    ``summary``
+        no per-object tables at all. The derived tables carry m, c and the
+        leakage, which is everything an ablation row reports.
+    ``full``
+        every column measured, for debugging a response.
+
+    The derived tables are computed upstream from the full-precision arrays, so
+    they are byte-identical at every level; only the per-object detail changes.
 
     With ``shape_noise_cancel`` on, ``TAB_*`` additionally carry ``<col>_r45``,
     ``<col>_r90``, ... for the shape and response columns -- the same objects
@@ -1617,22 +1647,17 @@ def _write_evaluation_fits(benchmark, section, tables, leakage_columns, result):
                 value.item() if hasattr(value, "item") else value, key
             )
 
-    hdus = [primary]
-    # The first measured component keeps the historical TAB_P / TAB_M names, so
-    # a config that measures only g1 writes exactly the file it always did.
-    for order, component in enumerate(sorted(tables)):
-        tag = "" if order == 0 else str(order + 1)
-        for label, name in (("plus", f"TAB_P{tag}"), ("minus", f"TAB_M{tag}")):
-            hdu = fits.BinTableHDU(_catalog_table(tables[component][label]), name=name)
-            hdu.header["COMPONEN"] = (component, "sheared component: 0 = g1, 1 = g2")
-            hdus.append(hdu)
-    hdus += [fits.BinTableHDU(_catalog_table(leakage_columns), name="LEAKAGE"),
-             fits.BinTableHDU(_summary_table(result), name="SUMMARY"),
-             fits.BinTableHDU(_binned_table(result), name="BINNED"),
-             fits.BinTableHDU(_leakage_summary_table(result), name="LEAKSUM")]
-    fits.HDUList(hdus).writeto(path, overwrite=True)
-    logger.info("Saved evaluation to %s", path)
-    return path
+    level = resolve_level(section.get("catalog_level"))
+    return write_evaluation_fits(
+        path,
+        primary_header=primary.header,
+        tables=tables,
+        leakage_columns=leakage_columns,
+        derived=[("SUMMARY", _summary_table(result)),
+                 ("BINNED", _binned_table(result)),
+                 ("LEAKSUM", _leakage_summary_table(result))],
+        level=level,
+    )
 
 
 def main() -> None:

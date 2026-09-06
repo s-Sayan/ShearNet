@@ -500,7 +500,7 @@ class SavedModelPredictor:
         nn = self.config.get("model.type", "cnn")
         # A two-branch model always needs the PSF stamp, whatever
         # model.process_psf happens to say; load_model gates on the flag alone.
-        self.process_psf = bool(self.config.get("model.process_psf", False)) or is_fork_model(nn)
+        self.process_psf = is_fork_model(nn)
         self.gap = bool(self.config.get("model.gap", False))
         noise = self.config.get("training.noise", {}) or {}
         self.noise_condition = bool(noise.get("condition", False))

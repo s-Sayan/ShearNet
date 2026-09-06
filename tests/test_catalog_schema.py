@@ -14,8 +14,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "research" / "shear_bias"))
 
-from catalog import (CATALOG_LEVELS, DEFAULT_LEVEL, estimate_row_bytes,  # noqa: E402
-                     meta_table, resolve_level, slim_columns)
+from catalog import (CATALOG_LEVELS, DEFAULT_LEVEL, PAPER_KEEP_PREFIXES,  # noqa: E402
+                     estimate_row_bytes, meta_table, resolve_level, slim_columns)
 
 STATIONS = ("", "_r45", "_r90", "_r135")
 
@@ -35,15 +35,18 @@ def _pair_columns(n=512, seed=3):
     }
     for s in STATIONS:
         col[f"g_th{s}"] = rng.normal(0.01, 0.25, (n, 2))
-        col[f"e_ngmix{s}"] = rng.normal(0, 0.3, (n, 2))
-        col[f"e_ngmix_metacal{s}"] = rng.normal(0, 0.3, (n, 2))
-        col[f"e_shearnet{s}"] = rng.normal(0, 0.25, (n, 2))
-        col[f"e_shearnet_metacal{s}"] = rng.normal(0, 0.25, (n, 2))
-        col[f"R_ngmix_sim{s}"] = rng.normal(0.6, 0.1, (n, 2, 2))
-        col[f"R_ngmix_metacal{s}"] = rng.normal(0.64, 0.1, (n, 2, 2))
-        col[f"R_shearnet_sim{s}"] = rng.normal(0.9, 0.1, (n, 2, 2))
-        col[f"R_shearnet_metacal{s}"] = rng.normal(0.9, 0.1, (n, 2, 2))
-        col[f"flag_ngmix{s}"] = rng.integers(0, 2, n).astype(np.int32)
+        for est in ("ngmix", "shearnet"):
+            col[f"e_{est}{s}"] = rng.normal(0, 0.3, (n, 2))
+            col[f"e_{est}_uncorrected{s}"] = rng.normal(0, 0.3, (n, 2))
+            col[f"e_{est}_metacal_raw{s}"] = rng.normal(0, 0.3, (n, 2))
+            col[f"e_{est}_metacal_corrected{s}"] = rng.normal(0, 0.3, (n, 2))
+            col[f"R_{est}_sim{s}"] = rng.normal(0.9, 0.1, (n, 2, 2))
+            col[f"R_{est}_metacal{s}"] = rng.normal(0.64, 0.1, (n, 2, 2))
+            col[f"Rgamma_{est}_metacal{s}"] = rng.normal(0.64, 0.1, (n, 2, 2))
+            col[f"Rpsf_{est}_sim{s}"] = rng.normal(0, 0.1, (n, 2, 2))
+            col[f"Rpsf_{est}_metacal{s}"] = rng.normal(0, 0.1, (n, 2, 2))
+            col[f"Rbarpsf_{est}_metacal"] = np.full(n, 0.2727)
+            col[f"flag_{est}{s}"] = rng.integers(0, 2, n).astype(np.int32)
     return col
 
 
@@ -63,9 +66,23 @@ def test_paper_level_keeps_every_station_of_the_scored_pair():
     for s in STATIONS:
         assert f"e_shearnet{s}" in kept
         assert f"R_shearnet_sim{s}" in kept
-        assert f"e_ngmix_metacal{s}" in kept
+        assert f"e_ngmix_metacal_corrected{s}" in kept
         assert f"R_ngmix_metacal{s}" in kept
+        assert f"Rgamma_ngmix_metacal{s}" in kept
         assert f"g_th{s}" in kept
+
+
+def test_paper_level_keeps_the_direct_psf_response_for_both_estimators():
+    """The right-hand panel of the response-vs-S/N figure needs both.
+
+    R^PSF is measured the direct way for every estimator, so it is not part of
+    the crossed pair that gets dropped -- an easy thing to lose to a pattern
+    that keys on the correction token alone.
+    """
+    kept, _ = slim_columns(_pair_columns(), "paper")
+    for s in STATIONS:
+        assert f"Rpsf_ngmix_sim{s}" in kept
+        assert f"Rpsf_shearnet_sim{s}" in kept
 
 
 def test_paper_level_keeps_the_leakage_regressors():
@@ -86,16 +103,27 @@ def test_paper_level_drops_only_the_unscored_correction():
     for s in STATIONS:
         assert f"R_ngmix_sim{s}" not in kept
         assert f"R_shearnet_metacal{s}" not in kept
-        assert f"e_shearnet_metacal{s}" not in kept
-    assert all("scored through" in report.dropped[f"R_ngmix_sim{s}"] for s in STATIONS)
+        assert f"Rgamma_shearnet_metacal{s}" not in kept
+    assert all(report.dropped[f"R_ngmix_sim{s}"] for s in STATIONS)
 
 
 def test_full_level_keeps_every_measured_column():
     columns = _pair_columns()
-    kept, _ = slim_columns(columns, "full")
-    # Only constants and exact duplicates may vanish at 'full'; this fixture has
-    # neither, so the column set must survive intact.
-    assert set(kept) == set(columns)
+    kept, report = slim_columns(columns, "full")
+    # Only constants and exact duplicates may vanish at 'full'.
+    assert set(kept) | set(report.constants) | set(report.aliases) == set(columns)
+
+
+def test_every_response_family_the_harness_writes_is_matched():
+    """A single ``R_*`` pattern matches none of Rgamma_/Rpsf_/Rbarpsf_.
+
+    This is the mistake that would silently drop the metacal shear response and
+    the PSF response from every file, so it is pinned rather than trusted.
+    """
+    import fnmatch
+
+    for name in ("R_shearnet_sim", "Rgamma_ngmix_metacal", "Rpsf_ngmix_sim"):
+        assert any(fnmatch.fnmatchcase(name, p) for p in PAPER_KEEP_PREFIXES), name
 
 
 def test_full_is_larger_than_paper_is_larger_than_summary():

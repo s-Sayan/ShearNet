@@ -188,7 +188,6 @@ class Config:
             "apply_psf_shear": "dataset.apply_psf_shear",
             "psf_shear_range": "dataset.psf_shear_range",
             # Model args
-            "process_psf": "model.process_psf",
             "nn": "model.type",
             "galaxy_type": "model.galaxy.type",
             "psf_type": "model.psf.type",

@@ -31,7 +31,9 @@ def test_dataset_spec_from_config(tmp_path, monkeypatch):
     assert spec.npix == 53  # stamp_size
     assert spec.scale == 0.141  # pixel_size
     assert spec.output_keys == ("g1", "g2")
-    assert spec.return_psf is False  # process_psf default
+    # The default architecture is single-branch, so no PSF stamps are
+    # rendered. This follows from model.type alone.
+    assert spec.return_psf is False
 
 
 def test_train_config_from_config(tmp_path, monkeypatch):

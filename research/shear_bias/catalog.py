@@ -12,8 +12,8 @@ repeated 200000 times.
 This module is the policy that decides what actually gets written. It is
 deliberately independent of the harness: it takes the assembled ``{name: array}``
 column dictionaries and returns filtered, downcast ones, matching on column-name
-*prefixes and correction tokens* rather than on any knowledge of how ring
-stations are suffixed. That keeps it working when the station scheme changes.
+*glob patterns* rather than on any knowledge of how ring stations are suffixed.
+That keeps it working when the station scheme changes.
 
 Three levels, chosen by ``eval.evaluate.catalog_level``:
 
@@ -24,10 +24,10 @@ Three levels, chosen by ``eval.evaluate.catalog_level``:
     paper quotes four scalars from it and nothing else.
 
 ``paper`` (default)
-    One (shape, response) pair per estimator -- the pair the reported number
-    actually divides by -- plus the truth, PSF moments and S/N needed to
-    re-derive m, c, alpha and beta and to bin any of them. float32. This is
-    what to run the fiducial model at.
+    Every shape and response the harness measured, minus the crossed pairs no
+    reported number divides by and the auxiliaries no table carries, plus the
+    truth, PSF moments and S/N needed to re-derive m, c, alpha and beta and to
+    bin any of them. float32. This is what to run the fiducial model at.
 
 ``full``
     Every column the harness measured, still downcast to float32. For
@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-import re
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -52,9 +51,8 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "CATALOG_LEVELS",
     "DEFAULT_LEVEL",
-    "CORRECTION_TOKENS",
     "PAPER_KEEP_PREFIXES",
-    "PAPER_DROP_TOKENS",
+    "PAPER_DROP",
     "SlimReport",
     "slim_columns",
     "resolve_level",
@@ -68,52 +66,54 @@ CATALOG_LEVELS = ("summary", "paper", "full")
 #: needed to reconstruct every number in the paper and nothing else.
 DEFAULT_LEVEL = "paper"
 
-#: The correction vocabulary the harness uses in column names. A column name is
-#: ``<quantity>_<estimator>[_<correction>][_<station suffix>]``, and these are
-#: the only tokens that can appear in the correction slot. Matched as ``_<token>``
-#: anywhere in the name so an unknown trailing station suffix cannot hide one.
-CORRECTION_TOKENS = ("sim", "metacal", "anacal")
-
-#: Columns kept at ``paper`` level regardless of estimator: the applied and
-#: observed truth, the PSF moments the leakage fit regresses against, the S/N
-#: the binned tables stratify by, and the catalog truth the size trend needs.
-#: Matched with :func:`fnmatch.fnmatchcase`, so a station suffix is covered by
-#: the trailing star.
+#: Columns kept at ``paper`` level: the applied and observed truth, the PSF
+#: moments the leakage fit regresses against, the S/N the binned tables
+#: stratify by, the catalog truth the size trend needs, and every shape and
+#: response the harness measures. Matched with :func:`fnmatch.fnmatchcase`, so
+#: the trailing star covers any ring-station suffix.
+#:
+#: The response families are spelled out rather than collapsed to ``R*``,
+#: because the harness distinguishes ``R_`` (the direct/scene response),
+#: ``Rgamma_`` (metacal's shear response), ``Rpsf_`` (the PSF response) and
+#: ``Rbarpsf_`` (an ensemble scalar) -- and a single ``R_*`` pattern silently
+#: matches none of the last three.
 PAPER_KEEP_PREFIXES = (
     "g_th*",       # observed truth shear, per station
     "gpsf*",       # PSF ellipticity -- the leakage x-axis
     "Tpsf*",       # PSF size -- the beta coefficient regresses on it
-    "s2n",         # pair-mean galaxy S/N (the bare column, not s2n_ngmix)
+    "s2n",         # galaxy S/N (the bare column, not s2n_ngmix)
     "hlr_th*",     # catalog half-light radius -- the size trend
     "flux_th*",    # catalog flux
     "flag_*",      # per-estimator failure flags
-    "e_*",         # every shape, subject to PAPER_DROP_TOKENS below
-    "R_*",         # every shear response, subject to the same
-    "Rpsf_*",      # PSF response (LEAKAGE table)
+    "e_*",         # every shape, subject to PAPER_DROP below
+    "R_*",         # direct (scene-shear) response
+    "Rgamma_*",    # metacal shear response
+    "Rpsf_*",      # PSF response
 )
 
-#: At ``paper`` level, drop the correction each estimator's reported number does
-#: NOT divide by. ngmix is scored through metacalibration, so its ``sim``
-#: (scene-shear) response is a diagnostic; ShearNet is scored through the direct
-#: ``sim`` route, so its ``metacal`` columns are the diagnostic. Both survive at
-#: ``full``. Keyed by estimator, matched only when the estimator name is also in
-#: the column, so an unrelated column is never caught by a bare token.
-PAPER_DROP_TOKENS: Dict[str, Tuple[str, ...]] = {
-    "ngmix": ("sim",),
-    "shearnet": ("metacal",),
-}
-
-#: Dropped at ``paper`` level outright. ``Rbar_psf_*`` is an ensemble scalar the
-#: harness broadcasts to one value per row; it is recorded in SLIMMETA instead.
-#: The auxiliary size/flux predictions backed a per-galaxy accuracy table that
-#: the current draft no longer carries.
-PAPER_DROP_EXACT = (
-    "Rbar_psf_*",
-    "hlr_shearnet*",
-    "flux_shearnet*",
-    "s2n_ngmix*",
-    "T_ngmix*",
-    "flux_ngmix*",
+#: Dropped at ``paper`` level, each for a stated reason. Everything here is
+#: either recoverable from what remains, or is not read by any number the paper
+#: reports. All of it survives at ``full``.
+#:
+#: The response entries are the crossed pairs: ngmix is scored through
+#: metacalibration, so its direct ``R_ngmix_sim`` is a diagnostic; ShearNet is
+#: scored through the direct route (``shearnet_metacal`` is off by default), so
+#: its metacal columns are. Note that ``Rpsf_<est>_sim`` is kept for BOTH
+#: estimators -- the PSF response is always measured the direct way for
+#: everything, and it is the right-hand panel of the response-vs-S/N figure.
+PAPER_DROP = (
+    # An ensemble scalar the harness broadcasts to one value per row. The
+    # constant detector would catch it anyway; naming it documents the intent.
+    "Rbarpsf_*",
+    # ngmix's own size/flux/S-N estimates: no reported table carries them, and
+    # the per-galaxy accuracy table that once did was cut from the draft.
+    "T_ngmix*", "flux_ngmix*", "s2n_ngmix*",
+    "hlr_shearnet*", "flux_shearnet*",
+    # ngmix scored through metacal -> its direct R^gamma is a diagnostic.
+    "R_ngmix_sim*",
+    # ShearNet scored through the direct route -> its metacal columns are.
+    "R_shearnet_metacal*", "Rgamma_shearnet_metacal*",
+    "Rpsf_shearnet_metacal*", "e_shearnet_metacal*",
 )
 
 
@@ -191,38 +191,22 @@ def resolve_level(value: Optional[str]) -> str:
     return level
 
 
-def _estimators_in(name: str) -> List[str]:
-    """Which known estimator names appear in a column name."""
-    return [est for est in PAPER_DROP_TOKENS if est in name]
-
-
-def _has_token(name: str, token: str) -> bool:
-    """True when ``_<token>`` appears as a whole component of ``name``.
-
-    Word-boundary matched so ``_sim`` does not fire on a hypothetical
-    ``_similar``, and so a trailing ring-station suffix after the token is
-    irrelevant -- which is the property that keeps this module independent of
-    how stations are named.
-    """
-    return re.search(rf"_{re.escape(token)}(?:_|$)", name) is not None
-
-
 def _matches_any(name: str, patterns: Iterable[str]) -> bool:
     return any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
 
 
 def _paper_keep(name: str) -> Tuple[bool, str]:
-    """Decide one column at ``paper`` level. Returns ``(keep, reason)``."""
-    if _matches_any(name, PAPER_DROP_EXACT):
-        return False, "not used by any reported number"
+    """Decide one column at ``paper`` level. Returns ``(keep, reason)``.
+
+    Drops win over keeps: the keep list is deliberately broad (``e_*``, the
+    response families) so that a column the harness gains later is retained by
+    default rather than silently lost, and the drop list is the short, explicit
+    set of exceptions.
+    """
+    if _matches_any(name, PAPER_DROP):
+        return False, "not read by any reported number, or recoverable"
     if not _matches_any(name, PAPER_KEEP_PREFIXES):
         return False, "outside the paper column set"
-    for estimator, tokens in PAPER_DROP_TOKENS.items():
-        if estimator not in name:
-            continue
-        for token in tokens:
-            if _has_token(name, token):
-                return False, f"{estimator} is not scored through '{token}'"
     return True, ""
 
 

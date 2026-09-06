@@ -146,13 +146,6 @@ Examples:
     )
 
     parser.add_argument(
-        "--process_psf",
-        action="store_const",
-        const=True,
-        default=None,
-        help="Process psf images on separate CNN branch.",
-    )
-    parser.add_argument(
         "--output_keys",
         type=tuple,
         default=("g1", "g2"),
@@ -264,7 +257,6 @@ _ARG_TO_PATH = {
     "eval_interval": "training.eval_interval",
     "stamp_size": "dataset.stamp_size",
     "pixel_size": "dataset.pixel_size",
-    "process_psf": "model.process_psf",
     "galaxy_type": "model.galaxy.type",
     "psf_type": "model.psf.type",
     "fusion": "model.fusion",
@@ -350,10 +342,6 @@ def _config_from_args(args):
     config._set_nested("output.plot_path", args.plot_path)
     config._set_nested("plotting.plot", args.plot)
     config._set_nested(
-        "model.process_psf",
-        args.process_psf if args.process_psf is not None else d["process_psf"],
-    )
-    config._set_nested(
         "model.galaxy.type", args.galaxy_type if args.galaxy_type is not None else d["galaxy_type"]
     )
     config._set_nested(
@@ -400,42 +388,38 @@ def _config_from_args(args):
     return config
 
 
-def _apply_psf_model_fixup(config):
-    """Reconcile ``process_psf`` with the chosen architecture, in place.
+def _warn_on_legacy_process_psf(config):
+    """Note that a legacy ``model.process_psf`` key is present and ignored.
 
-    ``process_psf`` requires the two-branch ``fork-like`` model; without it the
-    ``fork-like`` model is unsupported. Mismatches are corrected (with a warning)
-    exactly as the CLI did previously.
+    ``process_psf`` asked whether the PSF gets its own branch, which is the same
+    question as whether the architecture is a fork model -- and the two could
+    only ever agree or contradict each other. The old fixup resolved the
+    contradiction by silently rewriting ``model.type``, so a config could train
+    a model it did not name. The architecture is now the single source of truth
+    and the key is inert.
+
+    It is not an error to carry it. Every ``training_config.yaml`` persisted
+    before this change has it, and those files must keep loading so finished
+    runs stay re-evaluable. A *disagreeing* value is worth saying out loud,
+    because under the old behaviour that config trained something other than
+    what it says.
     """
-    process_psf = config.get("model.process_psf")
+    if config.get("model.process_psf") is None:
+        return
+    process_psf = bool(config.get("model.process_psf"))
     nn = config.get("model.type")
-    if process_psf:
-        if not shearnet.core.models.is_fork_model(nn):
-
-            logger.warning(
-                "\nWARNING: When --process-psf is enabled, it requires a fork-like model "
-                "('fork-like' or 'd4-fork-like')."
-            )
-            logger.info("Setting default fork-like model...")
-            nn = "fork-like"
-            galaxy_type = _CLI_DEFAULTS["galaxy_type"]
-            psf_type = _CLI_DEFAULTS["psf_type"]
-            config._set_nested("model.type", nn)
-            config._set_nested("model.galaxy.type", galaxy_type)
-            config._set_nested("model.psf.type", psf_type)
-            logger.info(
-                f"Model type changed to: '{nn}' with galaxy: '{galaxy_type}', psf: '{psf_type}'\n"
-            )
-    else:
-        if shearnet.core.models.is_fork_model(nn):
-
-            logger.warning(
-                "\nWARNING: When --process-psf is disabled, fork-like models are not supported."
-            )
-            logger.info("Setting default model...")
-            nn = _CLI_DEFAULTS["nn"]
-            config._set_nested("model.type", nn)
-            logger.info(f"Model type changed to: '{nn}'\n")
+    if process_psf == shearnet.core.models.is_fork_model(nn):
+        logger.info(
+            "model.process_psf is no longer read; the architecture (%r) decides "
+            "whether the PSF branch exists. The value agrees, so nothing changes.", nn
+        )
+        return
+    logger.warning(
+        "model.process_psf=%r disagrees with architecture %r and is ignored. "
+        "Under the previous behaviour this combination rewrote model.type, so "
+        "this config may not describe the run it produced. The architecture is "
+        "authoritative; drop the key.", process_psf, nn,
+    )
 
 
 def build_train_config(args):
@@ -443,9 +427,10 @@ def build_train_config(args):
 
     Handles both modes — loading ``--config`` (with optional CLI overrides and
     the unit-tests schema adapter) or, when no config file is given, falling back
-    to ``_config_from_args`` — and applies the ``process_psf`` / ``fork-like``
-    compatibility fixup. Performs no simulation or training, so it is unit-testable
-    without the heavy GalSim/ngmix dependencies.
+    to ``_config_from_args``. The architecture alone decides whether the PSF
+    branch exists; a legacy ``model.process_psf`` key is noted and ignored.
+    Performs no simulation or training, so it is unit-testable without the heavy
+    GalSim/ngmix dependencies.
     """
     if args.config:
         config = Config(args.config)  # schema normalization happens in Config
@@ -456,7 +441,7 @@ def build_train_config(args):
     else:
         config = _config_from_args(args)
 
-    _apply_psf_model_fixup(config)
+    _warn_on_legacy_process_psf(config)
     return config
 
 
@@ -665,7 +650,7 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
             psfs.append(np.asarray(p))
         img_params = fit_image_normalizer(
             np.concatenate(gals),
-            np.concatenate(psfs) if config.get("model.process_psf") else None,
+            np.concatenate(psfs) if is_fork_model(config.get("model.type")) else None,
         )
         logger.info("image normalizer fit on %d rendered stamps", n_probe * batch_size)
 

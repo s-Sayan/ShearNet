@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Optional, Tuple
 
 from .dataset import generate_dataset
+from .models import is_fork_model
 from .train import train_model
 
 
@@ -83,7 +84,11 @@ class DatasetSpec:
             seed=config.get("dataset.seed"),
             npix=config.get("dataset.stamp_size"),
             scale=config.get("dataset.pixel_size"),
-            return_psf=config.get("model.process_psf"),
+            # A fork model takes a (galaxy, PSF) pair, so it needs the PSF
+            # stamps rendered; a single-branch model has nowhere to put them.
+            # That is the whole content of the old ``model.process_psf`` key,
+            # which could only ever agree or conflict with the architecture.
+            return_psf=is_fork_model(config.get("model.type")),
             nse_sd=config.get("dataset.nse_sd"),
             base_shear_range=config.get("dataset.base_shear_range", 0.0),
             apply_psf_shear=config.get("dataset.apply_psf_shear", False),
