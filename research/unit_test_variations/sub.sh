@@ -27,7 +27,10 @@ usage() {
     cat <<USAGE
 Usage: $(basename "$0") <variation> [--no-train] [--estimators LIST]
 
-  <variation>        directory name under research/unit_test_variations/
+  <variation>        a directory name under research/unit_test_variations/, a
+                     tier path under research/ablations/ (e.g.
+                     tier3/no_isotropy), a rung under research/unit_tests/
+                     (e.g. first), or any repo-relative directory
   --no-train         skip training; evaluate the existing checkpoint
   --baseline WHICH   ngmix (default), anacal, or both
 
@@ -41,8 +44,23 @@ USAGE
 case "$1" in -h|--help) usage; exit 0 ;; esac
 
 VARIATION="$1"; shift
-CONFIG="$ROOT/$VARIATION/config.yaml"
-[[ -f "$CONFIG" ]] || { echo "No config at $CONFIG" >&2; usage; exit 1; }
+# Accept a name under this directory, a tier path under research/ablations, or
+# any repo-relative directory. The ablation arms live in research/ablations/,
+# and duplicating this script per tree would guarantee the copies drift.
+CONFIG=""
+for candidate in "$ROOT/$VARIATION" "$REPO/research/ablations/$VARIATION" \
+                 "$REPO/research/unit_tests/$VARIATION" "$REPO/$VARIATION"; do
+    if [[ -f "$candidate/config.yaml" ]]; then
+        CONFIG="$candidate/config.yaml"
+        RUNDIR="$candidate"
+        break
+    fi
+done
+if [[ -z "$CONFIG" ]]; then
+    echo "No config.yaml for '$VARIATION' under:" >&2
+    echo "  $ROOT/, research/ablations/, research/unit_tests/, or the repo root" >&2
+    usage; exit 1
+fi
 
 SKIP_TRAIN=0
 BASELINE=""
@@ -56,7 +74,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-LOGDIR="$ROOT/$VARIATION/logs"
+LOGDIR="$RUNDIR/logs"
 mkdir -p "$LOGDIR"
 
 echo "Variation:  $VARIATION"

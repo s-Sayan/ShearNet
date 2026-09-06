@@ -30,7 +30,6 @@ galaxy:
 
 model:
   architecture: fork-like
-  process_psf: true
   galaxy_branch: research_backed
   psf_branch:    forklens_psf
   fusion: transformer                   # concat | transformer

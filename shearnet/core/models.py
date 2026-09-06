@@ -1166,6 +1166,11 @@ class _D4OrbitMember(nn.Module):
     d4_features: tuple = (32, 48, 64)
     d4_depths_galaxy: tuple = (2, 2, 1)
     d4_depths_psf: tuple = (1, 1, 1)
+    #: Append the dilated context block to the GALAXY branch. The PSF branch
+    #: never gets one -- a smooth known profile has no faint outer isophotes to
+    #: reach for -- so this is a galaxy-branch switch, and the ablation that
+    #: removes it.
+    d4_multiscale: bool = True
     fusion_pos: str = "learned"
     num_self_attn_layers: int = 1
     ffn_dim: int = 0
@@ -1192,7 +1197,8 @@ class _D4OrbitMember(nn.Module):
             # dilated context block, PSF (1, 1, 1) without it.
             depths = self.d4_depths_psf if psf else self.d4_depths_galaxy
             return _ShearNetD4Backbone(
-                features=self.d4_features, depths=depths, multiscale=not psf
+                features=self.d4_features, depths=depths,
+                multiscale=self.d4_multiscale and not psf,
             )(x)
         if branch == "research_backed":
             # ``dropout`` regularizes only this high-capacity backbone; it is
@@ -1324,6 +1330,11 @@ class D4ForkLike(nn.Module):
     d4_features: tuple = (32, 48, 64)
     d4_depths_galaxy: tuple = (2, 2, 1)
     d4_depths_psf: tuple = (1, 1, 1)
+    #: Append the dilated context block to the GALAXY branch. The PSF branch
+    #: never gets one -- a smooth known profile has no faint outer isophotes to
+    #: reach for -- so this is a galaxy-branch switch, and the ablation that
+    #: removes it.
+    d4_multiscale: bool = True
     # Positional encoding of the fusion attention. See FUSION_POSITIONAL and
     # _RoPE2DAttention: 'learned' is the historical absolute table (default, so
     # every existing checkpoint loads), 'rope2d' the D4-covariant relative
@@ -1393,6 +1404,7 @@ class D4ForkLike(nn.Module):
             d4_features=self.d4_features,
             d4_depths_galaxy=self.d4_depths_galaxy,
             d4_depths_psf=self.d4_depths_psf,
+            d4_multiscale=self.d4_multiscale,
             fusion_pos=self.fusion_pos,
             num_self_attn_layers=self.num_self_attn_layers,
             ffn_dim=self.ffn_dim,
@@ -1654,6 +1666,7 @@ def build_model(
     d4_features=None,
     d4_depths_galaxy=None,
     d4_depths_psf=None,
+    d4_multiscale=None,
     orbit_scan=True,
     fusion_pos="learned",
     design=None,
@@ -1728,6 +1741,9 @@ def build_model(
                 ("d4_depths_galaxy", d4_depths_galaxy),
                 ("d4_depths_psf", d4_depths_psf),
             ) if v is not None},
+            # A flag, not a schedule: it must not go through tuple() above.
+            **({} if d4_multiscale is None
+               else {"d4_multiscale": bool(d4_multiscale)}),
             orbit_scan=bool(orbit_scan),
             fusion_pos=str(fusion_pos or "learned"),
             # Fusion/head sizes. None keeps this design's value; an explicit

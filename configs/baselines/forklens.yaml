@@ -43,7 +43,6 @@ training:
   loss: "mse"
 
 model:
-  process_psf: true
   type: "fork-like"
   galaxy:
     type: "research_backed"

@@ -685,6 +685,7 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
         d4_features=config.get("model.d4_features", None),
         d4_depths_galaxy=config.get("model.d4_depths_galaxy", None),
         d4_depths_psf=config.get("model.d4_depths_psf", None),
+        d4_multiscale=config.get("model.d4_multiscale", None),
         orbit_scan=config.get("model.orbit_scan", True),
         fusion_pos=config.get("model.fusion_pos", "learned"),
         design=config.get("model.design", None),

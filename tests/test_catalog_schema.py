@@ -97,21 +97,59 @@ def test_paper_level_keeps_the_binning_variables():
     assert "s2n" in kept and "hlr_th" in kept
 
 
-def test_paper_level_drops_only_the_unscored_correction():
-    """ngmix is scored through metacal, ShearNet through sim; the crosses go."""
-    kept, report = slim_columns(_pair_columns(), "paper")
-    for s in STATIONS:
-        assert f"R_ngmix_sim{s}" not in kept
-        assert f"R_shearnet_metacal{s}" not in kept
-        assert f"Rgamma_shearnet_metacal{s}" not in kept
-    assert all(report.dropped[f"R_ngmix_sim{s}"] for s in STATIONS)
+def test_constant_and_alias_replacement_are_off_by_default():
+    """They remove column NAMES, which is a KeyError for a reader that indexes
+    one. The values survive in SLIMMETA, but "recoverable" and "present" are
+    not the same thing, and Rbarpsf_<est>_metacal is read by name.
+    """
+    e = np.random.default_rng(1).normal(0, 0.3, (64, 2))
+    columns = {"e_ngmix": e, "e_ngmix_raw": e.copy(),
+               "Rbarpsf_ngmix_metacal": np.full(64, 0.2727)}
+    kept, report = slim_columns(columns, "paper")
+    assert set(kept) == set(columns)
+    assert report.constants == {} and report.aliases == {}
 
 
-def test_full_level_keeps_every_measured_column():
+def test_paper_level_drops_no_measurement():
+    """The level is lossless: it may re-encode, never discard.
+
+    An earlier version dropped "the correction each estimator is not scored
+    through". With shearnet_metacal on, both estimators are scored through
+    metacal, so that rule deleted the ShearNet response the reported m divides
+    by -- silently, and unrecoverably.
+    """
+    columns = _pair_columns()
+    kept, report = slim_columns(columns, "paper")
+    lost = set(columns) - set(kept) - set(report.constants) - set(report.aliases)
+    assert not lost, lost
+
+
+def test_full_level_is_the_historical_file_untouched():
+    """'full' is the escape hatch: same columns, same dtypes, no SLIMMETA.
+
+    A reader that has not been taught about the metadata table must still see
+    exactly what it always did.
+    """
     columns = _pair_columns()
     kept, report = slim_columns(columns, "full")
-    # Only constants and exact duplicates may vanish at 'full'.
-    assert set(kept) | set(report.constants) | set(report.aliases) == set(columns)
+    assert set(kept) == set(columns)
+    assert report.constants == {} and report.aliases == {}
+    for name, array in kept.items():
+        assert array.dtype == np.asarray(columns[name]).dtype, name
+
+
+def test_a_constant_matrix_column_is_recorded_not_merely_dropped():
+    """Rbarpsf_<est>_metacal is (n, 2, 2), constant down the row axis.
+
+    The corrected shape is reproduced as raw - Rbar . gpsf, so dropping this
+    without recording it would make that check unreproducible from the file.
+    """
+    n = 64
+    rbar = np.broadcast_to(np.array([[0.27, 0.0], [0.0, 0.25]]), (n, 2, 2)).copy()
+    kept, report = slim_columns({"Rbarpsf_ngmix_metacal": rbar}, "paper",
+                                drop_constants=True)
+    assert "Rbarpsf_ngmix_metacal" not in kept
+    assert report.constants["Rbarpsf_ngmix_metacal"] == [[0.27, 0.0], [0.0, 0.25]]
 
 
 def test_every_response_family_the_harness_writes_is_matched():
@@ -187,7 +225,7 @@ def test_broadcast_scalar_becomes_a_recorded_constant():
     """`Rbar_psf_*` is one number repeated once per object."""
     columns = dict(_pair_columns())
     columns["Rbar_psf_ngmix"] = np.full(512, 0.2727)
-    kept, report = slim_columns(columns, "full")
+    kept, report = slim_columns(columns, "paper", drop_constants=True)
     assert "Rbar_psf_ngmix" not in kept
     assert report.constants["Rbar_psf_ngmix"] == pytest.approx(0.2727)
 
@@ -196,7 +234,7 @@ def test_duplicate_column_becomes_a_recorded_alias():
     """`e_<est>_raw` is `e_<est>` whenever no correction was applied."""
     e = np.random.default_rng(1).normal(0, 0.3, (512, 2))
     columns = {"e_ngmix": e, "e_ngmix_raw": e.copy()}
-    kept, report = slim_columns(columns, "full")
+    kept, report = slim_columns(columns, "paper", drop_aliases=True)
     assert "e_ngmix" in kept and "e_ngmix_raw" not in kept
     assert report.aliases["e_ngmix_raw"] == "e_ngmix"
 
@@ -205,7 +243,7 @@ def test_distinct_columns_are_not_aliased():
     rng = np.random.default_rng(2)
     columns = {"e_ngmix": rng.normal(0, 0.3, (512, 2)),
                "e_shearnet": rng.normal(0, 0.3, (512, 2))}
-    kept, report = slim_columns(columns, "full")
+    kept, report = slim_columns(columns, "paper")
     assert set(kept) == set(columns)
     assert report.aliases == {}
 
@@ -213,7 +251,7 @@ def test_distinct_columns_are_not_aliased():
 def test_meta_table_round_trips_the_constants():
     columns = {"Rbar_psf_ngmix": np.full(64, 0.2727),
                "e_ngmix": np.random.default_rng(4).normal(0, 0.3, (64, 2))}
-    _, report = slim_columns(columns, "full")
+    _, report = slim_columns(columns, "paper", drop_constants=True)
     table = meta_table([("LEAKAGE", report)])
     row = table[table["column"] == "Rbar_psf_ngmix"][0]
     assert row["kind"] == "constant"
@@ -224,7 +262,7 @@ def test_meta_table_is_writable_when_nothing_was_dropped():
     """An empty SLIMMETA still needs a schema, or the HDU cannot be built."""
     from astropy.io import fits
 
-    _, report = slim_columns({"e_ngmix": np.arange(8.0).reshape(4, 2)}, "full")
+    _, report = slim_columns({"e_ngmix": np.arange(8.0).reshape(4, 2)}, "paper")
     hdu = fits.BinTableHDU(meta_table([("TAB_P", report)]), name="SLIMMETA")
     assert hdu.data is not None
 

@@ -34,7 +34,6 @@ model:
   # branches instead of D4-equivariant ones -- so the pair isolates what the
   # equivariance buys, independently of what the response terms buy.
   architecture: fork-like
-  process_psf: true
   fusion: transformer
   head: attention
   galaxy_branch: research_backed

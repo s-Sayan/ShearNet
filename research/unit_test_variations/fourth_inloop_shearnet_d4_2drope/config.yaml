@@ -30,7 +30,6 @@ galaxy:
 
 model:
   architecture: d4-fork-like
-  process_psf: true
   fusion: transformer
   head: attention
   galaxy_branch: shearnet-d4
@@ -324,17 +323,31 @@ eval:
     # survives to disk. The derived tables (SUMMARY / BINNED / LEAKSUM) are
     # computed upstream at full precision and are byte-identical either way.
     #
-    #   paper    (default) every shape and response measured, minus the crossed
-    #            pairs no reported number divides by (ngmix's direct R^gamma,
-    #            ShearNet's metacal columns) and the auxiliaries no table
-    #            carries, stored float32. Everything m, c, alpha, beta and the
-    #            binned trends are derived from. ~3.1x smaller.
+    #   paper    (default) every column the harness measured, under its own
+    #            name, stored float32. Same HDUs, same column set, same shapes
+    #            as `full` -- a reader written against one works against the
+    #            other unmodified. ~2x smaller.
     #   summary  no per-object tables at all -- kilobytes. The right level for
-    #            an ablation arm, which reports four scalars and nothing else.
-    #   full     every column, still float32. For debugging a response.
+    #            an ablation arm, which reports m1, c2, alpha and the shape
+    #            noise, all of which are in SUMMARY/LEAKSUM.
+    #   full     float64, byte-for-byte what this harness has always written.
+    #            Use it if you need the per-object columns to reproduce SUMMARY
+    #            EXACTLY; at `paper` that recomputation agrees to ~1e-7, which
+    #            is five orders below the jackknife error on m but is not
+    #            bit-for-bit.
     #
-    # Measured on the production schema at n_obs 200000: 1.59 GB -> 512 MB at
-    # `paper` with component: both, 256 MB with component: 0, 25 kB at
+    # `paper` deliberately removes NOTHING by name. Two earlier versions tried
+    # to be cleverer and both broke a reader: one dropped "the correction each
+    # estimator is not scored through" and took the ShearNet response the
+    # reported m divides by (shearnet_metacal is true here, so BOTH estimators
+    # are scored through metacal); the other replaced constant columns with a
+    # metadata table and took Rbarpsf_<est>_metacal, which is how the corrected
+    # shape is reproduced from the raw one. Both saved about 0.1x. The lever
+    # that actually matters is `summary` on the ~24 ablation arms, which report
+    # four scalars each.
+    #
+    # Measured on the production schema at n_obs 200000: 1.59 GB -> 800 MB at
+    # `paper` with component: both, 400 MB with component: 0, 25 kB at
     # `summary`. research/shear_bias/shrink_fits.py applies the same policy to
     # files already written.
     catalog_level: paper

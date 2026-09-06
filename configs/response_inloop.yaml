@@ -36,7 +36,6 @@ dataset:
   normalize_images: false
 
 model:
-  process_psf: true
   type: "d4-fork-like"
   galaxy:
     type: "d4cnn"

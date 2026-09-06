@@ -3,39 +3,61 @@
 The evaluation harness measures every estimator on every ring station of every
 sheared population, and the natural thing to do with that is to write all of it
 out. At the production size -- ``n_obs`` 200000, ``component: both``, a
-four-station ring -- that is 800000 rows carrying roughly 950 bytes each, and
-the file lands near 1.2 GB. Most of those bytes are not recoverable science:
-they are float64 where the quantity is known to three digits, responses for
-corrections no reported number divides by, and columns holding one value
-repeated 200000 times.
+four-station ring -- that is 800000 rows carrying roughly 2000 bytes each, and
+the file lands near 1.6 GB. A large part of that is not information: float64 on
+quantities known to three digits, and columns holding one value repeated
+200000 times.
 
-This module is the policy that decides what actually gets written. It is
-deliberately independent of the harness: it takes the assembled ``{name: array}``
-column dictionaries and returns filtered, downcast ones, matching on column-name
-*glob patterns* rather than on any knowledge of how ring stations are suffixed.
-That keeps it working when the station scheme changes.
+This module decides how much of it reaches disk. It is deliberately independent
+of the harness: it takes the assembled ``{name: array}`` column dictionaries and
+returns transformed ones, matching on column-name glob patterns rather than on
+any knowledge of how ring stations are suffixed, so it keeps working when the
+station scheme changes.
 
 Three levels, chosen by ``eval.evaluate.catalog_level``:
 
 ``summary``
     No per-object tables at all. ``SUMMARY``, ``BINNED`` and ``LEAKSUM``
-    survive, which is every number the ablation tables report (m1, c2, alpha,
-    shape noise). Kilobytes. This is the right level for an ablation arm: the
-    paper quotes four scalars from it and nothing else.
+    survive, which is every number an ablation row reports (m1, c2, alpha,
+    shape noise). Kilobytes. This is the right level for an ablation arm.
 
 ``paper`` (default)
-    Every shape and response the harness measured, minus the crossed pairs no
-    reported number divides by and the auxiliaries no table carries, plus the
-    truth, PSF moments and S/N needed to re-derive m, c, alpha and beta and to
-    bin any of them. float32. This is what to run the fiducial model at.
+    Every column the harness measured, present under its own name, stored in
+    float32. Nothing else changes: same HDUs, same column set, same shapes.
+    Roughly 2x smaller, and a reader written against ``full`` works against it
+    unmodified.
 
 ``full``
-    Every column the harness measured, still downcast to float32. For
-    debugging a response that is not behaving; not for a campaign.
+    Byte-for-byte what the harness has always written: float64, nothing
+    replaced. Choose it when you need the per-object columns to reproduce
+    ``SUMMARY`` EXACTLY rather than to seven digits -- that is a float64
+    property, and the harness's own contract tests assert it at ``rel=1e-9``.
 
-Nothing here changes a measured value. The derived tables are computed from the
-full-precision arrays before slimming, so ``SUMMARY`` is bit-for-bit unaffected
-by the level -- a property :func:`shrink_fits.main` checks explicitly.
+Nothing here changes a measured value at any level. The derived tables are
+computed upstream from the full-precision arrays, so they are identical
+whichever level is chosen -- a property :func:`shrink_fits.shrink` checks by
+checksum and refuses to write if it does not hold.
+
+What float32 does cost is the exactness of the reverse direction: recomputing
+m or c from the stored per-object columns agrees with ``SUMMARY`` to about
+1e-7 at ``paper`` rather than bit-for-bit. That is five orders below the ~1e-4
+jackknife error on m, so it costs the science nothing, but it is a real
+difference and it is pinned by
+``tests/test_evaluation_fits_level.py::test_paper_level_reproduces_summary_to_float32``.
+
+The saving is deliberately NOT achieved by removing anything a reader might
+index by name. Two earlier versions of this module tried, and both broke a real
+consumer: one dropped "the correction each estimator is not scored through" and
+took the ShearNet response the reported m divides by (see :data:`PAPER_DROP`);
+the other replaced constant columns with ``SLIMMETA`` entries and took
+``Rbarpsf_<est>_metacal``, which is how the corrected shape is reproduced from
+the raw one. A column being derivable is not the same as a column being absent
+without warning, and the second is what a downstream KeyError feels like.
+
+Constant and alias replacement still exist -- :func:`slim_columns` takes
+``drop_constants`` and ``drop_aliases`` -- but they are OFF by default and
+opt-in through ``shrink_fits --replace-constants``, for the case where the
+reader is known.
 """
 
 from __future__ import annotations
@@ -66,55 +88,38 @@ CATALOG_LEVELS = ("summary", "paper", "full")
 #: needed to reconstruct every number in the paper and nothing else.
 DEFAULT_LEVEL = "paper"
 
-#: Columns kept at ``paper`` level: the applied and observed truth, the PSF
-#: moments the leakage fit regresses against, the S/N the binned tables
-#: stratify by, the catalog truth the size trend needs, and every shape and
-#: response the harness measures. Matched with :func:`fnmatch.fnmatchcase`, so
-#: the trailing star covers any ring-station suffix.
+#: Columns kept at ``paper`` level, matched with :func:`fnmatch.fnmatchcase`:
+#: everything. The hook is left in place because a future level may want to
+#: narrow it, and because being explicit that the answer is "all of them" is
+#: worth more than an absent constant.
 #:
-#: The response families are spelled out rather than collapsed to ``R*``,
-#: because the harness distinguishes ``R_`` (the direct/scene response),
-#: ``Rgamma_`` (metacal's shear response), ``Rpsf_`` (the PSF response) and
-#: ``Rbarpsf_`` (an ensemble scalar) -- and a single ``R_*`` pattern silently
-#: matches none of the last three.
-PAPER_KEEP_PREFIXES = (
-    "g_th*",       # observed truth shear, per station
-    "gpsf*",       # PSF ellipticity -- the leakage x-axis
-    "Tpsf*",       # PSF size -- the beta coefficient regresses on it
-    "s2n",         # galaxy S/N (the bare column, not s2n_ngmix)
-    "hlr_th*",     # catalog half-light radius -- the size trend
-    "flux_th*",    # catalog flux
-    "flag_*",      # per-estimator failure flags
-    "e_*",         # every shape, subject to PAPER_DROP below
-    "R_*",         # direct (scene-shear) response
-    "Rgamma_*",    # metacal shear response
-    "Rpsf_*",      # PSF response
-)
+#: If you ever do narrow it, note that the harness distinguishes four response
+#: families -- ``R_`` (direct/scene), ``Rgamma_`` (metacal shear), ``Rpsf_``
+#: (PSF) and ``Rbarpsf_`` (ensemble) -- and a single ``R_*`` pattern matches
+#: none of the last three. That mistake would silently delete the response every
+#: reported m divides by.
+PAPER_KEEP_PREFIXES = ("*",)
 
-#: Dropped at ``paper`` level, each for a stated reason. Everything here is
-#: either recoverable from what remains, or is not read by any number the paper
-#: reports. All of it survives at ``full``.
+#: Dropped at ``paper`` level by name. Deliberately empty.
 #:
-#: The response entries are the crossed pairs: ngmix is scored through
-#: metacalibration, so its direct ``R_ngmix_sim`` is a diagnostic; ShearNet is
-#: scored through the direct route (``shearnet_metacal`` is off by default), so
-#: its metacal columns are. Note that ``Rpsf_<est>_sim`` is kept for BOTH
-#: estimators -- the PSF response is always measured the direct way for
-#: everything, and it is the right-hand panel of the response-vs-S/N figure.
-PAPER_DROP = (
-    # An ensemble scalar the harness broadcasts to one value per row. The
-    # constant detector would catch it anyway; naming it documents the intent.
-    "Rbarpsf_*",
-    # ngmix's own size/flux/S-N estimates: no reported table carries them, and
-    # the per-galaxy accuracy table that once did was cut from the draft.
-    "T_ngmix*", "flux_ngmix*", "s2n_ngmix*",
-    "hlr_shearnet*", "flux_shearnet*",
-    # ngmix scored through metacal -> its direct R^gamma is a diagnostic.
-    "R_ngmix_sim*",
-    # ShearNet scored through the direct route -> its metacal columns are.
-    "R_shearnet_metacal*", "Rgamma_shearnet_metacal*",
-    "Rpsf_shearnet_metacal*", "e_shearnet_metacal*",
-)
+#: An earlier version of this list tried to be clever: it dropped the response
+#: each estimator's reported number does not divide by, on the theory that
+#: ngmix is scored through metacalibration and ShearNet through the direct
+#: route. That was wrong, and wrong in the most expensive direction. With
+#: ``shearnet_metacal: true`` -- which the fiducial config sets -- BOTH
+#: estimators measure the same nine reconvolved products and both divide by
+#: their metacal ``R^gamma``. The rule would have deleted precisely the columns
+#: the ShearNet number is built from.
+#:
+#: The lesson generalises: which correction is authoritative is a config
+#: decision made per run, so a static list cannot know it, and being wrong is
+#: silent and unrecoverable. ``paper`` therefore drops nothing by name. Its
+#: saving comes entirely from transformations that cannot lose information --
+#: float32 storage, constants recorded in SLIMMETA, and exact duplicates
+#: recorded as aliases. If a campaign needs a smaller file than that, the
+#: answer is ``summary``, which drops the rows honestly rather than guessing
+#: which columns will not be missed.
+PAPER_DROP: Tuple[str, ...] = ()
 
 
 class SlimReport:
@@ -135,7 +140,7 @@ class SlimReport:
     def __init__(self) -> None:
         self.kept: List[str] = []
         self.dropped: Dict[str, str] = {}
-        self.constants: Dict[str, float] = {}
+        self.constants: Dict[str, object] = {}
         self.aliases: Dict[str, str] = {}
         self.before_bytes = 0
         self.after_bytes = 0
@@ -198,13 +203,14 @@ def _matches_any(name: str, patterns: Iterable[str]) -> bool:
 def _paper_keep(name: str) -> Tuple[bool, str]:
     """Decide one column at ``paper`` level. Returns ``(keep, reason)``.
 
-    Drops win over keeps: the keep list is deliberately broad (``e_*``, the
-    response families) so that a column the harness gains later is retained by
-    default rather than silently lost, and the drop list is the short, explicit
-    set of exceptions.
+    Keeps everything by name. The level's saving comes from the lossless
+    transformations in :func:`slim_columns` -- float32 storage, constants and
+    duplicates recorded in SLIMMETA -- not from deciding which measurements the
+    reader will not want. See :data:`PAPER_DROP` for why that decision does not
+    belong in a static list.
     """
     if _matches_any(name, PAPER_DROP):
-        return False, "not read by any reported number, or recoverable"
+        return False, "explicitly dropped at paper level"
     if not _matches_any(name, PAPER_KEEP_PREFIXES):
         return False, "outside the paper column set"
     return True, ""
@@ -233,22 +239,28 @@ def _downcast(array: np.ndarray, float_dtype) -> np.ndarray:
     return array
 
 
-def _constant_value(array: np.ndarray) -> Optional[float]:
-    """The single value a 1-D column holds, or None if it varies.
+def _constant_value(array: np.ndarray):
+    """The single row a column repeats, or None if it varies.
 
-    NaN-tolerant: an all-NaN column is constant too, and is worth dropping --
-    it means the measurement never succeeded.
+    Works on any column shape, not just scalars. ``Rbarpsf_<est>_metacal`` is a
+    2x2 ensemble response broadcast to one entry per object: constant down the
+    row axis, but ``(n, 2, 2)``. A 1-D-only check would leave it as a column
+    (harmless) -- but the moment anything drops it, the value has to have been
+    recorded, or the corrected shape can no longer be reproduced from the raw
+    one. So the shape of the repeated element is what gets stored.
+
+    NaN-tolerant: an all-NaN column is constant too, and worth dropping -- it
+    means the measurement never succeeded.
     """
-    if array.ndim != 1 or array.size == 0:
+    if array.size == 0 or array.shape[0] == 0:
         return None
     if not np.issubdtype(array.dtype, np.number):
         return None
     first = array[0]
-    if np.isnan(first):
-        return float("nan") if np.all(np.isnan(array)) else None
-    if np.all(array == first):
-        return float(first)
-    return None
+    same = np.isclose(array, first[None], rtol=0, atol=0, equal_nan=True)
+    if not bool(np.all(same)):
+        return None
+    return float(first) if array.ndim == 1 else np.asarray(first).tolist()
 
 
 def slim_columns(
@@ -256,8 +268,8 @@ def slim_columns(
     level: str = DEFAULT_LEVEL,
     *,
     float_dtype=np.float32,
-    drop_constants: bool = True,
-    drop_aliases: bool = True,
+    drop_constants: bool = False,
+    drop_aliases: bool = False,
 ) -> Tuple[Dict[str, np.ndarray], SlimReport]:
     """Apply the schema policy to one table's columns.
 
@@ -268,9 +280,11 @@ def slim_columns(
         float_dtype: storage dtype for float64 columns. Pass ``np.float64`` to
             keep full precision while still dropping unused columns.
         drop_constants: replace a column holding one repeated value with a
-            SLIMMETA entry recording that value.
+            SLIMMETA entry recording that value. OFF by default: the value
+            survives, but the column name does not, and a reader that indexes
+            it gets a KeyError rather than a smaller file.
         drop_aliases: drop a column bitwise identical to one already kept,
-            recording which it duplicates.
+            recording which it duplicates. OFF by default, same reason.
 
     Returns:
         ``(kept_columns, report)``.
@@ -285,6 +299,15 @@ def slim_columns(
         for name in columns:
             report.dropped[name] = "catalog_level=summary writes no rows"
         return {}, report
+
+    if level == "full":
+        # Byte-for-byte the historical file: no downcast, no constant or alias
+        # replacement. A reader that has not been taught about SLIMMETA still
+        # sees exactly what it always did.
+        kept = {name: np.asarray(a) for name, a in columns.items() if a is not None}
+        report.kept.extend(kept)
+        report.after_bytes = sum(int(a.nbytes) for a in kept.values())
+        return kept, report
 
     kept: Dict[str, np.ndarray] = {}
     seen: Dict[bytes, str] = {}
@@ -438,7 +461,12 @@ def write_evaluation_fits(
 
     for name, table in derived:
         hdus.append(fits.BinTableHDU(table, name=name))
-    hdus.append(fits.BinTableHDU(meta_table(reports), name="SLIMMETA"))
+    # Only when something was actually replaced. With the default settings
+    # nothing is, so the HDU list matches the historical file at every level and
+    # a reader needs to know nothing about this module.
+    meta = meta_table(reports)
+    if len(meta):
+        hdus.append(fits.BinTableHDU(meta, name="SLIMMETA"))
 
     fits.HDUList(hdus).writeto(path, overwrite=True)
     total = sum(report.after_bytes for _, report in reports)

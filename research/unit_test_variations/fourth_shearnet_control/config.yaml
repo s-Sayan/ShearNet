@@ -34,11 +34,9 @@ model:
   # construction (Reynolds averaging over the eight square symmetries with the
   # spin-2 sign weights of Lin et al. 2026 Eqs. 25-26), not a separate baseline.
   # Setting both branches to `d4cnn` is what makes the equivariance real:
-  # `process_psf: true` feeds the PSF through its own equivariant branch, so a
   # rotation applied to the galaxy AND its PSF rotates the prediction, which is
   # the PSF-equivariance half of the claim.
   architecture: d4-fork-like
-  process_psf: true
   fusion: transformer
   head: attention
   galaxy_branch: d4cnn

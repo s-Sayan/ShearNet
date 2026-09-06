@@ -13,7 +13,6 @@ dataset:
 
 # Model configuration  
 model:
-  process_psf: True
   type: "fork-like"  # Options: mlp, cnn, resnet, forklens_psf, 
                      # research_backed, and fork-like
   galaxy:

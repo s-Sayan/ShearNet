@@ -30,7 +30,6 @@ galaxy:
 
 model:
   architecture: d4-fork-like
-  process_psf: true
   fusion: transformer
   head: attention
   # The smooth branches retain differentiability for the response losses.

@@ -98,6 +98,15 @@ def trained_run(tmp_path_factory):
                 "component": "both",
                 "shearnet_metacal": True,
                 "shearnet_batch_size": 64,
+                # Exact reproduction of SUMMARY from the per-object columns is a
+                # float64 property, and several tests below assert it at
+                # rel=1e-9. `paper` (the default) stores float32, which
+                # reproduces to ~1e-7 -- five orders below the 1e-4 error bar on
+                # m, so scientifically free, but not bit-exact. The contract
+                # tests therefore run at `full`, and
+                # test_paper_level_reproduces_summary_to_float32 pins what the
+                # default costs.
+                "catalog_level": "full",
                 "output": "evaluation.fits",
             },
         },
@@ -212,6 +221,10 @@ def test_evaluation_writes_one_fits_with_every_hdu(trained_run):
 
     with fits.open(path) as hdul:
         names = [h.name for h in hdul]
+        # catalog_level 'paper' (the default) changes the storage dtype and
+        # nothing else, so the HDU list is the same one this file has always
+        # had. A level that adds or removes an HDU here would break every
+        # reader written against it.
         assert names == ["PRIMARY", "TAB_P", "TAB_M", "TAB_P2", "TAB_M2",
                          "LEAKAGE", "SUMMARY", "BINNED", "LEAKSUM"], names
         n = benchmark.get("eval.n_obs")

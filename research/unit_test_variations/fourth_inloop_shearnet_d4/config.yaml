@@ -30,7 +30,6 @@ galaxy:
 
 model:
   architecture: d4-fork-like
-  process_psf: true
   fusion: transformer
   head: attention
   galaxy_branch: shearnet-d4

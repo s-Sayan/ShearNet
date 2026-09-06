@@ -29,7 +29,6 @@ galaxy:
 
 model:
   architecture: d4-fork-like
-  process_psf: true
   fusion: transformer                   # concat | transformer
   # D4 branch backbones (all choices stay D4-equivariant via orbit averaging):
   #   d4cnn (smooth default) | research_backed | forklens_psf

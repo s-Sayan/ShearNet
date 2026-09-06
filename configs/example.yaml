@@ -12,7 +12,6 @@ dataset:
 
 # Model configuration  
 model:
-  process_psf: False
   type: "cnn"  # Options: mlp, cnn, resnet, forklens_psf, 
                #          research_backed, and fork-like
   # Example fork-like setup

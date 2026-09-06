@@ -55,8 +55,16 @@ def _columns_of(hdu) -> dict:
     return {name: np.asarray(data[name]) for name in data.columns.names}
 
 
-def shrink(path: Path, out: Path, level: str, *, float_dtype=np.float32) -> Tuple[int, int]:
-    """Rewrite ``path`` to ``out`` at ``level``. Returns ``(before, after)`` bytes."""
+def shrink(path: Path, out: Path, level: str, *, float_dtype=np.float32,
+           replace_constants: bool = False) -> Tuple[int, int]:
+    """Rewrite ``path`` to ``out`` at ``level``. Returns ``(before, after)`` bytes.
+
+    ``replace_constants`` additionally moves constant and duplicate columns into
+    SLIMMETA. It is off by default because it removes column NAMES: the values
+    survive and are recoverable, but a reader that indexes
+    ``Rbarpsf_<est>_metacal`` gets a KeyError rather than a smaller file. Turn it
+    on only when you know what reads the output.
+    """
     from astropy.io import fits
     from astropy.table import Table
 
@@ -88,7 +96,11 @@ def shrink(path: Path, out: Path, level: str, *, float_dtype=np.float32) -> Tupl
                 continue
 
             columns = _columns_of(hdu)
-            kept, report = slim_columns(columns, level, float_dtype=float_dtype)
+            kept, report = slim_columns(
+                columns, level, float_dtype=float_dtype,
+                drop_constants=replace_constants,
+                drop_aliases=replace_constants,
+            )
             report.log(name)
             reports.append((name, report))
             if not kept:
@@ -97,7 +109,11 @@ def shrink(path: Path, out: Path, level: str, *, float_dtype=np.float32) -> Tupl
             slim = fits.BinTableHDU(Table(kept), header=_stripped(hdu.header), name=hdu.name)
             out_hdus.append(slim)
 
-    out_hdus.append(fits.BinTableHDU(meta_table(reports), name="SLIMMETA"))
+    # Only when something was actually replaced, so the default output has the
+    # same HDU list as its input.
+    meta = meta_table(reports)
+    if len(meta):
+        out_hdus.append(fits.BinTableHDU(meta, name="SLIMMETA"))
     out.parent.mkdir(parents=True, exist_ok=True)
     fits.HDUList(out_hdus).writeto(out, overwrite=True)
 
@@ -160,6 +176,10 @@ def main(argv=None) -> int:
                         help=f"schema level (default: {DEFAULT_LEVEL})")
     parser.add_argument("--keep-float64", action="store_true",
                         help="do not downcast float64 columns")
+    parser.add_argument("--replace-constants", action="store_true",
+                        help="also move constant and duplicate columns into "
+                             "SLIMMETA. This removes their column names; only "
+                             "use it when you know what reads the output.")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="log the reason each column was dropped")
     args = parser.parse_args(argv)
@@ -175,6 +195,7 @@ def main(argv=None) -> int:
     before, after = shrink(
         args.path, out, args.level,
         float_dtype=np.float64 if args.keep_float64 else np.float32,
+        replace_constants=args.replace_constants,
     )
     logger.info("%s -> %s", args.path, out)
     logger.info("%.1f MB -> %.1f MB (%.1fx smaller)",

@@ -134,3 +134,35 @@ def test_a_bad_level_is_rejected_before_any_measurement(run_module):
     source = inspect.getsource(run_module._run_evaluation)
     body = source[: source.index("_measure_shear_pair")]
     assert "resolve_level" in body
+
+
+def test_paper_level_reproduces_summary_to_float32(run_module, tmp_path):
+    """What the default level costs, stated as a number rather than assumed.
+
+    `full` lets the per-object columns reproduce SUMMARY bit-for-bit, which is
+    the contract test_shear_bias_run.py asserts at rel=1e-9. `paper` stores
+    float32, so the same recomputation agrees to ~1e-7 instead.
+
+    That is five orders below the 1e-4 jackknife error on m and so costs the
+    science nothing -- but it is a real difference between the levels, and it
+    should be visible here rather than discovered by someone whose exact
+    comparison stopped working.
+    """
+    from astropy.io import fits
+
+    exact = _write(run_module, tmp_path / "f", "full")
+    stored = _write(run_module, tmp_path / "p", "paper")
+
+    def m_of(path):
+        with fits.open(path) as hdul:
+            plus, minus = hdul["TAB_P"].data, hdul["TAB_M"].data
+            num = 0.5 * (np.asarray(plus["e_shearnet"], float)[:, 0]
+                         - np.asarray(minus["e_shearnet"], float)[:, 0])
+            den = 0.5 * (np.asarray(plus["R_shearnet_sim"], float)[:, 0, 0]
+                         + np.asarray(minus["R_shearnet_sim"], float)[:, 0, 0])
+            return num.mean() / den.mean()
+
+    a, b = m_of(exact), m_of(stored)
+    assert a == pytest.approx(b, rel=1e-6), (a, b)
+    # And tight enough that it could never move a reported m1 at the 1e-3 level.
+    assert abs(a - b) < 1e-6 * abs(a)

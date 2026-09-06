@@ -14,7 +14,6 @@ dataset:
   flux_type: "constant"
 
 model:
-  process_psf: true
   type: "fork-like"  # Options: mlp, cnn, resnet, forklens_psf, 
                #          research_backed, and fork-like
   galaxy:
