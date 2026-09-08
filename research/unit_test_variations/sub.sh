@@ -110,7 +110,14 @@ start_time=$(date +%s)
 
 if [[ "${SKIP_TRAIN:-0}" -eq 0 ]]; then
     echo "--- training ---"
-    shearnet-train --config "$CONFIG"
+    # Abort the job if training fails. Without this the evaluation runs anyway
+    # and loads whatever training_config.yaml happens to be in the model
+    # directory -- a STALE one from an earlier run -- so the log ends with a
+    # confusing second error about that old config instead of the real failure.
+    if ! shearnet-train --config "$CONFIG"; then
+        echo "!!! training failed; not evaluating. The error above is the real one." >&2
+        exit 1
+    fi
 else
     echo "--- training skipped ---"
 fi

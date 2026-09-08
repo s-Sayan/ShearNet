@@ -20,6 +20,9 @@ the arm exists, and anything you need to know before trusting its number.
 
 `sub.sh` accepts a tier path directly:
 
+To submit everything the paper needs in one go, see
+`research/submit_paper_runs.sh` (dry run by default). For a single arm:
+
 ```
 cd research/unit_test_variations
 ./sub.sh tier1/no_psf_response
@@ -28,21 +31,23 @@ cd research/unit_test_variations
 ./sub.sh tier2/06_d4_equivariant --no-train    # evaluate an existing checkpoint
 ```
 
-## Set `catalog_level: summary` on the arms
+## Leave `catalog_level` at `paper`
 
-The arms inherit `catalog_level: paper` from the fiducial, which writes every
-per-object column in float32 — a few hundred MB. An ablation row reports four
-scalars — m1, c2, |alpha| and the shape noise — and every one of them is in
-`SUMMARY`/`LEAKSUM`. Setting `summary` takes each arm's output from ~800 MB to
-~25 kB. Across the 24 arms here that is the difference between 19 GB and
-600 kB, and it is the only size lever that matters: `paper` is a dtype change
-and buys 2x, no more.
+It is tempting to set `summary` on the arms: an ablation row reports four
+scalars and `summary` is kilobytes against ~800 MB. **Don't.** The `|alpha|`
+column is not one of the derived tables. `LEAKSUM` carries the mean shape and
+`R^PSF` only; alpha and beta are fitted by
+`research/shear_bias/leakage_vs_size.py` from the per-object `LEAKAGE` columns
+(`gpsf`, `Tpsf`, `e_<est>_raw_ring`), and `summary` deletes that table. An arm
+run at `summary` cannot produce its own alpha, and both ablation tables have an
+alpha column.
 
-Do it in `generate_configs.py` (add `"eval.evaluate.catalog_level": "summary"`
-to the tier deltas) rather than per file, so it survives regeneration.
+At `paper` each run is ~800 MB, so the whole 28-run campaign is ~22 GB. That is
+not a problem, and it is the safe default.
 
-Keep `paper` for the fiducial and for the four unit-test rungs: those are the
-runs whose per-object columns the figures are built from.
+(If storage ever does become the binding constraint, the honest fix is a level
+that keeps `LEAKAGE` and drops `TAB_*` — the m/c an arm reports already live in
+`SUMMARY`. That does not exist yet; don't approximate it with `summary`.)
 
 ## What is here
 

@@ -11,9 +11,6 @@
 # Changed from the fiducial:
 #   train.generation            ->  'upfront'
 #   train.response              ->  <removed>
-#   train.backend               ->  'galsim'
-#   train.jax_fft_size          ->  <removed>
-#   train.jax_batch_size        ->  <removed>
 #   model.architecture          ->  'fork-like'
 #   model.fusion                ->  'concat'
 #   model.galaxy_branch         ->  'research_backed'
@@ -97,8 +94,10 @@ train:
   - 1.0
   ema_decay: 0.999
   plot: true
-  backend: galsim
+  backend: jax-galsim
   generation: upfront
+  jax_fft_size: 256
+  jax_batch_size: 128
   noise:
     min_sd: null
     max_sd: null

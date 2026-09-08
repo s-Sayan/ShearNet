@@ -15,6 +15,7 @@ from .. import __version__
 from ..config.config_handler import Config, load_default_config
 from ..core.augment import d4_augment
 from ..core.dataset import split_combined_images
+from ..core.models import is_fork_model
 from ..core.specs import DatasetSpec, TrainConfig
 from ..logging_utils import get_logger
 from ..plotting import plot_learning_curve
@@ -408,7 +409,7 @@ def _warn_on_legacy_process_psf(config):
         return
     process_psf = bool(config.get("model.process_psf"))
     nn = config.get("model.type")
-    if process_psf == shearnet.core.models.is_fork_model(nn):
+    if process_psf == is_fork_model(nn):
         logger.info(
             "model.process_psf is no longer read; the architecture (%r) decides "
             "whether the PSF branch exists. The value agrees, so nothing changes.", nn

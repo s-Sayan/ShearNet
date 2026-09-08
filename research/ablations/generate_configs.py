@@ -159,12 +159,18 @@ leave-one-out arms in Tier 3.""",
 #: inside the autodiff graph, which arrives at rung 7. Removing the whole
 #: `train.response` block is therefore not an extra variable, it is what "before
 #: in-loop rendering" means.
+#:
+#: The BACKEND stays jax-galsim. An earlier version of this also set
+#: `backend: galsim`, conflating "renders up front" with "renders with a
+#: different library". They are independent, and the evaluation refuses any run
+#: whose backend is not jax-galsim (run.py: R^PSF is a finite difference on the
+#: PSF shear, which needs jax-galsim's explicit per-object psf_g1/psf_g2). Those
+#: six arms would each have trained to completion and then failed at the
+#: measurement. `python research/ablations/preflight.py` now checks this
+#: statically for every config.
 _PRE_INLOOP = {
     "train.generation": "upfront",
     "train.response": None,
-    "train.backend": "galsim",
-    "train.jax_fft_size": None,
-    "train.jax_batch_size": None,
 }
 
 _LADDER_CAVEAT = """This is a cumulative ladder, not a leave-one-out: each rung

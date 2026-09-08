@@ -68,6 +68,11 @@ datasets/
 *.out
 *.err
 *.sh
+# ...but the submission scripts are source, not run output. Without these
+# negations `git add -A` skips them silently: the commit succeeds, the file is
+# simply absent, and the omission only surfaces when someone tries to run it.
+!research/unit_test_variations/sub.sh
+!research/submit_paper_runs.sh
 *.sh.savecosmos15_superbit2023_phot_shapes_with_sigma.csv
 *.csv
 *.png
