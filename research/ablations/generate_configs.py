@@ -75,8 +75,19 @@ blamed on the PSF model or on the size-flux distribution.""",
             "galaxy.flux_type": "constant",
             "galaxy.hlr": 0.5,
             "galaxy.flux": 12258.97,
+            # Rotating a circular Gaussian PSF is the identity, so the orbit
+            # term is identically zero here. The code refuses the combination
+            # rather than letting a vacuous penalty look like an active one, so
+            # this rung must switch it off explicitly. Nothing is lost: the
+            # term contributes exactly zero gradient at this rung either way.
+            "train.response.orbit_weight": 0.0,
         },
-        caveats="""hlr and flux are constant here while `output_keys` still asks
+        caveats="""The PSF orbit penalty is off at this rung and only at this
+rung, because an ideal circular PSF makes it vacuous. Every other response term
+is unchanged, so UT1 is still the same objective as UT2-UT4 in everything that
+can act.
+
+hlr and flux are constant here while `output_keys` still asks
 for them. That is deliberate -- the network must be identical across the ladder
 -- and it is safe: fit_normalizer guards a zero standard deviation (it
 substitutes 1.0), so the auxiliary targets contribute a constant term rather

@@ -7,6 +7,11 @@ night:
 
   * an undefined name in the training entry point (a NameError raised the first
     time the in-loop path is executed, which no unit test covers),
+<<<<<<< HEAD
+=======
+  * a keyword the CLI passes that the trainer does not accept (a TypeError
+    raised at the same moment, for the same reason),
+>>>>>>> temp_import
   * a config whose backend the evaluation refuses,
   * an evaluation seed equal to the training seed, which the pipeline rejects
     by design,
@@ -89,6 +94,50 @@ def check_imports() -> List[str]:
     return problems
 
 
+<<<<<<< HEAD
+=======
+def check_call_signatures() -> List[str]:
+    """Every keyword the CLI passes must exist on the function it calls.
+
+    Python binds keyword arguments at CALL time, so an importable module can
+    still raise TypeError the first time the training path runs. This reads the
+    call sites out of the AST -- the same check tests/test_call_signatures.py
+    makes, repeated here so a submission is gated even when nobody ran pytest.
+    """
+    import ast
+    import importlib
+    import inspect
+
+    watched = {
+        "train_model_inloop": "shearnet.core.train_inloop",
+        "train_model": "shearnet.core.train",
+        "build_model": "shearnet.core.models",
+    }
+    problems: List[str] = []
+    accepted = {}
+    for function, module_name in watched.items():
+        module = importlib.import_module(module_name)
+        accepted[function] = set(inspect.signature(getattr(module, function)).parameters)
+
+    for source in sorted((REPO / "shearnet").rglob("*.py")):
+        tree = ast.parse(source.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (node.func.id if isinstance(node.func, ast.Name)
+                    else node.func.attr if isinstance(node.func, ast.Attribute) else None)
+            if name not in watched:
+                continue
+            for keyword in node.keywords:
+                if keyword.arg and keyword.arg not in accepted[name]:
+                    problems.append(
+                        f"{source.relative_to(REPO)}:{node.lineno}: passes "
+                        f"{keyword.arg!r} to {name}(), which does not accept it"
+                    )
+    return problems
+
+
+>>>>>>> temp_import
 def check_config(path: Path, check_paths: bool) -> List[str]:
     """Everything about one config that can be decided without running it."""
     from shearnet.config.config_handler import Config
@@ -187,7 +236,17 @@ def main(argv=None) -> int:
     if import_problems:
         failures.append(("shearnet (imports)", import_problems))
     else:
+<<<<<<< HEAD
         print("  ok")
+=======
+        print("  ok  imports and undefined names")
+
+    signature_problems = check_call_signatures()
+    if signature_problems:
+        failures.append(("shearnet (call signatures)", signature_problems))
+    else:
+        print("  ok  call signatures")
+>>>>>>> temp_import
 
     if args.skip_models:
         globals()["_check_model_builds"] = lambda config: []

@@ -211,16 +211,48 @@ def test_every_arm_explains_itself(arm):
     assert arm.title
 
 
+#: The one non-dataset key the ladder is allowed to change, and where.
+#: An ideal circular PSF makes the orbit penalty vacuous -- rotating it is the
+#: identity -- and the trainer refuses the combination rather than let a term
+#: that cannot act look like one that did. Switching it off at UT1 is forced BY
+#: the simulation, not a free choice about the objective, and it changes no
+#: gradient: the term contributes exactly zero there either way.
+_LADDER_OBJECTIVE_EXCEPTIONS = {
+    "research/unit_tests/first": {"train.response.orbit_weight"},
+}
+
+
 def test_the_unit_test_ladder_varies_only_the_simulation():
     """Table 1 is read down a column, which is valid only if the model is fixed.
 
-    Every key of the four rungs' deltas must be a dataset key.
+    Every key of the four rungs' deltas must be a dataset key, except where a
+    simulation choice makes an objective term structurally inapplicable -- and
+    those exceptions are enumerated above rather than waved through.
     """
     ladder = [a for a in ARMS if a.path.startswith("research/unit_tests/")]
     assert len(ladder) == 4
     for arm in ladder:
+        allowed = _LADDER_OBJECTIVE_EXCEPTIONS.get(arm.path, set())
         for key in arm.delta:
+            if key in allowed:
+                continue
             assert key.startswith(("psf.", "galaxy.", "image.")), (arm.path, key)
+
+
+def test_the_ideal_psf_rung_switches_off_the_vacuous_orbit_term():
+    """UT1 would otherwise refuse to start.
+
+    inloop.py raises when orbit_weight is set on a circular Gaussian PSF. This
+    is the failure that would have greeted UT1 immediately after the TypeError
+    was fixed, so it is pinned rather than rediscovered.
+    """
+    arm = next(a for a in ARMS if a.path == "research/unit_tests/first")
+    assert arm.delta.get("train.response.orbit_weight") == 0.0
+    assert _load(arm).get("training.response.orbit_weight") == 0.0
+    # ...and only at that rung: the other three have a real PSF to rotate.
+    for rung in ("second", "third", "fourth"):
+        other = next(a for a in ARMS if a.path == f"research/unit_tests/{rung}")
+        assert "train.response.orbit_weight" not in other.delta
 
 
 def test_the_ladder_rungs_agree_with_the_paper_table():

@@ -232,6 +232,22 @@ class TrainConfig:
     #: Channel widths of the ``d4cnn`` backbone inside ``d4-fork-like``. None
     #: keeps the default (16, 32); Lin et al. (2026) use five layers at base 32.
     branch_features: Optional[list] = field(default=None)
+    #: The 'shearnet-d4' schedule and the fusion/head sizes. Carried here so an
+    #: up-front run can describe the SAME network as an in-loop one -- a
+    #: d4-fork-like arm with generation: upfront otherwise fell back to the
+    #: defaults silently, training a model its config did not name.
+    d4_features: Optional[list] = field(default=None)
+    d4_depths_galaxy: Optional[list] = field(default=None)
+    d4_depths_psf: Optional[list] = field(default=None)
+    d4_multiscale: Optional[bool] = None
+    orbit_scan: bool = True
+    fusion_pos: str = "learned"
+    design: Optional[str] = None
+    d_model: Optional[int] = None
+    num_heads: Optional[int] = None
+    num_pool_heads: Optional[int] = None
+    num_self_attn_layers: Optional[int] = None
+    ffn_dim: Optional[int] = None
     resample_noise: bool = False
     # Per-step noise std in *model-input* units (physical nse_sd / image gal_std).
     # Not read from config -- computed in cli.train and injected before run().
@@ -262,6 +278,18 @@ class TrainConfig:
             ema_decay=config.get("training.ema_decay", None),
             dropout=config.get("model.dropout", 0.0),
             branch_features=config.get("model.branch_features", None),
+            d4_features=config.get("model.d4_features", None),
+            d4_depths_galaxy=config.get("model.d4_depths_galaxy", None),
+            d4_depths_psf=config.get("model.d4_depths_psf", None),
+            d4_multiscale=config.get("model.d4_multiscale", None),
+            orbit_scan=config.get("model.orbit_scan", True),
+            fusion_pos=config.get("model.fusion_pos", "learned"),
+            design=config.get("model.design", None),
+            d_model=config.get("model.d_model", None),
+            num_heads=config.get("model.num_heads", None),
+            num_pool_heads=config.get("model.num_pool_heads", None),
+            num_self_attn_layers=config.get("model.num_self_attn_layers", None),
+            ffn_dim=config.get("model.ffn_dim", None),
             resample_noise=config.get("training.resample_noise", False),
         )
 

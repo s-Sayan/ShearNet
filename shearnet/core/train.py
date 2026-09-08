@@ -152,6 +152,24 @@ def train_model(
     resample_noise=False,
     resample_noise_sd=0.0,
     branch_features=None,
+    # The D4 schedule and fusion sizes, accepted here for the same reason
+    # train_model_inloop accepts them: an ablation that trains up front must be
+    # able to describe the SAME network as one that trains in loop. Without
+    # these the up-front path silently fell back to the defaults, so a
+    # d4-fork-like arm with generation: upfront trained a different model than
+    # its config named -- no error, just a wrong number.
+    d4_features=None,
+    d4_depths_galaxy=None,
+    d4_depths_psf=None,
+    d4_multiscale=None,
+    orbit_scan=True,
+    fusion_pos="learned",
+    design=None,
+    d_model=None,
+    num_heads=None,
+    num_pool_heads=None,
+    num_self_attn_layers=None,
+    ffn_dim=None,
 ):
     """Train a ShearNet model with validation and early stopping.
 
@@ -267,6 +285,18 @@ def train_model(
         head=head,
         dropout=dropout,
         branch_features=branch_features,
+        d4_features=d4_features,
+        d4_depths_galaxy=d4_depths_galaxy,
+        d4_depths_psf=d4_depths_psf,
+        d4_multiscale=d4_multiscale,
+        orbit_scan=orbit_scan,
+        fusion_pos=fusion_pos,
+        design=design,
+        d_model=d_model,
+        num_heads=num_heads,
+        num_pool_heads=num_pool_heads,
+        num_self_attn_layers=num_self_attn_layers,
+        ffn_dim=ffn_dim,
     )
 
     # Dropout is opt-in (rate > 0). Only then does the model contain an

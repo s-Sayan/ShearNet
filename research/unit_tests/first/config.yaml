@@ -9,11 +9,12 @@
 #   research/unit_test_variations/fourth_inloop_shearnet_d4_2drope/config.yaml
 #
 # Changed from the fiducial:
-#   psf.mode          ->  'ideal'
-#   galaxy.hlr_type   ->  'constant'
-#   galaxy.flux_type  ->  'constant'
-#   galaxy.hlr        ->  0.5
-#   galaxy.flux       ->  12258.97
+#   psf.mode                     ->  'ideal'
+#   galaxy.hlr_type              ->  'constant'
+#   galaxy.flux_type             ->  'constant'
+#   galaxy.hlr                   ->  0.5
+#   galaxy.flux                  ->  12258.97
+#   train.response.orbit_weight  ->  0.0
 #
 # Why:
 # Shear recovery in isolation. The PSF is a circular Gaussian of
@@ -23,6 +24,11 @@
 # blamed on the PSF model or on the size-flux distribution.
 #
 # Read this before trusting the result:
+# The PSF orbit penalty is off at this rung and only at this
+# rung, because an ideal circular PSF makes it vacuous. Every other response term
+# is unchanged, so UT1 is still the same objective as UT2-UT4 in everything that
+# can act.
+#
 # hlr and flux are constant here while `output_keys` still asks
 # for them. That is deliberate -- the network must be identical across the ladder
 # -- and it is safe: fit_normalizer guards a zero standard deviation (it
@@ -113,7 +119,7 @@ train:
     psf_weight: 0.1
     shift_weight: 0.01
     complement_weight: 0.001
-    orbit_weight: 0.01
+    orbit_weight: 0.0
     isotropy_weight: 0.01
     every_n_steps: 4
     orbit_k: 4
