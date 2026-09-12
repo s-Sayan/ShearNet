@@ -7,11 +7,8 @@ night:
 
   * an undefined name in the training entry point (a NameError raised the first
     time the in-loop path is executed, which no unit test covers),
-<<<<<<< HEAD
-=======
   * a keyword the CLI passes that the trainer does not accept (a TypeError
     raised at the same moment, for the same reason),
->>>>>>> temp_import
   * a config whose backend the evaluation refuses,
   * an evaluation seed equal to the training seed, which the pipeline rejects
     by design,
@@ -94,8 +91,6 @@ def check_imports() -> List[str]:
     return problems
 
 
-<<<<<<< HEAD
-=======
 def check_call_signatures() -> List[str]:
     """Every keyword the CLI passes must exist on the function it calls.
 
@@ -137,7 +132,6 @@ def check_call_signatures() -> List[str]:
     return problems
 
 
->>>>>>> temp_import
 def check_config(path: Path, check_paths: bool) -> List[str]:
     """Everything about one config that can be decided without running it."""
     from shearnet.config.config_handler import Config
@@ -236,9 +230,6 @@ def main(argv=None) -> int:
     if import_problems:
         failures.append(("shearnet (imports)", import_problems))
     else:
-<<<<<<< HEAD
-        print("  ok")
-=======
         print("  ok  imports and undefined names")
 
     signature_problems = check_call_signatures()
@@ -246,7 +237,6 @@ def main(argv=None) -> int:
         failures.append(("shearnet (call signatures)", signature_problems))
     else:
         print("  ok  call signatures")
->>>>>>> temp_import
 
     if args.skip_models:
         globals()["_check_model_builds"] = lambda config: []

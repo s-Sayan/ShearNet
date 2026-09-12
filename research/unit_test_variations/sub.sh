@@ -89,12 +89,12 @@ JOBID=$(sbatch --parsable \
     --export="ALL,CONFIG=$CONFIG,REPO=$REPO,SKIP_TRAIN=$SKIP_TRAIN,BASELINE=$BASELINE" \
     <<'SBATCH'
 #!/bin/bash
-#SBATCH -p short
+#SBATCH -p long
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:rtx_pro_6000_b:1
 #SBATCH --cpus-per-task=18
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --mem=200G
 
 echo "===================================="
