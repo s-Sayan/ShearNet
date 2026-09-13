@@ -105,6 +105,7 @@ TIER4=(
 # --------------------------------------------------------------------------
 GO=0
 SKIP_DONE=0
+ONLY_DONE=0
 PREFLIGHT=1
 SELECTED=()
 EXTRA=()
@@ -118,11 +119,32 @@ Options:
   --unit-tests      only the four simulation-ladder rungs
   --tier N          only tier N; repeatable (--tier 1 --tier 3)
   --skip-done       skip a run that already has benchmarking/evaluation.fits
+  --only-done       the opposite: submit ONLY runs that already finished, i.e.
+                    that have benchmarking/evaluation.fits. This is how you
+                    re-measure the finished half of the campaign while the
+                    other half is still training -- without it, --no-train
+                    would submit jobs for runs with no checkpoint yet, which
+                    fail immediately, and for runs mid-training, whose
+                    checkpoint is a partial model.
   --no-preflight    skip the static checks (they run by default and gate
                     submission; see research/ablations/preflight.py)
   --no-train        pass --no-train through to sub.sh (evaluate existing
                     checkpoints; useful to re-measure without retraining)
+  --eval-catalog P  pass through to sub.sh: measure on catalog P
+  --output REL      pass through to sub.sh: write the FITS to REL under
+                    paths.root, so a re-measurement does not overwrite the
+                    original
   -h, --help        this
+
+RE-MEASURING THE FINISHED RUNS ON A SIZE-CUT CATALOG
+
+  python research/shear_bias/cut_catalog.py \
+      --in  cosmos_catalog_eval.fits --out cosmos_catalog_eval_r15.fits \
+      --min-resolution 1.5 --psf-fwhm 0.5
+
+  ./research/submit_paper_runs.sh --go --only-done --no-train \
+      --eval-catalog "$PWD/cosmos_catalog_eval_r15.fits" \
+      --output benchmarking/evaluation_r15.fits
 USAGE
 }
 
@@ -133,8 +155,13 @@ while [[ $# -gt 0 ]]; do
         --tier) SELECTED+=("tier$2"); shift 2 ;;
         --tier=*) SELECTED+=("tier${1#*=}"); shift ;;
         --skip-done) SKIP_DONE=1; shift ;;
+        --only-done) ONLY_DONE=1; shift ;;
         --no-preflight) PREFLIGHT=0; shift ;;
         --no-train) EXTRA+=(--no-train); shift ;;
+        --eval-catalog) EXTRA+=(--eval-catalog "$2"); shift 2 ;;
+        --eval-catalog=*) EXTRA+=(--eval-catalog "${1#*=}"); shift ;;
+        --output) EXTRA+=(--output "$2"); shift 2 ;;
+        --output=*) EXTRA+=(--output "${1#*=}"); shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
@@ -211,6 +238,15 @@ for name in "${RUNS[@]}"; do
     dir="$(resolve "$name")"
     if [[ "$SKIP_DONE" -eq 1 && -f "$dir/benchmarking/evaluation.fits" ]]; then
         printf '  %-34s SKIP (evaluation.fits exists)\n' "$name"
+        SKIPPED=$((SKIPPED + 1))
+        continue
+    fi
+    # A finished run is one that wrote its FITS. That is a stronger test than
+    # "a checkpoint exists": a run halfway through training also has a
+    # checkpoint, and re-measuring it would quietly put a partially trained
+    # model in the same table as fully trained ones.
+    if [[ "$ONLY_DONE" -eq 1 && ! -f "$dir/benchmarking/evaluation.fits" ]]; then
+        printf '  %-34s SKIP (not finished: no evaluation.fits)\n' "$name"
         SKIPPED=$((SKIPPED + 1))
         continue
     fi

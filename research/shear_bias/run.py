@@ -211,6 +211,26 @@ def _parser():
             "eval.evaluate.baseline."
         ),
     )
+    parser.add_argument(
+        "--eval-catalog",
+        default=None,
+        help=(
+            "Override paths.eval_catalog. Re-measuring 28 finished runs on a "
+            "size-cut catalog otherwise means editing 28 YAMLs, and an arm "
+            "whose config was missed is then measured on a different "
+            "population than the rest of its own table."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help=(
+            "Override eval.evaluate.output, the FITS path under paths.root. "
+            "Give the cut re-measurement its own filename so it does not "
+            "overwrite the uncut result, which is the only record of the "
+            "bias the cut removed."
+        ),
+    )
     return parser
 
 
@@ -1312,6 +1332,16 @@ def _leakage_pass(renderer, measures, predictor, *, samples, seed, step, njac,
     gal = np.asarray(stamps.galaxy_images, dtype=float)
     columns["s2n"] = np.sqrt(np.sum(gal**2, axis=(1, 2))) / max(noise_sd, 1e-12)
     del gal
+    # The rendered truth, so this table can be cut on the same sample the m/c
+    # tables are. Without it alpha is measured on every object while m is
+    # measured on the resolved ones, which is two different samples in one
+    # paper. Intrinsic rotation turns the galaxy without resizing it, so these
+    # are station-independent and measured once, like the PSF moments above.
+    labels = np.asarray(stamps.labels, dtype=float)
+    if labels.shape[1] > 2:
+        columns["hlr_th"] = labels[:, 2]
+    if labels.shape[1] > 3:
+        columns["flux_th"] = labels[:, 3]
 
     turned = {
         degrees: renderer.render(samples, seed=seed, intrinsic_rotation=degrees)
@@ -1324,12 +1354,23 @@ def _leakage_pass(renderer, measures, predictor, *, samples, seed, step, njac,
     if any(name in measures for name in ("ngmix", "shearnet")):
         for station, degrees in enumerate(rotations):
             images = stamps if station == 0 else turned[degrees]
-            ng, ng_rpsf, _, sn, sn_rpsf = _metacal_pass(
+            ng, ng_rpsf, ng_extra, sn, sn_rpsf = _metacal_pass(
                 renderer, images.galaxy_images, images.psf_images,
                 seed=seed + 100 + station,
                 psf_model=psf_model, gal_model=gal_model, step=step, nproc=nproc,
                 predictor=predictor if "shearnet" in measures else None, batch=batch,
             )
+            # SuperBIT's selection cut is T_noshear / Tpsf_noshear and
+            # s2n_noshear from ngmix's own fit; both are already computed here
+            # and were being discarded. Taken from the unrotated station, which
+            # is the one the m/c tables' T_ngmix comes from. Written whether or
+            # not ngmix is a reported estimator: the cut defines the sample, and
+            # a sample that moved with whichever estimator is being scored would
+            # make the table's columns incomparable.
+            if station == 0:
+                columns["T_ngmix"] = ng_extra["T"]
+                columns["s2n_ngmix"] = ng_extra["s2n"]
+                columns["flux_ngmix"] = ng_extra["flux"]
             metacal[degrees] = {
                 "ngmix": (ng, ng_rpsf),
                 "shearnet": (sn, sn_rpsf),
@@ -1663,6 +1704,14 @@ def _write_evaluation_fits(benchmark, section, tables, leakage_columns, result):
 def main() -> None:
     args = _parser().parse_args()
     benchmark = Config(args.config)
+    if args.eval_catalog is not None:
+        if not Path(args.eval_catalog).is_file():
+            raise SystemExit(f"--eval-catalog does not exist: {args.eval_catalog}")
+        benchmark._set_nested("paths.eval_catalog", args.eval_catalog)
+        logger.info("eval catalog overridden: %s", args.eval_catalog)
+    if args.output is not None:
+        benchmark._set_nested("eval.evaluate.output", args.output)
+        logger.info("output overridden: %s", args.output)
     training = load_training_config(_model_name(benchmark), args.training_config)
     estimators = _estimators(_section(benchmark, "evaluate"), args.baseline)
     result = _run_evaluation(benchmark, training, estimators)

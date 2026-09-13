@@ -33,6 +33,9 @@ Usage: $(basename "$0") <variation> [--no-train] [--estimators LIST]
                      (e.g. first), or any repo-relative directory
   --no-train         skip training; evaluate the existing checkpoint
   --baseline WHICH   ngmix (default), anacal, or both
+  --eval-catalog P   measure on this catalog instead of paths.eval_catalog
+  --output REL       write the FITS here under paths.root, instead of
+                     benchmarking/evaluation.fits
 
 Variations with an in-loop config:
 $(cd "$ROOT" && grep -ls 'generation:[[:space:]]*inloop' */config.yaml 2>/dev/null \
@@ -64,15 +67,29 @@ fi
 
 SKIP_TRAIN=0
 BASELINE=""
+EVAL_CATALOG=""
+OUTPUT=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --no-train|--skip-train|--benchmark-only) SKIP_TRAIN=1; shift ;;
         --baseline) BASELINE="$2"; shift 2 ;;
         --baseline=*) BASELINE="${1#*=}"; shift ;;
+        --eval-catalog) EVAL_CATALOG="$2"; shift 2 ;;
+        --eval-catalog=*) EVAL_CATALOG="${1#*=}"; shift ;;
+        --output) OUTPUT="$2"; shift 2 ;;
+        --output=*) OUTPUT="${1#*=}"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
 done
+
+# Fail here rather than 40 minutes into a job on a node. A mistyped catalog path
+# would otherwise be caught only after the render, and silently fall back to the
+# config's own catalog if run.py were lenient about it.
+if [[ -n "$EVAL_CATALOG" && ! -f "$EVAL_CATALOG" ]]; then
+    echo "--eval-catalog does not exist: $EVAL_CATALOG" >&2
+    exit 1
+fi
 
 LOGDIR="$RUNDIR/logs"
 mkdir -p "$LOGDIR"
@@ -81,12 +98,14 @@ echo "Variation:  $VARIATION"
 echo "Config:     $CONFIG"
 echo "Baseline:   ${BASELINE:-<from config>}  (ShearNet is always evaluated)"
 [[ "$SKIP_TRAIN" -eq 1 ]] && echo "Training:   skipped, reusing the checkpoint"
+[[ -n "$EVAL_CATALOG" ]] && echo "Catalog:    $EVAL_CATALOG"
+[[ -n "$OUTPUT" ]] && echo "Output:     $OUTPUT"
 
 JOBID=$(sbatch --parsable \
     --job-name="$VARIATION" \
     --output="$LOGDIR/%j.out" \
     --error="$LOGDIR/%j.err" \
-    --export="ALL,CONFIG=$CONFIG,REPO=$REPO,SKIP_TRAIN=$SKIP_TRAIN,BASELINE=$BASELINE" \
+    --export="ALL,CONFIG=$CONFIG,REPO=$REPO,SKIP_TRAIN=$SKIP_TRAIN,BASELINE=$BASELINE,EVAL_CATALOG=$EVAL_CATALOG,OUTPUT=$OUTPUT" \
     <<'SBATCH'
 #!/bin/bash
 #SBATCH -p long
@@ -123,11 +142,11 @@ else
 fi
 
 echo "--- evaluating (ShearNet vs ${BASELINE:-config baseline}) ---"
-if [[ -n "${BASELINE:-}" ]]; then
-    python "$REPO/research/shear_bias/run.py" -c "$CONFIG" --baseline "$BASELINE"
-else
-    python "$REPO/research/shear_bias/run.py" -c "$CONFIG"
-fi
+EVAL_ARGS=(-c "$CONFIG")
+[[ -n "${BASELINE:-}" ]] && EVAL_ARGS+=(--baseline "$BASELINE")
+[[ -n "${EVAL_CATALOG:-}" ]] && EVAL_ARGS+=(--eval-catalog "$EVAL_CATALOG")
+[[ -n "${OUTPUT:-}" ]] && EVAL_ARGS+=(--output "$OUTPUT")
+python "$REPO/research/shear_bias/run.py" "${EVAL_ARGS[@]}"
 
 end_time=$(date +%s)
 runtime=$((end_time - start_time))
