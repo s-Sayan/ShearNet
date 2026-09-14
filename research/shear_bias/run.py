@@ -231,6 +231,17 @@ def _parser():
             "bias the cut removed."
         ),
     )
+    parser.add_argument(
+        "--n-obs",
+        type=int,
+        default=None,
+        help=(
+            "Override eval.n_obs. A size-cut catalog is SHORTER than the one "
+            "the config was written for -- the renderer indexes the catalog by "
+            "position and refuses more samples than rows -- so re-measuring on "
+            "one needs this lowered to fit."
+        ),
+    )
     return parser
 
 
@@ -986,7 +997,8 @@ def _run_evaluation(benchmark: Config, training: Config, estimators) -> dict:
         rotations=rotations, psf_model=psf_model, gal_model=gal_model, nproc=nproc,
         batch=batch,
     )
-    result.update(_timing_pass(renderer, predictor, samples=samples, seed=seed, batch=batch))
+    result.update(_timing_pass(renderer, predictor, samples=samples, seed=seed,
+                               batch=batch, measures=measures))
     _write_evaluation_fits(benchmark, section, tables, leakage_columns, result)
     return result
 
@@ -1469,13 +1481,20 @@ def _leakage_pass(renderer, measures, predictor, *, samples, seed, step, njac,
     return columns
 
 
-def _timing_pass(renderer, predictor, *, samples, seed, batch):
-    """Render and inference wall-clock, on the same population size.
+def _timing_pass(renderer, predictor, *, samples, seed, batch, measures=None):
+    """Render and per-estimator inference wall-clock, on one population.
 
     In-loop training has no separable render cost -- the render lives inside the
     step -- so this times the *benchmark* render, which is always up front. The
     reported generation records which mode trained the model, so the number is
     not misread as training throughput.
+
+    Both estimators are timed on the SAME rendered stamps, one pass each, which
+    is what the paper's timing table compares: the catalog measurement step,
+    with rendering, JAX compilation and the metacal response images excluded for
+    both. Timing only the network would leave that table's second row and its
+    ratio permanently unfillable -- there is nowhere else in the pipeline the
+    plain ngmix fit is measured on its own.
     """
     warm = renderer.render(2, seed=seed + 10_000)
     if predictor is not None:
@@ -1489,11 +1508,18 @@ def _timing_pass(renderer, predictor, *, samples, seed, batch):
         start = time.perf_counter()
         predictor(stamps.galaxy_images, stamps.psf_images, batch_size=batch)
         inference_seconds = time.perf_counter() - start
-    return {
+
+    out = {
         "render_seconds": render_seconds,
         "inference_seconds": inference_seconds,
         "timing_note": "benchmark rendering is always up-front; generation is the training mode",
     }
+    ngmix_measure = (measures or {}).get("ngmix")
+    if ngmix_measure is not None:
+        start = time.perf_counter()
+        ngmix_measure(stamps.galaxy_images, stamps.psf_images)
+        out["ngmix_seconds"] = time.perf_counter() - start
+    return out
 
 
 def _summary_table(result):
@@ -1677,7 +1703,8 @@ def _write_evaluation_fits(benchmark, section, tables, leakage_columns, result):
                 "n_jackknife", "bin_by", "psf_response_apply",
                 "metacal_psf_response_apply", "shearnet_metacal",
                 "shape_noise_cancel", "ring",
-                "ngmix_nproc", "render_seconds", "inference_seconds"):
+                "ngmix_nproc", "render_seconds", "inference_seconds",
+                "ngmix_seconds"):
         if key in result:
             value = result[key]
             # FITS keywords are 8 characters. Truncation is the rule here, but
@@ -1701,6 +1728,33 @@ def _write_evaluation_fits(benchmark, section, tables, leakage_columns, result):
     )
 
 
+def _check_catalog_fits(benchmark) -> None:
+    """Refuse a catalog shorter than n_obs, here rather than in the renderer.
+
+    The renderer indexes the catalog by position, so it raises on the first
+    render -- after the job has been queued, scheduled and has loaded a
+    checkpoint. A size-cut catalog is exactly the case that trips it, and the
+    fix is always the same number, so say it up front.
+    """
+    catalog = benchmark.get("paths.eval_catalog")
+    n_obs = _eval(benchmark, "n_obs", benchmark.get("evaluation.test_samples"))
+    if not catalog or n_obs is None or not Path(catalog).is_file():
+        return
+    try:
+        from astropy.io import fits
+
+        with fits.open(catalog) as hdul:
+            rows = len(hdul[1].data)
+    except Exception:  # pragma: no cover - never block on a probe
+        return
+    if int(n_obs) > rows:
+        raise SystemExit(
+            f"eval.n_obs is {int(n_obs)} but {Path(catalog).name} has only "
+            f"{rows} rows; the renderer indexes the catalog by position and "
+            f"will refuse it.\nPass --n-obs {rows} (or fewer)."
+        )
+
+
 def main() -> None:
     args = _parser().parse_args()
     benchmark = Config(args.config)
@@ -1712,6 +1766,10 @@ def main() -> None:
     if args.output is not None:
         benchmark._set_nested("eval.evaluate.output", args.output)
         logger.info("output overridden: %s", args.output)
+    if args.n_obs is not None:
+        benchmark._set_nested("eval.n_obs", args.n_obs)
+        logger.info("n_obs overridden: %s", args.n_obs)
+    _check_catalog_fits(benchmark)
     training = load_training_config(_model_name(benchmark), args.training_config)
     estimators = _estimators(_section(benchmark, "evaluate"), args.baseline)
     result = _run_evaluation(benchmark, training, estimators)

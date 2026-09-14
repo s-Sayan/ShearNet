@@ -36,6 +36,8 @@ Usage: $(basename "$0") <variation> [--no-train] [--estimators LIST]
   --eval-catalog P   measure on this catalog instead of paths.eval_catalog
   --output REL       write the FITS here under paths.root, instead of
                      benchmarking/evaluation.fits
+  --n-obs N          measure N objects instead of eval.n_obs; a size-cut
+                     catalog has fewer rows than the config expects
 
 Variations with an in-loop config:
 $(cd "$ROOT" && grep -ls 'generation:[[:space:]]*inloop' */config.yaml 2>/dev/null \
@@ -69,6 +71,7 @@ SKIP_TRAIN=0
 BASELINE=""
 EVAL_CATALOG=""
 OUTPUT=""
+N_OBS=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --no-train|--skip-train|--benchmark-only) SKIP_TRAIN=1; shift ;;
@@ -78,6 +81,8 @@ while [[ $# -gt 0 ]]; do
         --eval-catalog=*) EVAL_CATALOG="${1#*=}"; shift ;;
         --output) OUTPUT="$2"; shift 2 ;;
         --output=*) OUTPUT="${1#*=}"; shift ;;
+        --n-obs) N_OBS="$2"; shift 2 ;;
+        --n-obs=*) N_OBS="${1#*=}"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
@@ -100,12 +105,13 @@ echo "Baseline:   ${BASELINE:-<from config>}  (ShearNet is always evaluated)"
 [[ "$SKIP_TRAIN" -eq 1 ]] && echo "Training:   skipped, reusing the checkpoint"
 [[ -n "$EVAL_CATALOG" ]] && echo "Catalog:    $EVAL_CATALOG"
 [[ -n "$OUTPUT" ]] && echo "Output:     $OUTPUT"
+[[ -n "$N_OBS" ]] && echo "n_obs:      $N_OBS"
 
 JOBID=$(sbatch --parsable \
     --job-name="$VARIATION" \
     --output="$LOGDIR/%j.out" \
     --error="$LOGDIR/%j.err" \
-    --export="ALL,CONFIG=$CONFIG,REPO=$REPO,SKIP_TRAIN=$SKIP_TRAIN,BASELINE=$BASELINE,EVAL_CATALOG=$EVAL_CATALOG,OUTPUT=$OUTPUT" \
+    --export="ALL,CONFIG=$CONFIG,REPO=$REPO,SKIP_TRAIN=$SKIP_TRAIN,BASELINE=$BASELINE,EVAL_CATALOG=$EVAL_CATALOG,OUTPUT=$OUTPUT,N_OBS=$N_OBS" \
     <<'SBATCH'
 #!/bin/bash
 #SBATCH -p long
@@ -146,6 +152,7 @@ EVAL_ARGS=(-c "$CONFIG")
 [[ -n "${BASELINE:-}" ]] && EVAL_ARGS+=(--baseline "$BASELINE")
 [[ -n "${EVAL_CATALOG:-}" ]] && EVAL_ARGS+=(--eval-catalog "$EVAL_CATALOG")
 [[ -n "${OUTPUT:-}" ]] && EVAL_ARGS+=(--output "$OUTPUT")
+[[ -n "${N_OBS:-}" ]] && EVAL_ARGS+=(--n-obs "$N_OBS")
 python "$REPO/research/shear_bias/run.py" "${EVAL_ARGS[@]}"
 
 end_time=$(date +%s)

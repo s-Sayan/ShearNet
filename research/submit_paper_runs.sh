@@ -134,6 +134,8 @@ Options:
   --output REL      pass through to sub.sh: write the FITS to REL under
                     paths.root, so a re-measurement does not overwrite the
                     original
+  --n-obs N         pass through to sub.sh: measure N objects. REQUIRED with a
+                    size-cut catalog, which has fewer rows than eval.n_obs
   -h, --help        this
 
 RE-MEASURING THE FINISHED RUNS ON A SIZE-CUT CATALOG
@@ -144,7 +146,7 @@ RE-MEASURING THE FINISHED RUNS ON A SIZE-CUT CATALOG
 
   ./research/submit_paper_runs.sh --go --only-done --no-train \
       --eval-catalog "$PWD/cosmos_catalog_eval_r15.fits" \
-      --output benchmarking/evaluation_r15.fits
+      --output benchmarking/evaluation_r15.fits --n-obs 74992
 USAGE
 }
 
@@ -162,6 +164,8 @@ while [[ $# -gt 0 ]]; do
         --eval-catalog=*) EXTRA+=(--eval-catalog "${1#*=}"); shift ;;
         --output) EXTRA+=(--output "$2"); shift 2 ;;
         --output=*) EXTRA+=(--output "${1#*=}"); shift ;;
+        --n-obs) EXTRA+=(--n-obs "$2"); shift 2 ;;
+        --n-obs=*) EXTRA+=(--n-obs "${1#*=}"); shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
