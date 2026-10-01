@@ -28,14 +28,16 @@ dependencies = [
     "optax>=0.1.0",
     "orbax-checkpoint==0.11.20",
     "galsim>=2.3",
+    # ngmix itself is installed from github (it isnt on pypi) and doesnt
+    # declare numba, so it has to be declared here
     "numba>=0.57.0",
-    "pympler>=1.0",
     "numpy>=1.20",
     "scipy>=1.7",
     "matplotlib>=3.5",
     "tqdm>=4.60",
-    "seaborn>=0.11",  
     "pyyaml>=5.4",
+    # catalogs in, evaluation catalogs out
+    "astropy>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -44,15 +46,22 @@ gpu = [
     "jax[cuda12]>=0.4.0",  # GPU version with CUDA 12
 ]
 
-dev = [
+# what CI installs: pytest plus the static checks the suite runs
+test = [
     "pytest>=7.0",
+    "pyflakes>=3.0",
+]
+
+dev = [
+    "shearnet[test]",
     "pytest-cov>=3.0",
     "black>=22.0",
     "flake8>=4.0",
     "isort>=5.0",
     "ipython>=8.0",
-    "ipdb>=0.13",  # interactive debugger used by research scripts (research/shear_bias/**/main.py)
+    "ipdb>=0.13",
     "jupyter>=1.0",
+    "pympler>=1.0",  # methods.ngmix.get_memory_usage
 ]
 
 # AnaCal supplies the FPFS reference estimator for the research benchmarks and
