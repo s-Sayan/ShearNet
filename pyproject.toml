@@ -64,13 +64,6 @@ dev = [
     "pympler>=1.0",  # methods.ngmix.get_memory_usage
 ]
 
-# AnaCal supplies the FPFS reference estimator for the research benchmarks and
-# nothing else, so it stays optional. Pinned at >=0.8: the harness calls
-# anacal.fpfs.process_image with a forced `detection` catalogue and reads the
-# fpfs1_de*_dg* response columns, and neither is guaranteed on earlier releases.
-calibration = [
-    "anacal>=0.8",
-]
 [project.urls]
 Homepage = "https://github.com/s-Sayan/ShearNet"
 Repository = "https://github.com/s-Sayan/ShearNet.git"

@@ -717,10 +717,9 @@ class ForkLike(nn.Module):
 # ---------------------------------------------------------------------------
 # D4-equivariant fork-like model
 #
-# Implements the D4CNN construction of Lin et al. (2026), "D4CNN x AnaCal:
-# Physics-Informed Machine Learning for Accurate and Precise Weak Lensing Shear
-# Estimation" (arXiv:2603.19046), adapted to ShearNet's two-branch (galaxy +
-# PSF) ``fork-like`` layout with an optional transformer fusion.
+# Implements the D4CNN construction of Lin et al. (2026, arXiv:2603.19046),
+# adapted to ShearNet's two-branch (galaxy + PSF) ``fork-like`` layout with an
+# optional transformer fusion.
 #
 # The idea: galaxy ellipticity is a spin-2 quantity, so under the D4 group
 # (90-degree rotations + mirrors) the two shape components must transform as

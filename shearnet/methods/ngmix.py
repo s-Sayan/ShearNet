@@ -648,10 +648,8 @@ def _fit_pool_worker(obs):
 def fit_shapes(obslist, seed=42, psf_model="gauss", gal_model="gauss", nproc=None):
     """Fit each observation once, with no metacal, returning ``(e, flags)``.
 
-    This is the measurement half of ngmix on its own: it is what the shared
-    renderer-response protocol differentiates, so that the ngmix baseline can be
-    calibrated the same way the network and FPFS are and the three numbers mean
-    the same thing.
+    This is the measurement half of ngmix on its own, the plain fit on the
+    original stamp with no metacal products.
 
     ``nproc`` follows the same rule as :func:`mp_fit_one_single`: ``None`` means
     the SLURM allocation, 1 off-cluster. At ~7 ms/object a plain fit is 20x
