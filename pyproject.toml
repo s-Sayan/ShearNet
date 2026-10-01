@@ -77,7 +77,6 @@ Repository = "https://github.com/s-Sayan/ShearNet.git"
 
 [project.scripts]
 shearnet-train = "shearnet.cli.train:main"
-shearnet-eval = "shearnet.cli.evaluate:main"
 
 [tool.setuptools.packages.find]
 include = ["shearnet*"]
