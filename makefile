@@ -65,11 +65,6 @@ install:
 		pip install git+https://github.com/esheldon/ngmix.git --use-pep517 --quiet && \
 		printf "$(GREEN)✓ NGmix installed$(NC)\n"
 	@printf "\n"
-	@printf "$(YELLOW)→ Running post-installation setup...$(NC)\n"
-	@$(CONDA_ACTIVATE) && conda activate shearnet && \
-		python scripts/post_installation.py
-	@printf "$(GREEN)✓ Setup complete$(NC)\n"
-	@printf "\n"
 	@printf "$(BOLD)$(GREEN)════════════════════════════════════════════$(NC)\n"
 	@printf "$(BOLD)$(GREEN)✓ Installation successful!$(NC)\n"
 	@printf "$(BOLD)$(WHITE)  Activate with: $(CYAN)conda activate shearnet$(NC)\n"
@@ -95,11 +90,6 @@ install-gpu:
 	@$(CONDA_ACTIVATE) && conda activate shearnet_gpu && \
 		pip install git+https://github.com/esheldon/ngmix.git --use-pep517 -q 2>&1 | grep -v DEPRECATION || true && \
 		printf "$(GREEN)✓ NGmix installed$(NC)\n"
-	@printf "\n"
-	@printf "$(YELLOW)→ Running post-installation setup...$(NC)\n"
-	@$(CONDA_ACTIVATE) && conda activate shearnet_gpu && \
-		python scripts/post_installation.py
-	@printf "$(GREEN)✓ Setup complete$(NC)\n"
 	@printf "\n"
 	@printf "$(BOLD)$(GREEN)════════════════════════════════════════════$(NC)\n"
 	@printf "$(BOLD)$(GREEN)✓ GPU Installation successful!$(NC)\n"
@@ -127,11 +117,6 @@ install-dev:
 		pip install git+https://github.com/esheldon/ngmix.git --quiet && \
 		printf "$(GREEN)✓ NGmix installed$(NC)\n"
 	@printf "\n"
-	@printf "$(YELLOW)→ Running post-installation setup...$(NC)\n"
-	@$(CONDA_ACTIVATE) && conda activate shearnet_dev && \
-		python scripts/post_installation.py
-	@printf "$(GREEN)✓ Setup complete$(NC)\n"
-	@printf "\n"
 	@printf "$(BOLD)$(GREEN)════════════════════════════════════════════$(NC)\n"
 	@printf "$(BOLD)$(GREEN)✓ Development installation successful!$(NC)\n"
 	@printf "$(BOLD)$(WHITE)  Activate with: $(CYAN)conda activate shearnet_dev$(NC)\n"
@@ -158,11 +143,6 @@ install-all:
 	@$(CONDA_ACTIVATE) && conda activate shearnet_all && \
 		pip install git+https://github.com/esheldon/ngmix.git --quiet && \
 		printf "$(GREEN)✓ NGmix installed$(NC)\n"
-	@printf "\n"
-	@printf "$(YELLOW)→ Running post-installation setup...$(NC)\n"
-	@$(CONDA_ACTIVATE) && conda activate shearnet_all && \
-		python scripts/post_installation.py
-	@printf "$(GREEN)✓ Setup complete$(NC)\n"
 	@printf "\n"
 	@printf "$(BOLD)$(GREEN)════════════════════════════════════════════$(NC)\n"
 	@printf "$(BOLD)$(GREEN)✓ Complete installation successful!$(NC)\n"
