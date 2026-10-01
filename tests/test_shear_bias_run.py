@@ -297,6 +297,32 @@ def test_evaluation_writes_one_fits_with_every_hdu(trained_run):
         assert set(leaksum["estimator"]) == set(harness.ESTIMATORS)
 
 
+def test_sheared_selection_quantities_are_kept(trained_run):
+    """ngmix T and s2n on 1p/1m/2p/2m reach the FITS, so R^S can be formed.
+
+    A cut on T/Tpsf or s2n moves with the shear; applying it to these columns
+    instead of to noshear is what measures the selection response. They must
+    be the fits on the sheared images, not copies of the noshear values.
+    """
+    from astropy.io import fits
+
+    benchmark, training = trained_run
+    harness._run_evaluation(benchmark, training, ("ngmix", "shearnet"))
+    path = Path(benchmark.get("paths.root")) / benchmark.get("eval.evaluate.output")
+    with fits.open(path) as hdul:
+        for hdu in ("TAB_P", "TAB_M", "LEAKAGE"):
+            tab = hdul[hdu].data
+            for t in harness.SHEARED_TYPES:
+                for key in ("T_ngmix", "s2n_ngmix"):
+                    assert f"{key}_{t}" in tab.names, (hdu, key, t)
+            noshear = np.asarray(tab["T_ngmix"], float)
+            plus = np.asarray(tab["T_ngmix_1p"], float)
+            ok = np.isfinite(noshear) & np.isfinite(plus)
+            assert ok.any(), hdu
+            assert not np.array_equal(noshear[ok], plus[ok]), hdu
+            np.testing.assert_allclose(plus[ok], noshear[ok], rtol=0.2)
+
+
 def test_the_metacal_shapes_reproduce_the_summary_row(trained_run):
     """SUMMARY must be recomputable from the per-object columns.
 

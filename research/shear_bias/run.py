@@ -192,6 +192,11 @@ DEFAULT_PSF_RESPONSE_APPLY = ()
 #: fit is 2 numbers per object, so there is no reason to hold more than a batch.
 NGMIX_CHUNK = 4096
 
+#: The metacal shear types whose fit T and s2n are kept per object, suffixed
+#: onto ``T_ngmix`` / ``s2n_ngmix``. Selecting on these instead of on noshear is
+#: what measures the selection response R^S.
+SHEARED_TYPES = ("1p", "1m", "2p", "2m")
+
 
 def _parser():
     parser = argparse.ArgumentParser(description="Training-matched shear-bias benchmark")
@@ -514,6 +519,12 @@ def _metacal_pass(renderer, galaxy, psf, *, seed, psf_model, gal_model, step, np
     # already in the struct -- and unrecoverable afterwards, because the fit
     # results are not kept.
     extra = {key: np.full(n, np.nan) for key in ("s2n", "T", "flux", "Tpsf")}
+    # The same fit's T and s2n on the four sheared images. A cut on T or s2n
+    # moves with the shear, and the selection response R^S is measured by
+    # applying the cut to these rather than to noshear. They are computed by the
+    # fits below either way; without keeping them R^S cannot be formed later.
+    sheared = {f"{key}_{t}": np.full(n, np.nan)
+               for t in SHEARED_TYPES for key in ("s2n", "T")}
     # eval.evaluate.shearnet_batch_size. This is the pass that OOMs first: it
     # forwards the same population NINE times (noshear, +/-g1, +/-g2 and the
     # four *_psf products), so it is where an ignored batch size shows up.
@@ -544,6 +555,10 @@ def _metacal_pass(renderer, galaxy, psf, *, seed, psf_model, gal_model, step, np
             if "noshear" in by_type:
                 for key in extra:
                     extra[key][i] = by_type["noshear"][key]
+            for t in SHEARED_TYPES:
+                if t in by_type:
+                    for key in ("s2n", "T"):
+                        sheared[f"{key}_{t}"][i] = by_type[t][key]
             if not all(k in by_type and by_type[k]["flags"] == 0 for k in METACAL_TYPES):
                 continue
             e[i] = by_type["noshear"]["g"]
@@ -582,6 +597,7 @@ def _metacal_pass(renderer, galaxy, psf, *, seed, psf_model, gal_model, step, np
             sn_flags[block] = ~np.isfinite(measured).all(axis=(1, 2))
             del stack, psf_stack, results
 
+    extra.update(sheared)
     ngmix_shape = ShapeMeasurement(e=e, dedg=dedg, flags=flags)
     network_shape = (
         ShapeMeasurement(e=sn_e, dedg=sn_dedg, flags=sn_flags) if want_network else None
@@ -1160,6 +1176,9 @@ def _measure_shear_pair(
                 col["s2n_ngmix"] = ngmix_extra["s2n"]
                 col["T_ngmix"] = ngmix_extra["T"]
                 col["flux_ngmix"] = ngmix_extra["flux"]
+                for t in SHEARED_TYPES:
+                    col[f"s2n_ngmix_{t}"] = ngmix_extra[f"s2n_{t}"]
+                    col[f"T_ngmix_{t}"] = ngmix_extra[f"T_{t}"]
             if network_shape is not None:
                 metacal_raw["shearnet"][label] = network_shape
                 metacal_rpsf["shearnet"][label] = network_rpsf
@@ -1383,6 +1402,9 @@ def _leakage_pass(renderer, measures, predictor, *, samples, seed, step, njac,
                 columns["T_ngmix"] = ng_extra["T"]
                 columns["s2n_ngmix"] = ng_extra["s2n"]
                 columns["flux_ngmix"] = ng_extra["flux"]
+                for t in SHEARED_TYPES:
+                    columns[f"s2n_ngmix_{t}"] = ng_extra[f"s2n_{t}"]
+                    columns[f"T_ngmix_{t}"] = ng_extra[f"T_{t}"]
             metacal[degrees] = {
                 "ngmix": (ng, ng_rpsf),
                 "shearnet": (sn, sn_rpsf),
