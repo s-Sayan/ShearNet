@@ -20,34 +20,33 @@ generate_configs = pytest.importorskip("generate_configs")
 
 ARMS = generate_configs.ALL_ARMS
 
-#: build_model's keyword names paired with the config keys they come from, and
-#: the defaults the training CLI applies. Mirrors shearnet/cli/train.py.
+#: build_model's keyword names paired with the config keys they come from.
 _BUILD_KEYS = {
-    "galaxy_type": ("model.galaxy.type", None),
-    "psf_type": ("model.psf.type", None),
-    "fusion": ("model.fusion", "concat"),
-    "head": ("model.head", "gap"),
-    "dropout": ("model.dropout", 0.0),
-    "branch_features": ("model.branch_features", None),
-    "d4_features": ("model.d4_features", None),
-    "d4_depths_galaxy": ("model.d4_depths_galaxy", None),
-    "d4_depths_psf": ("model.d4_depths_psf", None),
-    "d4_multiscale": ("model.d4_multiscale", None),
-    "orbit_scan": ("model.orbit_scan", True),
-    "fusion_pos": ("model.fusion_pos", "learned"),
-    "design": ("model.design", None),
-    "d_model": ("model.d_model", None),
-    "num_heads": ("model.num_heads", None),
-    "num_pool_heads": ("model.num_pool_heads", None),
-    "num_self_attn_layers": ("model.num_self_attn_layers", None),
-    "ffn_dim": ("model.ffn_dim", None),
+    "galaxy_type": "model.galaxy_branch",
+    "psf_type": "model.psf_branch",
+    "fusion": "model.fusion",
+    "head": "model.head",
+    "dropout": "model.dropout",
+    "branch_features": "model.branch_features",
+    "d4_features": "model.d4_features",
+    "d4_depths_galaxy": "model.d4_depths_galaxy",
+    "d4_depths_psf": "model.d4_depths_psf",
+    "d4_multiscale": "model.d4_multiscale",
+    "orbit_scan": "model.orbit_scan",
+    "fusion_pos": "model.fusion_pos",
+    "design": "model.design",
+    "d_model": "model.d_model",
+    "num_heads": "model.num_heads",
+    "num_pool_heads": "model.num_pool_heads",
+    "num_self_attn_layers": "model.num_self_attn_layers",
+    "ffn_dim": "model.ffn_dim",
 }
 
 
 def _load(arm):
-    from shearnet.config.config_handler import Config
+    from shearnet.config import Config
 
-    return Config(str(REPO / arm.path / "config.yaml"))
+    return Config.from_file(REPO / arm.path / "config.yaml")
 
 
 def _build_and_count(config):
@@ -58,8 +57,7 @@ def _build_and_count(config):
     from shearnet.core.models import build_model, is_fork_model
 
     nn = config.get("model.type")
-    kwargs = {name: config.get(key, default)
-              for name, (key, default) in _BUILD_KEYS.items()}
+    kwargs = {name: config.get(key) for name, key in _BUILD_KEYS.items()}
     model = build_model(nn, **kwargs)
     stamp = jnp.zeros((2, 53, 53))
     inputs = (stamp, stamp) if is_fork_model(nn) else (stamp,)
@@ -100,7 +98,7 @@ def test_no_two_arms_share_a_directory_or_a_model_name():
     """A collision would have two runs overwrite each other's checkpoints."""
     paths = [arm.path for arm in ARMS]
     assert len(paths) == len(set(paths))
-    names = [_load(arm).get("meta.model_name") for arm in ARMS]
+    names = [_load(arm).get("run_options.run_name") for arm in ARMS]
     assert len(names) == len(set(names)), sorted(names)
 
 
@@ -110,13 +108,13 @@ def test_no_two_arms_share_a_directory_or_a_model_name():
 @pytest.mark.parametrize("arm", ARMS, ids=_ids(ARMS))
 def test_config_loads_and_declares_a_root_matching_its_directory(arm):
     config = _load(arm)
-    assert config.get("paths.root").endswith(arm.path), config.get("paths.root")
+    assert config.get("run_options.outdir").endswith(arm.path), config.get("run_options.outdir")
 
 
 @pytest.mark.parametrize("arm", ARMS, ids=_ids(ARMS))
 def test_the_removed_process_psf_key_is_not_carried_forward(arm):
     """It is inert now; carrying it would only warn on every run."""
-    assert _load(arm).get("model.process_psf") is None
+    assert not any("process_psf" in note for note in _load(arm).notes)
 
 
 @pytest.mark.parametrize("arm", ARMS, ids=_ids(ARMS))
@@ -151,9 +149,9 @@ def test_the_model_each_config_describes_actually_builds(arm):
 # the deltas that should change the network do change it
 # ----------------------------------------------------------------------
 def _fiducial_count():
-    from shearnet.config.config_handler import Config
+    from shearnet.config import Config
 
-    return _build_and_count(Config(str(generate_configs.FIDUCIAL)))
+    return _build_and_count(Config.from_file(generate_configs.FIDUCIAL))
 
 
 @pytest.mark.slow

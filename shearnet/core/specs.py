@@ -48,6 +48,8 @@ class DatasetSpec:
     hlr_type: str = "constant"
     flux_type: str = "constant"
     cosmos_cat_fname: Optional[str] = None
+    #: Galaxy light profile, ``'exp'`` or ``'gauss'``; ``type`` to the renderers.
+    gal_type: str = "exp"
     compute_metacal: bool = False
     add_noise: bool = True
     nproc: Optional[int] = None
@@ -75,43 +77,44 @@ class DatasetSpec:
     _GALSIM_ONLY = ("nproc", "compute_metacal")
 
     @classmethod
-    def from_config(cls, config) -> "DatasetSpec":
-        """Build a spec from a :class:`Config` (training-side key layout)."""
+    def from_config(cls, config, population: str = "training") -> "DatasetSpec":
+        """Build a spec from a :class:`~shearnet.config.config_handler.Config`.
+
+        ``population`` picks the catalog, seed and size: ``"training"`` reads
+        ``simulation.catalogs.train_file`` / ``training.seed`` /
+        ``training.nobj``. The evaluation renderer starts from the training
+        spec and replaces those three itself.
+        """
+        if population != "training":
+            raise ValueError("DatasetSpec.from_config builds the training population")
         return cls(
-            samples=config.get("dataset.samples"),
-            psf_fwhm=config.get("dataset.psf_fwhm"),
-            exp=config.get("dataset.exp"),
-            seed=config.get("dataset.seed"),
-            npix=config.get("dataset.stamp_size"),
-            scale=config.get("dataset.pixel_size"),
+            samples=config.get("training.nobj"),
+            psf_fwhm=config.get("simulation.psf.gaussian_fwhm"),
+            exp=config.get("simulation.psf.mode"),
+            seed=config.get("training.seed"),
+            npix=config.get("simulation.stamp_size"),
+            scale=config.get("simulation.pixel_scale"),
             # A fork model takes a (galaxy, PSF) pair, so it needs the PSF
             # stamps rendered; a single-branch model has nowhere to put them.
-            # That is the whole content of the old ``model.process_psf`` key,
-            # which could only ever agree or conflict with the architecture.
             return_psf=is_fork_model(config.get("model.type")),
-            nse_sd=config.get("dataset.nse_sd"),
-            base_shear_range=config.get("dataset.base_shear_range", 0.0),
-            apply_psf_shear=config.get("dataset.apply_psf_shear", False),
-            psf_shear_range=config.get("dataset.psf_shear_range", 0.05),
-            psf_file_or_dir=config.get("dataset.psfex_model_file"),
+            nse_sd=config.get("simulation.noise_sigma"),
+            base_shear_range=config.get("training.base_shear_range"),
+            apply_psf_shear=config.get("simulation.apply_psf_shear"),
+            psf_shear_range=config.get("simulation.psf_shear_range"),
+            psf_file_or_dir=config.get("simulation.psf.psfex_file"),
             output_keys=tuple(config.get("model.output_keys")),
-            # Fall back to the dataclass defaults rather than to None: the
-            # packaged default config does not carry these keys (only the
-            # unit-test schema's galaxy.* block maps onto them), and passing
-            # None straight through made generate_dataset reject its own
-            # defaults.
-            hlr_type=config.get("dataset.hlr_type", "constant"),
-            flux_type=config.get("dataset.flux_type", "constant"),
-            cosmos_cat_fname=config.get("catalog.cosmos_cat_fname"),
-            compute_metacal=config.get("dataset.compute_metacal", False),
+            hlr_type=config.get("simulation.hlr_type"),
+            flux_type=config.get("simulation.flux_type"),
+            cosmos_cat_fname=config.get("simulation.catalogs.train_file"),
+            gal_type=config.get("simulation.gal_model"),
             # Fresh-noise training generates noise-free stamps here and re-draws
             # noise every epoch in train_model, so bake no noise in at gen time.
-            add_noise=not config.get("training.resample_noise", False),
-            nproc=config.get("dataset.nproc", None),
-            backend=config.get("dataset.backend", "galsim"),
-            jax_fft_size=config.get("dataset.jax_fft_size", 256),
-            jax_batch_size=config.get("dataset.jax_batch_size", 256),
-            generation=config.get("dataset.generation", "upfront"),
+            add_noise=not config.get("training.resample_noise"),
+            nproc=config.get("run_options.ncores"),
+            backend=config.get("simulation.backend"),
+            jax_fft_size=config.get("simulation.jax_fft_size"),
+            jax_batch_size=config.get("simulation.jax_batch_size"),
+            generation=config.get("training.generation"),
         )
 
     def __post_init__(self):
@@ -139,6 +142,7 @@ class DatasetSpec:
         kwargs = asdict(self)
         kwargs.pop("backend", None)
         kwargs.pop("generation", None)
+        kwargs["type"] = kwargs.pop("gal_type")
         drop = self._GALSIM_ONLY if self.backend == "jax-galsim" else self._JAX_ONLY
         for key in drop:
             kwargs.pop(key, None)
@@ -179,6 +183,7 @@ class DatasetSpec:
             npix=self.npix,
             scale=self.scale,
             psf_fwhm=self.psf_fwhm,
+            gal_type=self.gal_type,
             exp=self.exp,
             fft_size=self.jax_fft_size,
             batch_size=self.jax_batch_size,
@@ -260,12 +265,12 @@ class TrainConfig:
             epochs=config.get("training.epochs"),
             batch_size=config.get("training.batch_size"),
             nn=config.get("model.type"),
-            galaxy_type=config.get("model.galaxy.type"),
-            psf_type=config.get("model.psf.type"),
-            fusion=config.get("model.fusion", "concat"),
-            head=config.get("model.head", "gap"),
+            galaxy_type=config.get("model.galaxy_branch"),
+            psf_type=config.get("model.psf_branch"),
+            fusion=config.get("model.fusion"),
+            head=config.get("model.head"),
             save_path=save_path,
-            model_name=config.get("output.model_name"),
+            model_name=config.get("run_options.run_name"),
             val_split=config.get("training.val_split"),
             eval_interval=config.get("training.eval_interval"),
             patience=config.get("training.patience"),
@@ -274,23 +279,23 @@ class TrainConfig:
             output_keys=tuple(config.get("model.output_keys")),
             gap=config.get("model.gap"),
             weights=config.get("training.loss_weights"),
-            loss=config.get("training.loss", "mse"),
-            ema_decay=config.get("training.ema_decay", None),
-            dropout=config.get("model.dropout", 0.0),
-            branch_features=config.get("model.branch_features", None),
-            d4_features=config.get("model.d4_features", None),
-            d4_depths_galaxy=config.get("model.d4_depths_galaxy", None),
-            d4_depths_psf=config.get("model.d4_depths_psf", None),
-            d4_multiscale=config.get("model.d4_multiscale", None),
-            orbit_scan=config.get("model.orbit_scan", True),
-            fusion_pos=config.get("model.fusion_pos", "learned"),
-            design=config.get("model.design", None),
-            d_model=config.get("model.d_model", None),
-            num_heads=config.get("model.num_heads", None),
-            num_pool_heads=config.get("model.num_pool_heads", None),
-            num_self_attn_layers=config.get("model.num_self_attn_layers", None),
-            ffn_dim=config.get("model.ffn_dim", None),
-            resample_noise=config.get("training.resample_noise", False),
+            loss=config.get("training.loss"),
+            ema_decay=config.get("training.ema_decay"),
+            dropout=config.get("model.dropout"),
+            branch_features=config.get("model.branch_features"),
+            d4_features=config.get("model.d4_features"),
+            d4_depths_galaxy=config.get("model.d4_depths_galaxy"),
+            d4_depths_psf=config.get("model.d4_depths_psf"),
+            d4_multiscale=config.get("model.d4_multiscale"),
+            orbit_scan=config.get("model.orbit_scan"),
+            fusion_pos=config.get("model.fusion_pos"),
+            design=config.get("model.design"),
+            d_model=config.get("model.d_model"),
+            num_heads=config.get("model.num_heads"),
+            num_pool_heads=config.get("model.num_pool_heads"),
+            num_self_attn_layers=config.get("model.num_self_attn_layers"),
+            ffn_dim=config.get("model.ffn_dim"),
+            resample_noise=config.get("training.resample_noise"),
         )
 
     def as_kwargs(self) -> dict:

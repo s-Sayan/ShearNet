@@ -114,7 +114,7 @@ def test_the_upfront_path_actually_carries_the_d4_schedule():
     from shearnet.config.config_handler import Config
     from shearnet.core.specs import TrainConfig
 
-    config = Config(str(REPO / "research/ablations/tier2/06_d4_equivariant/config.yaml"))
+    config = Config.from_file(REPO / "research/ablations/tier2/06_d4_equivariant/config.yaml")
     kwargs = TrainConfig.from_config(config, save_path="/tmp/unused").as_kwargs()
     for key in ("d4_features", "d4_depths_galaxy", "d4_depths_psf", "design"):
         assert kwargs.get(key) == config.get(f"model.{key}"), key

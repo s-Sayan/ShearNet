@@ -1,270 +1,151 @@
-"""Layered YAML + command-line configuration handling for ShearNet."""
+"""Load, validate and query a ShearNet configuration.
 
-import argparse
+A :class:`Config` is always complete: every field of
+:mod:`shearnet.config.schema` has a value, every path is absolute, and every
+cross-field rule has passed. Building one reads a YAML file and nothing else --
+no directory is created and no simulation runs -- so a typo costs a second.
+
+Values are read with dotted keys::
+
+    config.get("training.epochs")
+    config.get("training.response")      # a whole block, as a dict
+
+A key the schema does not have raises :class:`KeyError`. That is deliberate:
+reading a misspelled key and getting ``None`` back is how settings used to be
+ignored without anyone noticing.
+"""
+
+from __future__ import annotations
+
+import copy
 import os
-from pathlib import Path
-from typing import Any, Dict, Optional
-
-import yaml
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from ..logging_utils import get_logger
+from . import legacy
+from .loader import dump_yaml, read_yaml
+from .schema import (
+    EVALUATION_OVERRIDABLE,
+    FIELDS,
+    ConfigError,
+    check_keys,
+    flatten,
+    resolve,
+)
 
 logger = get_logger(__name__)
 
-DEFAULT_CONFIG_PATH = Path(__file__).parent / "default_config.yaml"
+__all__ = ["Config", "ConfigError", "load_config"]
 
-
-def load_default_config() -> Dict[str, Any]:
-    """Return the package default configuration as a plain dict.
-
-    Single source of truth for defaults: both :class:`Config` and the CLI
-    fallback defaults read from this file.
-    """
-    with open(DEFAULT_CONFIG_PATH, "r") as f:
-        return yaml.safe_load(f)
+_PREFIXES = frozenset(
+    ".".join(key.split(".")[:i]) for key in FIELDS for i in range(1, key.count(".") + 1)
+)
 
 
 class Config:
-    """Layered configuration for the ShearNet CLIs.
+    """A resolved configuration. Build it with :meth:`from_file` or :meth:`from_dict`."""
 
-    Loads ``config/default_config.yaml`` first, then deep-merges an optional
-    user YAML on top, and finally lets command-line arguments override
-    individual values. Output paths default to ``$SHEARNET_DATA_PATH`` (or the
-    current directory) and are created on init.
+    def __init__(self, resolved: Mapping[str, Any], source: Optional[str] = None,
+                 notes: Iterable[str] = ()):
+        self._data = copy.deepcopy(dict(resolved))
+        self.source = source
+        #: What a legacy translation changed; empty for a current-schema file.
+        self.notes: List[str] = list(notes)
 
-    Values are read and written with dot-notation paths, e.g.
-    ``config.get('training.epochs')`` or ``config._set_nested('dataset.seed', 0)``.
-    """
+    # -- construction ------------------------------------------------------
+    @classmethod
+    def from_dict(cls, mapping: Mapping[str, Any], base_dir: Optional[str] = None,
+                  source: Optional[str] = None) -> "Config":
+        """Validate ``mapping`` (current schema, or either legacy dialect)."""
+        notes: List[str] = []
+        mapping = dict(mapping)
+        if legacy.is_legacy(mapping):
+            mapping, notes = legacy.migrate(mapping)
+            where = source or "a config"
+            logger.warning("%s uses the pre-schema layout; translated it. Convert the "
+                           "file with `python -m shearnet.config.legacy`.", where)
+            for note in notes:
+                logger.warning("  %s", note)
+        return cls(resolve(mapping, base_dir=base_dir), source=source, notes=notes)
 
-    def __init__(self, config_path: Optional[str] = None):
-        """Initialize the config, optionally merging the YAML at ``config_path``."""
-        self.default_config_path = DEFAULT_CONFIG_PATH
-        self.config = self._load_config(config_path)
-        self._normalize_schema()
-        self._setup_paths()
-
-    def _load_config(self, config_path: Optional[str] = None) -> Dict[str, Any]:
-        """Load configuration from YAML file."""
-        # Load default config first
-        with open(self.default_config_path, "r") as f:
-            config = yaml.safe_load(f)
-
-        # If custom config provided, update defaults
-        if config_path is not None:
-            with open(config_path, "r") as f:
-                custom_config = yaml.safe_load(f)
-            if custom_config:
-                # Normalize deprecated key names before merging, so the rest of
-                # the code only ever sees the canonical keys.
-                self._migrate_legacy_keys(custom_config)
-                # Deep merge custom config into default
-                self._deep_merge(config, custom_config)
-
-        return config
-
-    def _migrate_legacy_keys(self, custom: Dict[str, Any]) -> None:
-        """Rename deprecated keys in a user config dict to their canonical names.
-
-        Maps the legacy ``dataset.psf_sigma`` onto the canonical
-        ``dataset.psf_fwhm`` (unless the user also set ``psf_fwhm`` explicitly,
-        in which case the canonical value wins). This is done on the user dict
-        before merging, so a config written with ``psf_sigma`` behaves exactly
-        as if it had used ``psf_fwhm`` -- previously ``psf_sigma`` was honored by
-        evaluation but silently ignored by training.
-        """
-        dataset = custom.get("dataset")
-        if isinstance(dataset, dict) and "psf_sigma" in dataset:
-            sigma = dataset.pop("psf_sigma")
-            dataset.setdefault("psf_fwhm", sigma)
-
-    # Maps the alternate "unit-tests" schema (meta/paths/image/psf/galaxy/train
-    # blocks) onto the canonical dataset/model/training/output keys read elsewhere.
-    _SCHEMA_MAP = {
-        "train.samples": "dataset.samples",
-        "train.seed": "dataset.seed",
-        "image.noise_sd": "dataset.nse_sd",
-        "image.stamp_size": "dataset.stamp_size",
-        "image.pixel_scale": "dataset.pixel_size",
-        "psf.gaussian_fwhm": "dataset.psf_fwhm",
-        "psf.mode": "dataset.exp",
-        "galaxy.hlr_type": "dataset.hlr_type",
-        "galaxy.flux_type": "dataset.flux_type",
-        "paths.psfex_model_file": "dataset.psfex_model_file",
-        "model.architecture": "model.type",
-        "model.galaxy_branch": "model.galaxy.type",
-        "model.psf_branch": "model.psf.type",
-        "train.epochs": "training.epochs",
-        "train.batch_size": "training.batch_size",
-        "train.learning_rate": "training.learning_rate",
-        "train.weight_decay": "training.weight_decay",
-        "train.patience": "training.patience",
-        "train.val_split": "training.val_split",
-        "train.eval_interval": "training.eval_interval",
-        "train.loss_weights": "training.loss_weights",
-        "train.ema_decay": "training.ema_decay",
-        "train.resample_noise": "training.resample_noise",
-        "meta.model_name": "output.model_name",
-        "train.plot": "plotting.plot",
-        "paths.train_catalog": "catalog.cosmos_cat_fname",
-        "image.normalize_images": "dataset.normalize_images",
-        "train.normalize_labels": "dataset.normalize_labels",
-        "train.nproc": "dataset.nproc",
-        "train.compute_metacal": "dataset.compute_metacal",
-        "train.backend": "dataset.backend",
-        "train.generation": "dataset.generation",
-        "image.backend": "dataset.backend",
-        "train.jax_fft_size": "dataset.jax_fft_size",
-        "train.jax_batch_size": "dataset.jax_batch_size",
-        "train.base_shear_range": "dataset.base_shear_range",
-        "train.apply_psf_shear": "dataset.apply_psf_shear",
-        "train.psf_shear_range": "dataset.psf_shear_range",
-        "train.response": "training.response",
-        "train.noise": "training.noise",
-    }
-
-    def _normalize_schema(self) -> None:
-        """Translate the unit-tests-style schema onto the canonical keys.
-
-        A no-op for the default/legacy schema (detected by the absence of the
-        ``meta`` and ``train`` top-level blocks). Centralizing this in ``Config``
-        means both the train and eval entry points understand either schema.
-        """
-        if self.get("meta") is None and self.get("train") is None:
-            return
-        for src, dst in self._SCHEMA_MAP.items():
-            val = self.get(src)
-            if val is not None:
-                self._set_nested(dst, val)
-
-    def _deep_merge(self, base: Dict, update: Dict) -> None:
-        """Deep merge update dict into base dict."""
-        for key, value in update.items():
-            if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-                self._deep_merge(base[key], value)
-            else:
-                base[key] = value
-
-    def _setup_paths(self) -> None:
-        """Set up default paths based on environment variables."""
-        data_path = os.getenv("SHEARNET_DATA_PATH", os.path.abspath("."))
-
-        if self.config["output"]["save_path"] is None:
-            self.config["output"]["save_path"] = os.path.join(data_path, "model_checkpoint")
-
-        if self.config["output"]["plot_path"] is None:
-            self.config["output"]["plot_path"] = os.path.join(data_path, "plots")
-
-        # Ensure paths exist
-        os.makedirs(self.config["output"]["save_path"], exist_ok=True)
-        os.makedirs(self.config["output"]["plot_path"], exist_ok=True)
-
-    def update_from_args(self, args: argparse.Namespace) -> None:
-        """Update config with command-line arguments."""
-        args_dict = vars(args)
-
-        # Get the mapping for training mode
-        mapping = self._get_train_mapping()
-
-        # Update config with non-None arguments
-        for arg_name, config_path in mapping.items():
-            if arg_name in args_dict and args_dict[arg_name] is not None:
-                self._set_nested(config_path, args_dict[arg_name])
-
-    def _get_train_mapping(self) -> Dict[str, str]:
-        """Get argument mapping for training mode."""
-        return {
-            # Dataset args
-            "samples": "dataset.samples",
-            "psf_fwhm": "dataset.psf_fwhm",
-            "exp": "dataset.exp",
-            "seed": "dataset.seed",
-            "nse_sd": "dataset.nse_sd",
-            "normalized": "dataset.normalized",
-            "normalize_images": "dataset.normalize_images",
-            "normalize_labels": "dataset.normalize_labels",
-            "d4_augment": "dataset.d4_augment",
-            "stamp_size": "dataset.stamp_size",
-            "pixel_size": "dataset.pixel_size",
-            "apply_psf_shear": "dataset.apply_psf_shear",
-            "psf_shear_range": "dataset.psf_shear_range",
-            # Model args
-            "nn": "model.type",
-            "galaxy_type": "model.galaxy.type",
-            "psf_type": "model.psf.type",
-            "fusion": "model.fusion",
-            # Training args
-            "epochs": "training.epochs",
-            "batch_size": "training.batch_size",
-            "learning_rate": "training.learning_rate",
-            "weight_decay": "training.weight_decay",
-            "patience": "training.patience",
-            "loss": "training.loss",
-            "ema_decay": "training.ema_decay",
-            # Output args
-            "save_path": "output.save_path",
-            "plot_path": "output.plot_path",
-            "model_name": "output.model_name",
-            # Plotting args
-            "plot": "plotting.plot",
-        }
-
-    def _set_nested(self, path: str, value: Any) -> None:
-        """Set nested config value using dot notation."""
-        keys = path.split(".")
-        current = self.config
-
-        for key in keys[:-1]:
-            if key not in current:
-                current[key] = {}
-            current = current[key]
-
-        current[keys[-1]] = value
-
-    def get(self, path: str, default: Any = None) -> Any:
-        """Get config value using dot notation."""
-        keys = path.split(".")
-        current = self.config
-
+    @classmethod
+    def from_file(cls, path) -> "Config":
+        """Read and validate a YAML file. Relative paths resolve against its directory."""
+        path = os.path.abspath(os.fspath(path))
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"config file not found: {path}")
         try:
-            for key in keys:
-                current = current[key]
-            return current
-        except (KeyError, TypeError):
-            # KeyError: a key is missing. TypeError: an intermediate value is
-            # None or a scalar (not subscriptable), e.g. descending past a leaf.
-            return default
+            raw = read_yaml(path)
+        except Exception as exc:  # YAML syntax, duplicate keys
+            raise ConfigError(f"{path}: {exc}") from exc
+        if not isinstance(raw, Mapping):
+            raise ConfigError(f"{path}: the top level must be a mapping")
+        try:
+            return cls.from_dict(raw, base_dir=os.path.dirname(path), source=path)
+        except ConfigError as exc:
+            raise ConfigError(f"{path}: {exc}") from None
 
-    def save(self, path: str) -> None:
-        """Save current config to file."""
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            yaml.dump(self.config, f, default_flow_style=False, sort_keys=False)
+    def with_overrides(self, mapping: Mapping[str, Any], base_dir: Optional[str] = None,
+                       allowed: Optional[Iterable[str]] = None) -> "Config":
+        """A new config with ``mapping`` (current schema) layered on top.
 
-    def print_config(self) -> None:
-        """Print current configuration."""
-        logger.info("\n" + "=" * 50)
-        logger.info("Training Configuration")
-        logger.info("=" * 50)
+        ``allowed`` restricts which keys may change; anything else is an error
+        rather than a silent second meaning of the same run.
+        """
+        mapping = dict(mapping)
+        mapping.pop("schema_version", None)
+        flat = flatten(mapping)
+        check_keys(flat, allowed if allowed is not None else FIELDS)
+        resolved = resolve(mapping, base_dir=base_dir, base=self._data)
+        return Config(resolved, source=self.source, notes=self.notes)
 
-        for section in ["dataset", "model", "training", "output", "plotting"]:
-            if section in self.config:
-                logger.info(f"\n{section}:")
-                for key, value in self.config[section].items():
-                    logger.info(f"  {key}: {value}")
-        logger.info("=" * 50 + "\n")
+    def evaluation_override(self, path) -> "Config":
+        """Layer an evaluation-only YAML on top. Only evaluation settings may change."""
+        path = os.path.abspath(os.fspath(path))
+        raw = read_yaml(path)
+        if not isinstance(raw, Mapping):
+            raise ConfigError(f"{path}: the top level must be a mapping")
+        stray = sorted(k for k in flatten({k: v for k, v in raw.items()
+                                           if k != "schema_version"})
+                       if k not in EVALUATION_OVERRIDABLE)
+        if stray:
+            raise ConfigError(
+                f"{path}: an evaluation override may only change evaluation settings, "
+                f"the evaluation catalog and run_options.ncores; it sets {stray}. The "
+                "model, renderer and training population belong to the run.")
+        return self.with_overrides(raw, base_dir=os.path.dirname(path),
+                                   allowed=EVALUATION_OVERRIDABLE)
 
-    def print_eval_config(self) -> None:
-        """Print only evaluation-relevant configuration."""
-        logger.info("\n" + "=" * 50)
-        logger.info("Evaluation Configuration")
-        logger.info("=" * 50)
+    # -- access ------------------------------------------------------------
+    def get(self, key: str) -> Any:
+        """The value at dotted ``key`` (a field or a whole block)."""
+        if key not in FIELDS and key not in _PREFIXES:
+            raise KeyError(f"{key!r} is not a config key")
+        node: Any = self._data
+        for part in key.split("."):
+            node = node[part]
+        return copy.deepcopy(node)
 
-        # Only print relevant sections for evaluation
-        sections_to_print = ["evaluation", "model", "plotting", "comparison"]
+    def to_dict(self) -> Dict[str, Any]:
+        """The full resolved config as nested plain data."""
+        return copy.deepcopy(self._data)
 
-        for section in sections_to_print:
-            if section in self.config:
-                logger.info(f"\n{section}:")
-                for key, value in self.config[section].items():
-                    logger.info(f"  {key}: {value}")
-        logger.info("=" * 50 + "\n")
+    def to_yaml(self) -> str:
+        return dump_yaml(self._data)
+
+    def save(self, path) -> None:
+        """Write the resolved config as YAML (does not create directories)."""
+        with open(path, "w") as handle:
+            handle.write(self.to_yaml())
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, Config) and self._data == other._data
+
+    def __repr__(self) -> str:
+        name = self._data.get("run_options", {}).get("run_name")
+        return f"Config(run_name={name!r}, source={self.source!r})"
+
+
+def load_config(path) -> Config:
+    """Shorthand for :meth:`Config.from_file`."""
+    return Config.from_file(path)

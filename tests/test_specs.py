@@ -23,22 +23,21 @@ def test_train_config_kwargs_are_valid_train_model_params():
     assert set(TrainConfig().as_kwargs()).issubset(params)
 
 
-def test_dataset_spec_from_config(tmp_path, monkeypatch):
-    monkeypatch.setenv("SHEARNET_DATA_PATH", str(tmp_path))
-    spec = DatasetSpec.from_config(Config())
+def test_dataset_spec_from_config():
+    spec = DatasetSpec.from_config(Config.from_dict({}))
     assert spec.samples == 10000
     assert spec.psf_fwhm == 0.5
-    assert spec.npix == 53  # stamp_size
-    assert spec.scale == 0.141  # pixel_size
+    assert spec.npix == 53  # simulation.stamp_size
+    assert spec.scale == 0.141  # simulation.pixel_scale
+    assert spec.gal_type == "exp"  # simulation.gal_model
     assert spec.output_keys == ("g1", "g2")
     # The default architecture is single-branch, so no PSF stamps are
     # rendered. This follows from model.type alone.
     assert spec.return_psf is False
 
 
-def test_train_config_from_config(tmp_path, monkeypatch):
-    monkeypatch.setenv("SHEARNET_DATA_PATH", str(tmp_path))
-    tc = TrainConfig.from_config(Config(), save_path="/tmp/ckpt")
+def test_train_config_from_config():
+    tc = TrainConfig.from_config(Config.from_dict({}), save_path="/tmp/ckpt")
     assert tc.epochs == 10
     assert tc.batch_size == 32
     assert tc.nn == "cnn"

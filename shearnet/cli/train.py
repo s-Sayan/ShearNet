@@ -8,11 +8,12 @@ import os
 import jax.numpy as jnp
 import jax.random as random
 import numpy as np
+import yaml
 
 import shearnet.core.models
 
 from .. import __version__
-from ..config.config_handler import Config, load_default_config
+from ..config.config_handler import Config, ConfigError
 from ..core.augment import d4_augment
 from ..core.dataset import split_combined_images
 from ..core.models import is_fork_model
@@ -39,410 +40,39 @@ logging.getLogger("absl").setLevel(logging.ERROR)
 
 def create_parser():
     """Create argument parser for training."""
-    # Get the SHEARNET_DATA_PATH environment variable
     data_path = os.getenv("SHEARNET_DATA_PATH", os.path.abspath("."))
-
-    # Set default save_path and plot_path
-    default_save_path = os.path.join(data_path, "model_checkpoint")
-    default_plot_path = os.path.join(data_path, "plots")
-
     parser = argparse.ArgumentParser(
         description="Train a galaxy shear estimation model.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Your original command (still works)
-  shearnet-train --epochs 10 --batch_size 64 --samples 10000 --psf_fwhm 0.25 \
-    --save --model_name cnn6 --plot --nn cnn --patience 20
+  shearnet-train --config configs/example.yaml
 
-  # Use config file
-  shearnet-train --config configs/cnn6_experiment.yaml
-
-  # Use config file but override specific values
-  shearnet-train --config configs/cnn6_experiment.yaml --samples 20000 --model_name cnn6_big
-
-  # Override multiple values
-  shearnet-train --config configs/base.yaml --epochs 100 --nn resnet --save --plot
+Every setting lives in the YAML; see shearnet/config/schema.py for the list.
         """,
     )
-
-    # Config file argument
-    parser.add_argument(
-        "--config", type=str, default=None, help="Path to configuration file (optional)"
-    )
-
-    # For config overrides, use default=None so we can detect what user actually specified
-    # When not using config, we'll use the defaults from the code
-    parser.add_argument("--epochs", type=int, default=None, help="Number of epochs.")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed.")
-    parser.add_argument("--batch_size", type=int, default=None, help="Batch size.")
-    parser.add_argument("--samples", type=int, default=None, help="Number of training samples.")
-    parser.add_argument("--patience", type=int, default=None, help="Patience for early stopping.")
-    parser.add_argument("--psf_fwhm", type=float, default=None, help="PSF sigma for simulation.")
-    parser.add_argument("--nse_sd", type=float, default=None, help="noise sd for simulation.")
-    parser.add_argument("--exp", type=str, default=None, help="Which experiment to run")
-    parser.add_argument("--nn", type=str, default=None, help="Which model to use")
-    parser.add_argument(
-        "--learning_rate",
-        type=float,
-        default=None,
-        help="Initial learning rate for the learning rate scheduler",
-    )
-    parser.add_argument(
-        "--weight_decay", type=float, default=None, help="Weight decay for adamw optimizer"
-    )
-    parser.add_argument("--model_name", type=str, default=None, help="Name of the model.")
-    parser.add_argument(
-        "--val_split", type=float, default=None, help="Validation split fraction (default: 0.2)"
-    )
-    parser.add_argument(
-        "--eval_interval", type=int, default=None, help="Evaluate every N epochs (default: 1)"
-    )
-    parser.add_argument("--psfex_model_file", type=str, default=None, help="psfex_model_file path")
-    # Keep defaults for paths since they're computed
+    parser.add_argument("--config", type=str, required=True, help="Path to the YAML config")
     parser.add_argument(
         "--save_path",
         type=str,
-        default=default_save_path,
+        default=os.path.join(data_path, "model_checkpoint"),
         help="Path to save the model parameters.",
     )
     parser.add_argument(
         "--plot_path",
         type=str,
-        default=default_plot_path,
-        help="Path to save the learning curve plot.",
+        default=os.path.join(data_path, "plots"),
+        help="Path to save the learning curve, config and normalizers.",
     )
-    parser.add_argument(
-        "--hlr_type",
-        type=str,
-        default="constant",
-        help="hlr type can be constant or catalog. constant will be 0.5.",
-    )
-    parser.add_argument(
-        "--flux_type",
-        type=str,
-        default="constant",
-        help="hlr type can be constant or catalog. constant will be 12258.97.",
-    )
-
-    parser.add_argument(
-        "--plot",
-        action="store_const",
-        const=True,
-        default=None,
-        help="Enable plotting (overrides config)",
-    )
-    parser.add_argument(
-        "--no-plot",
-        action="store_const",
-        const=False,
-        dest="plot",
-        help="Disable plotting (overrides config)",
-    )
-    parser.add_argument(
-        "--stamp_size", type=int, default=None, help="Stamp size of the training data."
-    )
-    parser.add_argument(
-        "--pixel_size", type=float, default=None, help="Pixel size of the training data."
-    )
-
-    parser.add_argument(
-        "--output_keys",
-        type=tuple,
-        default=("g1", "g2"),
-        help="Please input a tuple of strings of either g1, g2, hlr, flux, psf_e1, psf_e2, psf_T",
-    )
-    parser.add_argument(
-        "--gap",
-        action="store_const",
-        const=True,
-        default=None,
-        help="Global average pooling? Boolean.",
-    )
-
-    parser.add_argument(
-        "--galaxy_type", type=str, default=None, help="Galaxy model type for fork-like models"
-    )
-    parser.add_argument(
-        "--psf_type", type=str, default=None, help="PSF model type for fork-like models"
-    )
-    parser.add_argument(
-        "--fusion",
-        type=str,
-        default=None,
-        help='Fusion strategy for fork-like model: "concat" (default) or "transformer"',
-    )
-
-    parser.add_argument(
-        "--apply_psf_shear",
-        action="store_const",
-        const=True,
-        default=None,
-        help="Apply random shear to PSF images",
-    )
-    parser.add_argument(
-        "--psf_shear_range",
-        type=float,
-        default=None,
-        help="Maximum absolute shear value for PSF (default: 0.05)",
-    )
-    parser.add_argument(
-        "--loss_weights",
-        type=float,
-        nargs="+",
-        default=None,
-        help="Per-output loss weights, one per output_key in order",
-    )
-    parser.add_argument(
-        "--loss",
-        type=str,
-        default=None,
-        help="Training loss: a registry name (mse, mae, huber, ...) [default: mse]",
-    )
-    parser.add_argument(
-        "--normalize_images",
-        action="store_const",
-        const=True,
-        default=None,
-        help="Dataset-level input-image standardization (default off).",
-    )
-    parser.add_argument(
-        "--normalize_labels",
-        dest="normalize_labels",
-        action="store_const",
-        const=True,
-        default=None,
-        help="Z-score standardize network outputs/labels (default on).",
-    )
-    parser.add_argument(
-        "--no_normalize_labels",
-        dest="normalize_labels",
-        action="store_const",
-        const=False,
-        help="Disable label normalization; train on raw labels (ablation).",
-    )
-    parser.add_argument(
-        "--d4_augment",
-        action="store_const",
-        const=True,
-        default=None,
-        help="8x D4 training augmentation -- ABLATION ONLY; do not use with d4-fork-like.",
-    )
-    parser.add_argument(
-        "--ema_decay",
-        type=float,
-        default=None,
-        help="EMA decay for the weights, e.g. 0.999 (default off).",
-    )
-
     return parser
 
 
-# Argparse fallback defaults (used only when no ``--config`` file is given) are
-# derived from ``config/default_config.yaml`` so there is a single source of
-# truth. ``_ARG_TO_PATH`` maps each argparse name to its dotted config path.
-_ARG_TO_PATH = {
-    "epochs": "training.epochs",
-    "seed": "dataset.seed",
-    "batch_size": "training.batch_size",
-    "samples": "dataset.samples",
-    "patience": "training.patience",
-    "psf_fwhm": "dataset.psf_fwhm",
-    "nse_sd": "dataset.nse_sd",
-    "exp": "dataset.exp",
-    "nn": "model.type",
-    "learning_rate": "training.learning_rate",
-    "weight_decay": "training.weight_decay",
-    "model_name": "output.model_name",
-    "val_split": "training.val_split",
-    "eval_interval": "training.eval_interval",
-    "stamp_size": "dataset.stamp_size",
-    "pixel_size": "dataset.pixel_size",
-    "galaxy_type": "model.galaxy.type",
-    "psf_type": "model.psf.type",
-    "fusion": "model.fusion",
-    "apply_psf_shear": "dataset.apply_psf_shear",
-    "psf_shear_range": "dataset.psf_shear_range",
-    "gap": "model.gap",
-    "output_keys": "model.output_keys",
-    "loss": "training.loss",
-}
-
-
-def _build_cli_defaults():
-    """Derive the argparse fallback defaults from ``default_config.yaml``."""
-    data = load_default_config()
-
-    def _get(path):
-        cur = data
-        for key in path.split("."):
-            cur = cur[key]
-        return cur
-
-    defaults = {arg: _get(path) for arg, path in _ARG_TO_PATH.items()}
-    defaults["output_keys"] = tuple(defaults["output_keys"])  # YAML list -> tuple
-    # ``plot`` intentionally differs from the YAML default: the bare CLI does not
-    # plot unless explicitly asked with --plot.
-    defaults["plot"] = False
-    return defaults
-
-
-_CLI_DEFAULTS = _build_cli_defaults()
-
-
-def _config_from_args(args):
-    """Build a :class:`Config` from argparse values when no ``--config`` is given.
-
-    Resolves every value as ``args.<x> if not None else _CLI_DEFAULTS[<x>]`` and
-    writes it into a default-seeded ``Config`` (the original no-config behavior).
-    """
-    d = _CLI_DEFAULTS
-    config = Config()  # Start with package defaults
-    config._set_nested(
-        "dataset.samples", args.samples if args.samples is not None else d["samples"]
-    )
-    config._set_nested(
-        "dataset.psf_fwhm", args.psf_fwhm if args.psf_fwhm is not None else d["psf_fwhm"]
-    )
-    config._set_nested("dataset.nse_sd", args.nse_sd if args.nse_sd is not None else d["nse_sd"])
-    config._set_nested("dataset.exp", args.exp if args.exp is not None else d["exp"])
-    config._set_nested("dataset.seed", args.seed if args.seed is not None else d["seed"])
-    config._set_nested(
-        "dataset.stamp_size", args.stamp_size if args.stamp_size is not None else d["stamp_size"]
-    )
-    config._set_nested(
-        "dataset.pixel_size", args.pixel_size if args.pixel_size is not None else d["pixel_size"]
-    )
-    config._set_nested("model.type", args.nn if args.nn is not None else d["nn"])
-    config._set_nested("training.epochs", args.epochs if args.epochs is not None else d["epochs"])
-    config._set_nested(
-        "training.batch_size", args.batch_size if args.batch_size is not None else d["batch_size"]
-    )
-    config._set_nested(
-        "training.learning_rate",
-        args.learning_rate if args.learning_rate is not None else d["learning_rate"],
-    )
-    config._set_nested(
-        "training.weight_decay",
-        args.weight_decay if args.weight_decay is not None else d["weight_decay"],
-    )
-    config._set_nested(
-        "training.patience", args.patience if args.patience is not None else d["patience"]
-    )
-    config._set_nested(
-        "training.val_split", args.val_split if args.val_split is not None else d["val_split"]
-    )
-    config._set_nested(
-        "training.eval_interval",
-        args.eval_interval if args.eval_interval is not None else d["eval_interval"],
-    )
-    config._set_nested(
-        "output.model_name", args.model_name if args.model_name is not None else d["model_name"]
-    )
-    config._set_nested("output.save_path", args.save_path)
-    config._set_nested("output.plot_path", args.plot_path)
-    config._set_nested("plotting.plot", args.plot)
-    config._set_nested(
-        "model.galaxy.type", args.galaxy_type if args.galaxy_type is not None else d["galaxy_type"]
-    )
-    config._set_nested(
-        "model.psf.type", args.psf_type if args.psf_type is not None else d["psf_type"]
-    )
-    config._set_nested("model.fusion", args.fusion if args.fusion is not None else d["fusion"])
-    config._set_nested(
-        "dataset.apply_psf_shear",
-        args.apply_psf_shear if args.apply_psf_shear is not None else d["apply_psf_shear"],
-    )
-    config._set_nested(
-        "dataset.psf_shear_range",
-        args.psf_shear_range if args.psf_shear_range is not None else d["psf_shear_range"],
-    )
-    config._set_nested(
-        "dataset.psfex_model_file",
-        args.psfex_model_file if args.psfex_model_file is not None else d.get("psfex_model_file"),
-    )
-    config._set_nested(
-        "model.output_keys", args.output_keys if args.output_keys is not None else d["output_keys"]
-    )
-    config._set_nested(
-        "dataset.hlr_type", args.hlr_type if args.hlr_type is not None else d["hlr_type"]
-    )
-    config._set_nested(
-        "dataset.flux_type", args.flux_type if args.flux_type is not None else d["flux_type"]
-    )
-    config._set_nested("model.gap", args.gap if args.gap is not None else d["gap"])
-    config._set_nested(
-        "training.loss_weights", args.loss_weights if args.loss_weights is not None else None
-    )
-    config._set_nested("training.loss", args.loss if args.loss is not None else d["loss"])
-    # New opt-in knobs default to their default_config values (already seeded in
-    # ``config``) unless the user overrides them on the CLI.
-    if args.normalize_images is not None:
-        config._set_nested("dataset.normalize_images", args.normalize_images)
-    if args.normalize_labels is not None:
-        config._set_nested("dataset.normalize_labels", args.normalize_labels)
-    if args.d4_augment is not None:
-        config._set_nested("dataset.d4_augment", args.d4_augment)
-    if args.ema_decay is not None:
-        config._set_nested("training.ema_decay", args.ema_decay)
-    config._set_nested("catalog.cosmos_cat_fname", None)
-    return config
-
-
-def _warn_on_legacy_process_psf(config):
-    """Note that a legacy ``model.process_psf`` key is present and ignored.
-
-    ``process_psf`` asked whether the PSF gets its own branch, which is the same
-    question as whether the architecture is a fork model -- and the two could
-    only ever agree or contradict each other. The old fixup resolved the
-    contradiction by silently rewriting ``model.type``, so a config could train
-    a model it did not name. The architecture is now the single source of truth
-    and the key is inert.
-
-    It is not an error to carry it. Every ``training_config.yaml`` persisted
-    before this change has it, and those files must keep loading so finished
-    runs stay re-evaluable. A *disagreeing* value is worth saying out loud,
-    because under the old behaviour that config trained something other than
-    what it says.
-    """
-    if config.get("model.process_psf") is None:
-        return
-    process_psf = bool(config.get("model.process_psf"))
-    nn = config.get("model.type")
-    if process_psf == is_fork_model(nn):
-        logger.info(
-            "model.process_psf is no longer read; the architecture (%r) decides "
-            "whether the PSF branch exists. The value agrees, so nothing changes.", nn
-        )
-        return
-    logger.warning(
-        "model.process_psf=%r disagrees with architecture %r and is ignored. "
-        "Under the previous behaviour this combination rewrote model.type, so "
-        "this config may not describe the run it produced. The architecture is "
-        "authoritative; drop the key.", process_psf, nn,
-    )
-
-
 def build_train_config(args):
-    """Resolve a fully-populated :class:`Config` from parsed CLI ``args``.
-
-    Handles both modes — loading ``--config`` (with optional CLI overrides and
-    the unit-tests schema adapter) or, when no config file is given, falling back
-    to ``_config_from_args``. The architecture alone decides whether the PSF
-    branch exists; a legacy ``model.process_psf`` key is noted and ignored.
-    Performs no simulation or training, so it is unit-testable without the heavy
-    GalSim/ngmix dependencies.
-    """
-    if args.config:
-        config = Config(args.config)  # schema normalization happens in Config
-        config.update_from_args(args)
-        logger.info(f"\nUsing config file: {args.config}")
-        if any(getattr(args, k) is not None for k in _CLI_DEFAULTS.keys()):
-            logger.info("With command-line overrides")
-    else:
-        config = _config_from_args(args)
-
-    _warn_on_legacy_process_psf(config)
+    """Load and validate ``--config``. Performs no simulation or training."""
+    config = Config.from_file(args.config)
+    if not config.get("run_options.run_name"):
+        raise ConfigError(f"{args.config}: set run_options.run_name")
+    logger.info(f"\nUsing config file: {args.config}")
     return config
 
 
@@ -477,9 +107,9 @@ def _prepare_training_data(config):
     """
     spec = DatasetSpec.from_config(config)
     val_split = config.get("training.val_split")
-    normalize_labels = config.get("dataset.normalize_labels", True)
-    normalize_images = config.get("dataset.normalize_images", False)
-    do_d4_augment = config.get("dataset.d4_augment", False)
+    normalize_labels = config.get("training.normalize_labels")
+    normalize_images = config.get("training.normalize_images")
+    do_d4_augment = config.get("training.d4_augment")
     output_keys = tuple(config.get("model.output_keys"))
 
     galaxy_images, labels = spec.build()
@@ -536,7 +166,7 @@ def _prepare_training_data(config):
     # Optional dataset-level image standardization, fit on the same training
     # portion and applied to galaxy (and PSF) stamps. Independent of the label
     # normalizer above.
-    resample_noise = config.get("training.resample_noise", False)
+    resample_noise = config.get("training.resample_noise")
     nse_sd = spec.nse_sd
     img_params = None
     if normalize_images:
@@ -598,28 +228,16 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
     spec = DatasetSpec.from_config(config)
     batch_size = config.get("training.batch_size")
     output_keys = tuple(config.get("model.output_keys"))
-    response = ResponseRegularization.from_config(config.get("training.response", {}))
-    response_report = (config.get("training.response", {}) or {}).get("report", None)
-    noise_range, noise_condition = noise_schedule_from_config(config.get("training.noise", {}))
-    if noise_condition and config.get("dataset.normalize_images", False):
-        raise ValueError(
-            "training.noise.condition and dataset.normalize_images are two "
-            "incompatible ways to set the input scale; enable at most one."
-        )
-
-    if config.get("dataset.d4_augment", False):
-        raise ValueError(
-            "dataset.d4_augment is an array-duplication ablation and has no "
-            "meaning with dataset.generation: inloop (there is no array). Use "
-            "generation: upfront for that ablation."
-        )
+    response = ResponseRegularization.from_config(config.get("training.response"))
+    response_report = (config.get("training.response") or {}).get("report", None)
+    noise_range, noise_condition = noise_schedule_from_config(config.get("training.noise"))
     if not jax.config.jax_enable_x64:
         # Not fatal -- float32 stamps are fine for training -- but a forgotten
         # JAX_ENABLE_X64=1 is invisible otherwise, and it is the difference
         # between a float64 and a float32 renderer for every response term.
         logger.warning(
             "JAX_ENABLE_X64 is not set: in-loop rendering will run in float32 "
-            "(render accuracy ~1e-7). Export JAX_ENABLE_X64=1 in setup_env.sh "
+            "(render accuracy ~1e-7). Export JAX_ENABLE_X64=1 before starting "
             "for float64; the stamps are cast to float32 before the network, "
             "so training memory and speed are unchanged either way."
         )
@@ -632,7 +250,7 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
     val_split = config.get("training.val_split")
     split_idx = int(gen.n * (1 - val_split))
     raw_labels = np.asarray(gen.labels(output_keys))
-    if config.get("dataset.normalize_labels", True):
+    if config.get("training.normalize_labels"):
         norm_params = fit_normalizer(raw_labels[:split_idx])
     else:
         norm_params = identity_normalizer(raw_labels)
@@ -640,7 +258,7 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
     # Image normalizer: render a few batches to fit it. Cheap relative to a run,
     # and it keeps the input scale identical to the up-front path.
     img_params = None
-    if config.get("dataset.normalize_images", False):
+    if config.get("training.normalize_images"):
         probe = make_batch_render(gen, nse_sd=spec.nse_sd)
         n_probe = min(4, gen.steps_per_epoch)
         ids = gen.batches(jnp.arange(split_idx))[:n_probe]
@@ -666,12 +284,12 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
         nse_sd=spec.nse_sd,
         epochs=config.get("training.epochs"),
         nn=config.get("model.type"),
-        galaxy_type=config.get("model.galaxy.type"),
-        psf_type=config.get("model.psf.type"),
-        fusion=config.get("model.fusion", "concat"),
-        head=config.get("model.head", "gap"),
+        galaxy_type=config.get("model.galaxy_branch"),
+        psf_type=config.get("model.psf_branch"),
+        fusion=config.get("model.fusion"),
+        head=config.get("model.head"),
         save_path=save_path,
-        model_name=config.get("output.model_name"),
+        model_name=config.get("run_options.run_name"),
         val_split=val_split,
         eval_interval=config.get("training.eval_interval"),
         patience=config.get("training.patience"),
@@ -679,22 +297,22 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
         weight_decay=config.get("training.weight_decay"),
         gap=config.get("model.gap"),
         weights=config.get("training.loss_weights"),
-        loss=config.get("training.loss", "mse"),
-        ema_decay=config.get("training.ema_decay", None),
-        dropout=config.get("model.dropout", 0.0),
-        branch_features=config.get("model.branch_features", None),
-        d4_features=config.get("model.d4_features", None),
-        d4_depths_galaxy=config.get("model.d4_depths_galaxy", None),
-        d4_depths_psf=config.get("model.d4_depths_psf", None),
-        d4_multiscale=config.get("model.d4_multiscale", None),
-        orbit_scan=config.get("model.orbit_scan", True),
-        fusion_pos=config.get("model.fusion_pos", "learned"),
-        design=config.get("model.design", None),
-        d_model=config.get("model.d_model", None),
-        num_heads=config.get("model.num_heads", None),
-        num_pool_heads=config.get("model.num_pool_heads", None),
-        num_self_attn_layers=config.get("model.num_self_attn_layers", None),
-        ffn_dim=config.get("model.ffn_dim", None),
+        loss=config.get("training.loss"),
+        ema_decay=config.get("training.ema_decay"),
+        dropout=config.get("model.dropout"),
+        branch_features=config.get("model.branch_features"),
+        d4_features=config.get("model.d4_features"),
+        d4_depths_galaxy=config.get("model.d4_depths_galaxy"),
+        d4_depths_psf=config.get("model.d4_depths_psf"),
+        d4_multiscale=config.get("model.d4_multiscale"),
+        orbit_scan=config.get("model.orbit_scan"),
+        fusion_pos=config.get("model.fusion_pos"),
+        design=config.get("model.design"),
+        d_model=config.get("model.d_model"),
+        num_heads=config.get("model.num_heads"),
+        num_pool_heads=config.get("model.num_pool_heads"),
+        num_self_attn_layers=config.get("model.num_self_attn_layers"),
+        ffn_dim=config.get("model.ffn_dim"),
         response=response,
         noise_range=noise_range,
         noise_condition=noise_condition,
@@ -703,7 +321,7 @@ def _run_inloop_training(config, rng_key, model_dir, save_path):
         # table; without this the renderer would never apply it, and the run
         # would silently train on round PSFs. (The response terms switch the
         # transform on for themselves regardless -- they need the tangent.)
-        trace_psf_shear=config.get("dataset.apply_psf_shear", False),
+        trace_psf_shear=config.get("simulation.apply_psf_shear"),
     )
 
 
@@ -717,12 +335,14 @@ def _save_run_artifacts(config, model_dir, norm_params, img_params=None):
     """
     os.makedirs(model_dir, exist_ok=True)
 
-    config._set_nested("provenance.shearnet_version", __version__)
+    provenance = {"shearnet_version": __version__}
     try:
         with open(shearnet.core.models.__file__, "rb") as f:
-            config._set_nested("provenance.models_sha256", hashlib.sha256(f.read()).hexdigest())
+            provenance["models_sha256"] = hashlib.sha256(f.read()).hexdigest()
     except OSError as e:
         logger.warning(f"WARNING: could not hash model source for provenance: {e}")
+    with open(os.path.join(model_dir, "provenance.yaml"), "w") as f:
+        yaml.safe_dump(provenance, f, sort_keys=False)
 
     config_path = os.path.join(model_dir, "training_config.yaml")
     config.save(config_path)
@@ -760,13 +380,12 @@ def main():
     args = parser.parse_args()
 
     config = build_train_config(args)
-    config.print_config()
+    logger.info(config.to_yaml())
 
     # Training/model settings used directly by main(); dataset settings are read
     # inside _prepare_training_data.
     output_keys = tuple(config.get("model.output_keys"))
-    model_name = config.get("output.model_name")
-    plot_flag = config.get("plotting.plot")
+    model_name = config.get("run_options.run_name")
 
     save_path = os.path.abspath(args.save_path) if args.save_path else None
     plot_path = os.path.abspath(args.plot_path) if args.plot_path else None
@@ -776,10 +395,10 @@ def main():
 
     get_device()
 
-    rng_key = random.PRNGKey(config.get("dataset.seed"))
+    rng_key = random.PRNGKey(config.get("training.seed"))
     model_dir = os.path.join(plot_path, model_name)
 
-    if config.get("dataset.generation", "upfront") == "inloop":
+    if config.get("training.generation") == "inloop":
         state, train_loss, val_loss, val_loss_per_key = _run_inloop_training(
             config, rng_key, model_dir, save_path
         )
@@ -813,12 +432,8 @@ def main():
             psf_images=train_psf_images,
         )
 
-    if plot_flag:
-        logger.info("Plotting learning curve...")
-        plot_save_path = (
-            os.path.join(plot_path, model_name, "learning_curve.png") if plot_path else None
-        )
-        plot_learning_curve(val_loss, train_loss, plot_save_path)
+    logger.info("Plotting learning curve...")
+    plot_learning_curve(val_loss, train_loss, os.path.join(plot_path, model_name, "learning_curve.png"))
 
     loss_path = os.path.join(plot_path, model_name, f"{model_name}_loss.npz") if plot_path else None
     _save_losses(loss_path, train_loss, val_loss, val_loss_per_key, output_keys)

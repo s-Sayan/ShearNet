@@ -196,10 +196,10 @@ def test_spec_build_inloop_generator_rejects_upfront():
 
 
 def test_config_exposes_generation_default():
-    from shearnet.config.config_handler import load_default_config
+    from shearnet.config.schema import defaults
 
-    cfg = load_default_config()
-    assert cfg["dataset"]["generation"] == "upfront"
+    cfg = defaults()
+    assert cfg["training"]["generation"] == "upfront"
     assert cfg["training"]["response"]["orbit_weight"] == 0.0
 
 
@@ -305,8 +305,8 @@ def test_noise_block_parsing():
 
 
 def test_default_config_response_block_parses():
-    from shearnet.config.config_handler import load_default_config
+    from shearnet.config.schema import defaults
 
-    cfg = load_default_config()
+    cfg = defaults()
     assert not ResponseRegularization.from_config(cfg["training"]["response"]).enabled
     assert noise_schedule_from_config(cfg["training"]["noise"]) == (None, False)
