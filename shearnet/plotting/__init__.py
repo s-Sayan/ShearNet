@@ -1,13 +1,11 @@
 """ShearNet plotting subpackage.
 
 Promoted from the former single ``shearnet/plotting.py`` module; split into
-cohesive submodules (curves, scatter, animation, psf). All public names are
-re-exported here, so ``shearnet.plotting.<name>`` keeps working.
+cohesive submodules (scatter, animation, psf). All public names are
+re-exported here, so ``shearnet.plotting.<name>`` keeps working. The learning
+curve lives with training now (:mod:`shearnet.training.curves`).
 """
 
-from .curves import (
-    plot_learning_curve,
-)
 from .scatter import (
     plot_residuals,
     visualize_galaxy_samples,
@@ -27,7 +25,6 @@ from .psf import (
 )
 
 __all__ = [
-    "plot_learning_curve",
     "plot_residuals",
     "visualize_galaxy_samples",
     "visualize_psf_samples",
