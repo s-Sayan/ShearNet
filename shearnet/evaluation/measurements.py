@@ -78,8 +78,8 @@ def measure_psf(psf_images, scale: float, seed: int = 0) -> Dict[str, np.ndarray
 
     ``psf_g`` is the ngmix adaptive-moment shape converted to the reduced-shear
     (epsilon) convention; ``psf_T_hsm`` is GalSim HSM's determinant size
-    ``2 sigma^2`` (the historical ``Tpsf`` of these catalogs and the ``psf_T``
-    label); ``psf_T_admom`` is the ngmix adaptive-moment trace. Both sizes are
+    ``2 sigma^2`` (the ``psf_T`` label); ``psf_T_admom`` is the ngmix
+    adaptive-moment trace. Both sizes are
     arcsec^2. ``psf_flags`` is non-zero where either fit failed.
     """
     import galsim
@@ -116,8 +116,8 @@ def measure_psf(psf_images, scale: float, seed: int = 0) -> Dict[str, np.ndarray
 def stamp_observables(galaxy_images, noise_sigma: float) -> Dict[str, np.ndarray]:
     """``flux_stamp`` (sum of the noisy stamp) and ``s2n_stamp``.
 
-    ``s2n_stamp = sqrt(sum I^2) / sigma`` on the noisy stamp -- the quantity the
-    old catalogs called ``s2n``. It is not ngmix's ``s2n`` and not a matched
+    ``s2n_stamp = sqrt(sum I^2) / sigma`` on the noisy stamp.
+    It is not ngmix's ``s2n`` and not a matched
     filter S/N.
     """
     gal = np.asarray(galaxy_images, dtype=float)

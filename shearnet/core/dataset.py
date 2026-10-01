@@ -78,9 +78,8 @@ _cosmos_cat_cache = {}
 def _load_cosmos_cat(seed=42, cat_path=None):
     """Lazy-load the catalog at ``cat_path``; ``None`` draws a synthetic one.
 
-    A path that does not exist is an error. It used to fall back to the random
-    population with a warning, which turned a typo in a catalog path into a
-    run on the wrong galaxies.
+    A path that does not exist is an error, preventing a typo from silently
+    selecting a synthetic population.
     """
     key = (os.path.abspath(cat_path) if cat_path else None, int(seed))
     if key in _cosmos_cat_cache:
@@ -145,8 +144,7 @@ def _generate_one(task, cfg):
     the heavy ngmix ``Observation`` objects back from the workers.
 
     For the empirical (``superbit``) PSF the sampling deviate is seeded from
-    ``(seed, i)``, so the dataset is identical for any ``nproc`` (the old shared
-    deviate depended on loop order and could not be parallelized). Analytic
+    ``(seed, i)``, so the dataset is identical for any ``nproc``. Analytic
     (``ideal``) PSFs do not use the deviate.
     """
     i, g1, g2, hlr, flux = task
@@ -243,8 +241,7 @@ def generate_dataset(
         exp: Experiment / PSF mode, ``'ideal'`` or ``'superbit'``.
         nse_sd: Standard deviation of the additive Gaussian noise.
         seed: Base random seed for reproducibility.
-        return_clean: Deprecated/unsupported; raises ``NotImplementedError`` if
-            set (the noise-free clean image was removed from ``sim_func``).
+        return_clean: Unsupported; raises ``NotImplementedError`` if set.
         return_psf: Also stack the PSF image as an extra channel.
         return_obs: Additionally return the list of ngmix ``Observation`` objects.
         apply_psf_shear: Apply a random shear to the PSF (``exp='ideal'`` only).
@@ -285,9 +282,8 @@ def generate_dataset(
     """
     if return_clean:
         raise NotImplementedError(
-            "return_clean is no longer supported: the noise-free clean image was "
-            "removed from sim_func (it was unused and could trigger oversized FFTs "
-            "for compact galaxies)."
+            "return_clean is unsupported: sim_func does not return a noise-free "
+            "clean image. Rendering it can trigger oversized FFTs for compact galaxies."
         )
 
     cosmos_cat = _load_cosmos_cat(seed=seed, cat_path=cosmos_cat_fname)

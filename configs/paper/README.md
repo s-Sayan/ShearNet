@@ -66,12 +66,11 @@ schema refuses it), so the arm would train the fiducial again. It needs dropout
 plumbed into `_ShearNetD4Backbone` first, and is listed in `generate.BLOCKED`
 so it cannot be quietly forgotten.
 
-### Three arms changed meaning in the schema migration
+### Loss and augmentation settings
 
-`tier4/loss_mae`, `tier4/loss_huber` and `tier2/05_d4_augmentation` set keys the
-old loader never read, so any earlier run of them trained plain MSE / without
-augmentation. They now do what they say; earlier numbers for them are the
-fiducial objective, not the ablation.
+`tier4/loss_mae` and `tier4/loss_huber` select their objectives through
+`training.loss`; `tier2/05_d4_augmentation` enables `training.d4_augment`.
+Confirm these settings in the resolved run config when interpreting results.
 
 ### Two things to check against the paper before writing the table
 

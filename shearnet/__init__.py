@@ -25,8 +25,8 @@ from .core.models import (  # noqa: E402
 from .core.train import train_model  # noqa: E402
 
 __version__ = "0.1.0"
-__author__ = "Sayan Saha"
-__email__ = "sayan.iiserp@gmail.com"
+__author__ = "Adam Field, Sayan Saha"
+__email__ = "adfield@wpi.edu, sayan.iiserp@gmail.com"
 
 __all__ = [
     "generate_dataset",

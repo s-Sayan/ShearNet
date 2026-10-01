@@ -29,7 +29,7 @@ conda activate shearnet      # or shearnet_gpu
 ```
 
 Run `make help` for the other targets (`install-dev`, `install-all`, `clean`,
-`uninstall`). With your own environment instead:
+`uninstall`). With a separately managed environment:
 
 ```bash
 pip install -e .                  # or  pip install -e ".[gpu]"  for GPU
@@ -41,7 +41,7 @@ Neither ngmix nor the JAX-GalSim fork is on PyPI. The fork (it adds the
 `des.DES_PSFEx` SuperBIT PSFs) is needed for in-loop training and for
 `shearnet-eval`.
 
-### Verify your install
+### Verify the installation
 
 The smoke config trains a tiny model for two epochs and evaluates it, the same
 thing CI does:
@@ -119,9 +119,9 @@ One YAML file with five blocks: `run_options`, `simulation`, `model`, `training`
 
 `configs/example.yaml` is a short commented tour, `configs/smoke.yaml` the tiny
 CI run, and `configs/paper/` the paper campaign (generated from one fiducial; see
-[`configs/paper/README.md`](configs/paper/README.md)). Configs in the older
-layouts still load, translated with a warning per changed key;
-`python -m shearnet.config.legacy OLD.yaml` prints the translation.
+[`configs/paper/README.md`](configs/paper/README.md)). Configs in the package and unit-test
+layouts are translated with a warning per changed key;
+`python -m shearnet.config.legacy INPUT.yaml` prints the translation.
 
 ## On a Slurm cluster
 
@@ -214,7 +214,7 @@ to also recover `hlr` / `flux`). Representative performance on 5,000 test galaxi
 ```
 ShearNet/
 ├── shearnet/            # The installable package
-│   ├── config/          #   the config schema, loader and legacy translation
+│   ├── config/          #   the config schema, loader and dialect translation
 │   ├── core/            #   models, training loops, dataset simulation
 │   ├── training/        #   shearnet-train: run directory, history, curves
 │   ├── evaluation/      #   shearnet-eval: rendering, measurements, catalog

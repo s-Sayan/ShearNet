@@ -367,9 +367,7 @@ def test_dataset_spec_build_dispatches_to_jax():
 def test_psf_directory_draw_is_deterministic_and_spread():
     """A directory of PSFEx files must give a stable, seeded, spread-out draw.
 
-    search_psf_files used to return raw glob order, which is directory order and
-    therefore filesystem-dependent -- on the 50-file SuperBIT set it comes back
-    emp47, emp48, emp26, emp11, ... Since sample_truth picks each object's PSF as
+    Raw glob order is filesystem-dependent. Since sample_truth picks each PSF as
     psf_paths[int(len(psf_paths) * ud())], that index is part of the seeded draw,
     so an unsorted list means the same seed picks different PSFs on a different
     machine.

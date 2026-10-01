@@ -628,8 +628,8 @@ def test_fusion_pos_keeps_the_model_equivariant(fusion_pos):
     assert jnp.allclose(out_mir[:, :2], out[:, :2] * jnp.array([1.0, -1.0]), atol=1e-5)
 
 
-def test_fusion_pos_default_is_the_historical_learned_table():
-    """The default must stay 'learned', or every saved checkpoint stops loading."""
+def test_fusion_pos_default_is_the_learned_table():
+    """The default positional encoding is a learned absolute table."""
     kw = dict(
         galaxy_type="shearnet-d4", psf_type="shearnet-d4", fusion="transformer"
     )
@@ -672,23 +672,18 @@ def _n_params(**kw):
     return sum(x.size for x in jax.tree_util.tree_leaves(p))
 
 
-def test_design_defaults_to_the_historical_inference():
-    """``design=None`` must reproduce what was previously inferred.
-
-    Every existing config and checkpoint depends on it, so the explicit key is
-    additive: naming the design cannot change a model that did not name it.
-    """
+def test_design_defaults_to_backbone_inference():
+    """``design=None`` matches explicitly selecting the backbone's design."""
     for branch, expected in (("shearnet-d4", "shearnet-d4"), ("d4cnn", "d4cnn")):
         kw = dict(galaxy_type=branch, psf_type=branch, fusion="transformer")
         assert _n_params(**kw) == _n_params(design=expected, **kw)
 
 
 def test_design_is_separable_from_the_backbone():
-    """The point of exposing it: swap ONE thing at a time.
+    """Backbone and design are independently configurable.
 
     ``design`` fixes the fusion feed-forward, the odd-MLP depth and the scalar
-    head. Inferring it from the backbone made the 'old backbone' ablation five
-    simultaneous changes, so the two must now be independently settable.
+    head, allowing backbone ablations without changing these components.
     """
     kw = dict(fusion="transformer")
     backbone_only = _n_params(galaxy_type="d4cnn", psf_type="d4cnn",

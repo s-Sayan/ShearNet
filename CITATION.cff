@@ -1,4 +1,4 @@
-cff-version: 1.2.0
+cff-version: 1.3.0
 message: "If you use ShearNet in your research, please cite it as below."
 title: "ShearNet: Neural network-based galaxy shear estimation with JAX"
 abstract: >-
@@ -8,12 +8,12 @@ abstract: >-
   and likelihood-based methods (NGmix metacalibration).
 type: software
 authors:
-  - family-names: Saha
-    given-names: Sayan
-    email: sayan.iiserp@gmail.com
   - family-names: Field
     given-names: Adam
     email: adfield@wpi.edu
+  - family-names: Saha
+    given-names: Sayan
+    email: sayan.iiserp@gmail.com
 version: 0.1.0
 license: MIT
 repository-code: "https://github.com/s-Sayan/ShearNet"

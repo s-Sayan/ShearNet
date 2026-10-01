@@ -66,51 +66,33 @@ particular one.
   header (`MCALSTEP`; the `p`/`m` products are `2 * step` apart). ShearNet is run
   on the very image/PSF pairs ngmix fitted.
 * Two PSF sizes, both arcsec^2: `STAMP.psf_T_hsm` is GalSim HSM's `2 sigma^2`
-  with `sigma = det(M)^(1/4)` (what the old catalogs called `Tpsf`);
+  with `sigma = det(M)^(1/4)`;
   `STAMP.psf_T_admom` is the adaptive-moment trace `Irr + Icc`. `NGMIX.Tpsf_<t>`
   is the T of ngmix's own Gaussian fit to the PSF of that variant -- for metacal
   products the dilated reconvolution PSF -- which is the `Tpsf_noshear`
   SuperBIT's `T/Tpsf` cut divides by.
 
-## From the old catalogs
+## Derived measurements
 
-The old `benchmarking/evaluation.fits` had one table per population (`TAB_P`,
-`TAB_M` for +/-g1, `TAB_P2`, `TAB_M2` for +/-g2, `LEAKAGE` for no shear), ring
-stations as `_r45`/`_r90`/`_r135` column suffixes, and derived columns. Select
-the scene and station instead, and derive:
+Select populations by scene (`g1_plus`, `g1_minus`, `g2_plus`, `g2_minus`,
+`zero`) and ring stations by `rotation_deg`. Ring averages are means over
+stations of each `catalog_row`.
 
-| old | new |
-|---|---|
-| `TAB_P`, `TAB_M`, `TAB_P2`, `TAB_M2`, `LEAKAGE` | scenes `g1_plus`, `g1_minus`, `g2_plus`, `g2_minus`, `zero` |
-| `<col>_r45` etc. | rows with `rotation_deg == 45` |
-| `g_th` | `TRUTH.e_prepsf` (also `label_g1`, `label_g2`) |
-| `hlr_th`, `flux_th` | `TRUTH.hlr`, `TRUTH.flux_model` |
-| `gpsf`, `Tpsf` | `STAMP.psf_g`, `STAMP.psf_T_hsm` |
-| `s2n` | `STAMP.s2n_stamp` |
-| `e_shearnet`, `e_shearnet_uncorrected`, `e_shearnet_original` | `SHEARNET.g_original` |
-| `hlr_shearnet`, `flux_shearnet` | `SHEARNET.hlr_original`, `SHEARNET.flux_original` |
-| `e_ngmix`, `e_ngmix_uncorrected`, `e_ngmix_original` | `NGMIX.g_original` |
-| `T_ngmix`, `s2n_ngmix`, `flux_ngmix` | `NGMIX.T_noshear`, `NGMIX.s2n_noshear`, `NGMIX.flux_noshear` |
-| `T_ngmix_1p`, `s2n_ngmix_1p`, ... | `NGMIX.T_1p`, `NGMIX.s2n_1p`, ... |
-| `flag_ngmix` | any of the nine `NGMIX.flags_<t>` non-zero |
-| `e_ngmix_metacal_raw` | `NGMIX.g_noshear` where all nine flags are 0 (NaN otherwise) |
-| `Rgamma_ngmix_metacal` (`R_ngmix_metacal`) | `R[:, a, 0] = (g_1p - g_1m)[:, a] / (2 step)`, `R[:, a, 1] = (g_2p - g_2m)[:, a] / (2 step)`, NaN where any flag is set |
-| `Rpsf_ngmix_metacal` | the same with `_1p_psf`, `_1m_psf`, `_2p_psf`, `_2m_psf` |
-| the `shearnet` versions of the four above | the same on `SHEARNET`; ShearNet's flag is a non-finite prediction |
-| `Rbarpsf_*`, `e_*_metacal`, `e_*_metacal_corrected` | derived, see below |
-| `*_ring` | the mean over the stations of each `catalog_row` |
-| `SUMMARY`, `BINNED`, `LEAKSUM` | not written: compute them from the above |
+For either `NGMIX` or `SHEARNET`, use `g_noshear` where all nine metacal flags
+are zero. Compute the shear response as
+`R[:, a, 0] = (g_1p - g_1m)[:, a] / (2 step)` and
+`R[:, a, 1] = (g_2p - g_2m)[:, a] / (2 step)`, setting it to NaN where any
+flag is set. Compute the PSF response with `_1p_psf`, `_1m_psf`, `_2p_psf`,
+and `_2m_psf` instead. ShearNet flags non-finite predictions.
+Summary and binned statistics are derived from these measurements, not stored.
 
-**The old `metacal` m and c**, exactly: for each +/- pair and each station
+**Metacal m and c:** for each +/- pair and each station
 separately, keep the objects good in both signs (all flags 0, finite `Rpsf` and
 `psf_g`); `Rbar_psf` = mean over them of `(Rpsf_plus + Rpsf_minus) / 2`; the
 corrected shape is `g_noshear - Rbar_psf @ psf_g` for both signs. Average the
 corrected shapes and `Rgamma` over the stations (an object failed at one
-station is failed), then form the paired estimator `<(e+ - e-)/2> / <R>`. This
-reproduces the old SUMMARY from the new catalog; checked on a test run, the
-only differences come from the old harness rendering the rotated stations in
-float64 (now float32, like the 0-degree station and the training stamps), and
-are ~1e-3 of the jackknife error on m.
+station is failed), then form the paired estimator `<(e+ - e-)/2> / <R>`.
+All stations are rendered in float32, as are the training stamps.
 
 ## Columns
 
@@ -150,7 +132,7 @@ are ~1e-3 of the jackknife error on m.
 | `scene_id` | i2 |  | index into the SCENES table |
 | `rotation_id` | i2 |  | index into the ROTATIONS table |
 | `psf_g` | f8 2 |  | ngmix adaptive-moment ellipticity of the PSF stamp, epsilon convention |
-| `psf_T_hsm` | f8 | arcsec2 | GalSim HSM 2 sigma^2 of the PSF stamp, sigma = det(M)^(1/4): a determinant size (the historical Tpsf) |
+| `psf_T_hsm` | f8 | arcsec2 | GalSim HSM 2 sigma^2 of the PSF stamp, sigma = det(M)^(1/4): a determinant size |
 | `psf_T_admom` | f8 | arcsec2 | ngmix adaptive-moment trace Irr + Icc of the PSF stamp |
 | `psf_flags` | i4 |  | non-zero where the PSF moments failed |
 | `flux_stamp` | f8 | count | sum of the noisy galaxy stamp |

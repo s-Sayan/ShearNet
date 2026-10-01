@@ -6,7 +6,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
-#: The legacy-config translator has to name the keys it drops.
+#: The config translator must name the keys it drops.
 ALLOWED = {REPO / "shearnet" / "config" / "legacy.py"}
 
 

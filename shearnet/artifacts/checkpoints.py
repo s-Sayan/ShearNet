@@ -5,8 +5,7 @@ model's variables -- the averaged ones when the run used an EMA. Restoring
 needs the architecture, which comes from the run's resolved config and nothing
 else: :func:`model_kwargs` is the single map from config to ``build_model``,
 used by training and by every reader of a finished run, so the two cannot
-disagree about a setting (the old evaluation loader dropped ``d4_multiscale``,
-so the ablation that switches it off could not be restored). A tree that does
+disagree about a setting, including ``d4_multiscale``. A tree that does
 not match the checkpoint is an error, not a partial load.
 """
 

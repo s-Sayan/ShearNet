@@ -145,7 +145,7 @@ def animate_model_epochs(
         )
 
         # Make predictions using the model at this checkpoint
-        predicted_labels = state.apply_fn(state.params, true_labels)  # Adjust based on your model
+        predicted_labels = state.apply_fn(state.params, true_labels)
         predicted_labels_epoch.append(predicted_labels)
 
     # Convert the list of predictions into a numpy array (shape: epochs x samples x labels)

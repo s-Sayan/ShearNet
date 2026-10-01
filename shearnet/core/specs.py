@@ -35,12 +35,9 @@ class DatasetSpec:
     return_psf: bool = False
     nse_sd: float = 1e-5
     # Uniform per-object applied shear used by the differentiable response
-    # losses.  Zero preserves the historic zero-shear training population.
+    # losses. Zero selects a zero-applied-shear training population.
     base_shear_range: float = 0.0
-    # Random per-object PSF shear. ``cli.evaluate`` has always honoured
-    # ``dataset.apply_psf_shear``; the training path dropped it on the floor
-    # because the spec had no field for it, so a config asking for a sheared-PSF
-    # population trained on round PSFs and evaluated on sheared ones.
+    # Random per-object PSF shear, shared by training and evaluation.
     apply_psf_shear: bool = False
     psf_shear_range: float = 0.05
     psf_file_or_dir: Optional[str] = None

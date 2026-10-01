@@ -1,4 +1,4 @@
-"""The config schema: what it accepts, what it refuses, and the legacy migration."""
+"""The config schema: what it accepts, what it refuses, and dialect translation."""
 
 import os
 from pathlib import Path
@@ -83,7 +83,7 @@ def test_strict_get_refuses_a_misspelled_key():
     with pytest.raises(KeyError):
         config.get("training.epoch")
     with pytest.raises(KeyError):
-        config.get("dataset.seed")  # the old spelling
+        config.get("dataset.seed")  # not a schema key
 
 
 def test_relative_paths_resolve_against_the_file(tmp_path):
@@ -165,7 +165,7 @@ def test_an_evaluation_override_cannot_touch_the_model(tmp_path):
 
 
 # ----------------------------------------------------------------------
-# the two old layouts
+# the package and unit-test layouts
 # ----------------------------------------------------------------------
 def test_package_layout_migrates(tmp_path):
     path = _write(tmp_path, "dataset:\n  samples: 128\n  psf_sigma: 0.3\n  exp: superbit\n"
@@ -203,16 +203,16 @@ eval:
     assert config.get("run_options.description") == "hello"
     assert config.get("simulation.catalogs.eval_file") == "/c/eval.fits"
     assert config.get("training.normalize_images") is True
-    assert config.get("training.loss") == "mae"          # was never read before
-    assert config.get("training.d4_augment") is True     # was never read before
+    assert config.get("training.loss") == "mae"
+    assert config.get("training.d4_augment") is True
     assert config.get("evaluation.rotations_deg") == [0.0, 45.0, 90.0, 135.0]
     assert [s["name"] for s in config.get("evaluation.scenes")] == [
         "zero", "g1_plus", "g1_minus", "g2_plus", "g2_minus"]
     assert config.get("evaluation.scenes")[1]["g1"] == 0.02
-    assert any("now honoured" in note for note in config.notes)
+    assert any("translated to training.loss" in note for note in config.notes)
 
 
-def test_a_legacy_key_nobody_knows_is_an_error():
+def test_unknown_dialect_key_is_an_error():
     with pytest.raises(ConfigError, match="has no translation"):
         legacy.migrate({"dataset": {"samplez": 3}})
 

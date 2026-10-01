@@ -2,9 +2,8 @@
 
 Every setting either program understands is listed in :data:`FIELDS`, with its
 type, default and meaning. A YAML key that is not listed is an error, not a
-silently ignored line: three ablation arms of the last campaign set keys the
-old loader never read (``train.loss``, ``train.d4_augment``), trained the
-control, and would have reported it as a measurement.
+silently ignored line. This prevents misspelled settings from silently
+selecting defaults.
 
 The layout follows the SuperBIT configs where there is an obvious equivalent
 (``run_options`` for identity and execution, scientific ``snake_case`` names
@@ -475,7 +474,7 @@ def resolve(user: Mapping[str, Any], base_dir: Optional[str] = None,
             base: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """Validate ``user`` and fill every unset field.
 
-    ``user`` is a nested mapping in this schema (legacy files are translated
+    ``user`` is a nested mapping in this schema (alternate config dialects are translated
     before they get here). ``base_dir`` resolves relative ``path`` fields: it is
     the directory of the file the values came from. ``base`` is an already
     resolved config to layer ``user`` on top of instead of the defaults.

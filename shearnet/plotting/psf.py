@@ -137,7 +137,7 @@ def plot_psf_systematics(
 ):
     """Plot mean shear as a function of PSF properties (DES Y3 Figure 10 style).
 
-    Changes from original:
+    Features:
     - Uses percentile-based binning for equal galaxy counts per bin
     - Applies response correction to binned shear values
     - Prints linear fit equations with uncertainties

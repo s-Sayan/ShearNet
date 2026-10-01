@@ -383,7 +383,6 @@ class ResearchBackedGalaxyResNet(nn.Module):
         # CITATION: "Very Deep Convolutional Networks for Large-Scale Image Recognition" (Simonyan
         # & Zisserman, ICLR 2015)
         # RATIONALE: 3x3 kernels are computationally efficient while capturing local features
-        # DECISION: Small initial feature count (16) to match your successful original design
         x = nn.Conv(16, (3, 3), padding="SAME")(x)
 
         # CITATION: "Batch Normalization: Accelerating Deep Network Training by Reducing Internal
@@ -401,14 +400,13 @@ class ResearchBackedGalaxyResNet(nn.Module):
 
         # ==================== FIRST MULTI-SCALE BLOCK ====================
         # CITATION: Multi-scale approach inspired by:
-        # 1. "Inception-v4, Inception-ResNet and the Impact of Residual Connections on Learning"
+        # "Inception-v4, Inception-ResNet and the Impact of Residual Connections on Learning"
         # (Szegedy et al., 2017)
-        # 2. Your own successful results with scales (3, 9, 21)
         # RATIONALE: Galaxies have features at multiple spatial scales (PSF effects, substructure,
         # overall shape)
         x = EnhancedMultiScaleBlock(
-            filters_per_scale=16,  # DECISION: Matches your successful original design
-            scales=(3, 9, 21),  # DECISION: Preserves your empirically successful scale selection
+            filters_per_scale=16,
+            scales=(3, 9, 21),
             # CITATION: "Multi-Scale Context Aggregation by Dilated Convolutions"
             # (Yu & Koltun, ICLR 2016)
             use_dilated=True,
@@ -425,9 +423,8 @@ class ResearchBackedGalaxyResNet(nn.Module):
 
         # ==================== SECOND MULTI-SCALE BLOCK ====================
         # CITATION: Same rationale as first block, with increased capacity
-        # DECISION: filters_per_scale=32 matches your successful original design
         x = EnhancedMultiScaleBlock(
-            filters_per_scale=32,  # DECISION: 2x increase in capacity, matches your original
+            filters_per_scale=32,  # Twice the first block's feature count.
             scales=(3, 9, 21),  # DECISION: Consistent scale selection
             use_dilated=True,
         )(x, deterministic=deterministic)
@@ -468,7 +465,6 @@ class ResearchBackedGalaxyResNet(nn.Module):
             # CITATION: "ImageNet Classification with Deep Convolutional Neural Networks"
             # (Krizhevsky et al., NIPS 2012)
             # RATIONALE: Dense layers for final feature combination and prediction
-            # DECISION: 128 units matches your successful original design
             x = nn.Dense(128)(x)
 
             # CITATION: Batch norm in dense layers: "Batch Normalization: Accelerating Deep Network
@@ -483,7 +479,7 @@ class ResearchBackedGalaxyResNet(nn.Module):
             # x = nn.Dropout(0.5)(x, deterministic=deterministic)
 
             # ==================== FINAL PREDICTION LAYER ====================
-            # DECISION: output_keys to match your pipeline expectations (g1, g2, sigma, flux)
+            # Output dimensions follow output_keys.
             # CITATION: Standard practice since "Gradient-Based Learning Applied to Document
             # Recognition" (LeCun et al., 1998)
             # RATIONALE: Linear layer for regression output, no activation for unbounded predictions
@@ -846,7 +842,7 @@ class _SmoothResBlock(nn.Module):
     normalisation -- a faint galaxy's representation never depends on the S/N
     distribution of its minibatch neighbours, and training and inference are the
     same function. The small ``alpha`` keeps the block near the identity at
-    initialisation, which is what you want when the sought distortion is far
+    initialisation, appropriate when the sought distortion is far
     smaller than the intrinsic morphology.
     """
 
@@ -1223,7 +1219,7 @@ class _D4OrbitMember(nn.Module):
                 num_self_attn_layers=self.num_self_attn_layers,
                 # Sec. 7.2: a width-256 GELU feed-forward after each attention
                 # sublayer. 0 keeps the attention-only block. Set explicitly by
-                # D4ForkLike -- no longer inferred here.
+                # D4ForkLike -- configured explicitly.
                 ffn_dim=self.ffn_dim,
             )(galaxy_map, psf_map, deterministic=deterministic)
         # 'concat': summarise the PSF as a global descriptor and broadcast it
@@ -1335,8 +1331,8 @@ class D4ForkLike(nn.Module):
     #: removes it.
     d4_multiscale: bool = True
     # Positional encoding of the fusion attention. See FUSION_POSITIONAL and
-    # _RoPE2DAttention: 'learned' is the historical absolute table (default, so
-    # every existing checkpoint loads), 'rope2d' the D4-covariant relative
+    # _RoPE2DAttention: 'learned' is the default absolute table,
+    # 'rope2d' the D4-covariant relative
     # encoding, 'none' no positional information at all.
     fusion_pos: str = "learned"
     # Fusion block structure. Both are part of a `design`, but they are settable
@@ -1365,9 +1361,7 @@ class D4ForkLike(nn.Module):
         cannot accept that, because the orbit alignment
         (``_d4_inverse_apply``) acts on spatial maps and a pooled vector has no
         spatial structure left to un-rotate. The equivariant construction is
-        the pooling, and it happens after alignment. It was previously accepted
-        and silently ignored, so a config asking for it got something else
-        without being told; it is now refused. Choose the pooling with ``head``
+        the pooling, and it happens after alignment. Choose the pooling with ``head``
         (``'gap'`` for the fixed D4 Gaussian window, ``'attention'`` for the
         learned maps).
 
@@ -1440,8 +1434,8 @@ class D4ForkLike(nn.Module):
             psf_orbit = jnp.stack([_d4_apply(psf_image, i) for i in range(8)], axis=0)
             _, fused = scanned(**member_kwargs)(None, (gal_orbit, psf_orbit))
         else:
-            # Historical path: stack the orbit on the batch axis so the backbones
-            # and the fusion each run once over all eight copies. Kept for the
+            # Stack the orbit on the batch axis so the backbones
+            # and the fusion each run once over all eight copies. Used for the
             # equivalence test and for debugging; it costs ~8x the activations.
             gal_orbit = jnp.concatenate([_d4_apply(galaxy_image, i) for i in range(8)], axis=0)
             psf_orbit = jnp.concatenate([_d4_apply(psf_image, i) for i in range(8)], axis=0)
@@ -1485,7 +1479,7 @@ class D4ForkLike(nn.Module):
                 return jnp.einsum("bhwc,bhwk->bkc", psi, attn).reshape(batch, -1)
 
         else:
-            # 'gap': original single fixed D4-symmetric Gaussian window + GAP.
+            # 'gap': single fixed D4-symmetric Gaussian window + GAP.
             window = _d4_gaussian_window(H)[None, :, :, None]
 
             def _pool(psi):
@@ -1592,10 +1586,8 @@ def attention_pool_diagnostics(attention, eps=1e-12):
 # ---------------------------------------------------------------------------
 # Model registries and factories
 #
-# Single source of truth for the architecture-name -> class mapping, replacing
-# the ``if/elif`` chains that previously lived in ``core.train``, ``cli.evaluate``
-# and ``ForkLike._get_model``. Adding a new architecture now means editing one
-# dict here.
+# Single source of truth for the architecture-name -> class mapping.
+# Add architectures to the corresponding registry below.
 # ---------------------------------------------------------------------------
 
 # Top-level single-branch architectures selectable via ``nn=`` (everything
@@ -1685,8 +1677,7 @@ def build_model(
     ``fusion`` (``'transformer'`` or ``'concat'``) and now maps
     ``galaxy_type``/``psf_type`` onto its pluggable D4 branches
     (:data:`D4_BRANCH_BACKBONES`, e.g. ``'d4cnn'`` / ``'research_backed'`` /
-    ``'forklens_psf'``); ``None`` falls back to the smooth ``'d4cnn'`` backbone,
-    which reproduces the original behaviour.
+    ``'forklens_psf'``); ``None`` falls back to the smooth ``'d4cnn'`` backbone.
 
     ``dropout`` (default ``0.0``) sets the spatial-dropout rate of the
     ``research_backed`` backbone -- an anti-overfit lever for that high-capacity
@@ -1703,8 +1694,7 @@ def build_model(
 
         def _d4_branch(t):
             # ``build_model``'s generic default is 'cnn'; treat that (and None)
-            # as the smooth 'd4cnn' backbone so bare d4-fork-like construction
-            # reproduces the original behaviour. Explicit D4 branch names pass
+            # as the smooth 'd4cnn' backbone. Explicit D4 branch names pass
             # through; a typo passes through too and raises in ``_branch_map``.
             return "d4cnn" if t in (None, "cnn") else t
 
@@ -1728,11 +1718,9 @@ def build_model(
             dropout=dropout or 0.0,
             # `design` names a published SPECIFICATION -- branches, fusion and
             # heads together -- and so it also fixes the head depths and the
-            # scalar-head layout. It is an explicit setting: None reproduces the
-            # historical inference from the galaxy backbone so every existing
-            # config and checkpoint is unchanged, and naming it lets an ablation
-            # swap the backbone WITHOUT also swapping the fusion and the head,
-            # which is otherwise five changes reported as one.
+            # scalar-head layout. None infers the design from the galaxy
+            # backbone. An explicit design lets an ablation swap the backbone
+            # without also changing the fusion and head.
             design=str(resolved_design),
             # 'shearnet-d4' branch schedule. None keeps the report's numbers.
             **{k: tuple(v) for k, v in (

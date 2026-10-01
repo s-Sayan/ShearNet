@@ -7,6 +7,7 @@ name = "shearnet"
 version = "0.1.0"
 authors = [
     {name = "Sayan Saha", email = "sayan.iiserp@gmail.com"},
+    {name = "Adam Field", email = "adfield@wpi.edu"},
 ]
 description = "Neural network-based galaxy shear estimation with JAX"
 readme = "README.md"

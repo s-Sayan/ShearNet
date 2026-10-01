@@ -17,7 +17,7 @@
 # the predicted shear exactly spin-2 equivariant for any square-map backbone --
 # measured to 2.4e-07 at initialization. Against rung 5 this separates a symmetry
 # that holds on average from one that holds identically. Note what it does NOT
-# give you: every D4 element acts on (e1, e2) as diag(+/-1, +/-1), so it forces
+# enforce: every D4 element acts on (e1, e2) as diag(+/-1, +/-1), so it forces
 # the off-diagonal response to zero and leaves R11 and R22 completely unrelated.
 #
 # Read this before trusting the result:

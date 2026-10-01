@@ -49,7 +49,7 @@ __all__ = ["evaluate", "metacal_seed", "plan"]
 def metacal_seed(base_seed: int, scene: Dict, rotation_index: int) -> int:
     """The seed of the metacal fits of one scene at one station.
 
-    Kept from the old harness so its numbers reproduce: positive applied shear
+    Positive applied shear uses
     ``seed + 1``, negative ``seed + 2``, the zero-shear scene ``seed + 100 +
     station``. It only seeds ngmix's initial guesses.
     """

@@ -9,7 +9,7 @@ galsim = pytest.importorskip("galsim")
 
 
 def test_zero_applied_shear_is_exactly_the_identity():
-    """Every historical run has base shear zero; none of them may move."""
+    """Zero applied shear preserves the input ellipticity exactly."""
     for e1, e2 in [(0.0, 0.0), (0.3, -0.2), (-0.45, 0.4)]:
         assert compose_shear(e1, e2, 0.0, 0.0) == (e1, e2)
 

@@ -226,7 +226,7 @@ class ResponseRegularization:
             That is ``1 - eps^2`` in complex form, not the identity -- the
             identity is only correct after averaging over an isotropic shape
             distribution. ``'identity'`` targets ``I`` and is the right choice
-            only if you intend an ensemble-level constraint.
+            only for an ensemble-level constraint.
         every_n_steps: evaluate the response terms every N optimiser steps. The
             graph is compiled either way (both branches of the ``lax.cond`` are
             traced); only the runtime is saved.
@@ -241,7 +241,7 @@ class ResponseRegularization:
             ``1/sqrt(N)`` and nothing else changes: 32 of 128 objects costs a
             factor of two on the response gradient's noise and buys a factor of
             four on the response block's activation memory. Set it when a run
-            OOMs at the batch size you want for the supervised term.
+            exceeds memory at the supervised term's batch size.
 
     A caveat worth stating once: under noise the Bayes-optimal estimator has a
     *shrunk* response, so forcing ``R^gamma`` to its noiseless value trades
@@ -707,7 +707,7 @@ def make_fused_train_step(
             on steps the response terms were evaluated and 0.0 otherwise, so the
             caller can average the terms over the steps that produced them.
         noise_range: optional ``(min_sd, max_sd)`` sampled uniformly once per
-            training batch. ``None`` uses the historic fixed ``nse_sd``.
+            training batch. ``None`` uses the fixed ``nse_sd``.
         noise_condition: express the galaxy and PSF inputs in sampled-noise
             units. This conditions existing architectures on depth without
             changing their input signatures; it requires positive noise.

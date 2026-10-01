@@ -23,8 +23,8 @@ Rules:
   and training population belong to the run.
 
 `configs/example.yaml` is a short commented tour; `configs/paper/` holds the
-paper campaign. Files in the two pre-schema layouts still load (translated, with
-a warning per changed key); `python -m shearnet.config.legacy OLD.yaml` prints
+paper campaign. Files in the package and unit-test layouts are translated with
+a warning per changed key; `python -m shearnet.config.legacy INPUT.yaml` prints
 the translation.
 
 ## Every setting

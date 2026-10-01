@@ -117,7 +117,7 @@ def test_config_loads_and_declares_a_root_matching_its_directory(arm):
 @pytest.mark.parametrize("arm", [a for a in ARMS if a.path != "unit_tests/fourth"],
                          ids=_ids([a for a in ARMS if a.path != "unit_tests/fourth"]))
 def test_every_arm_changes_what_the_code_reads(arm):
-    """The failure the schema migration found: an arm whose delta nobody read.
+    """Each ablation must change a setting consumed by the model or training.
 
     UT4 is excluded because it IS the fiducial simulation on the fiducial model.
     """

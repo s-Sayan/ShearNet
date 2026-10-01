@@ -23,7 +23,7 @@ TWO THINGS TO KNOW BEFORE USING THE OUTPUT
 ------------------------------------------
 Rows are consumed by index, so a cut catalog holds fewer galaxies than the
 original and the renderer refuses a ``samples`` larger than the table. The
-count is printed; check it against the ``samples`` in your configs.
+count is printed; check it against the ``samples`` in the configs.
 
 The cut also renumbers every row, so index *i* is a different galaxy than it
 was. A run on the cut catalog is not the same population as a run on the full

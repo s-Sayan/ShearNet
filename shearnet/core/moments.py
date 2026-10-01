@@ -2,9 +2,8 @@
 
 Lives in ``core`` (rather than the metrics module) so that ``core.dataset`` can
 measure PSF moments without importing the heavier metrics module, which would
-otherwise create a dependency cycle. :mod:`shearnet.metrics` (and the
-``shearnet.utils.metrics`` shim) re-export :func:`get_admoms_ngmix_fit` for
-backward compatibility.
+otherwise create a dependency cycle. :mod:`shearnet.metrics` and
+``shearnet.utils.metrics`` re-export :func:`get_admoms_ngmix_fit`.
 """
 
 import galsim

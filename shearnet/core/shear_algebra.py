@@ -4,7 +4,7 @@ One function, but it has to live somewhere both ``dataset`` (GalSim) and
 ``dataset_jax`` (JAX-GalSim) can import, and it must be written in plain
 arithmetic so the same code runs on a Python float, a NumPy array and a traced
 ``jax`` array. That last property is what lets the in-loop trainer differentiate
-the *label* with respect to the applied shear and use the result as the exact
+the label with respect to the applied shear and use the result as the exact
 per-object target for ``R^gamma`` (see
 :class:`~shearnet.core.inloop.ResponseRegularization`).
 """
@@ -39,8 +39,7 @@ def compose_shear(e1, e2, g1, g2):
 
     Returns:
         ``(o1, o2)``, the observed reduced ellipticity. Reduces to ``(e1, e2)``
-        exactly -- not approximately -- when ``g1 = g2 = 0``, so every run with
-        the historical zero applied shear is bit-identical.
+        exactly -- not approximately -- when ``g1 = g2 = 0``.
 
     Written with real arithmetic rather than Python complex so the same
     expression differentiates under ``jax.jvp`` without the holomorphic-vs-real

@@ -24,7 +24,7 @@
 #
 #     sbatch scripts/shearnet.sbatch configs/variations/fourth_forklens.yaml
 #
-# (model.head: attention dropped -- fork-like has no head, it was never read)
+# fork-like does not accept model.head.
 
 schema_version: 1
 run_options:

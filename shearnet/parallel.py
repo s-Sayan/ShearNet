@@ -1,9 +1,7 @@
-"""Worker-count resolution, in one place.
+"""Worker-count resolution
 
-``os.cpu_count()`` reports the *node's* cores, not the allocation. On a shared
-cluster node that is how a job asking for 18 CPUs ends up spawning 128 workers,
-each a full ``spawn``-ed interpreter, and gets itself killed. Every parallel
-path in this package resolves its worker count here instead.
+``os.cpu_count()`` reports the node's cores, not the allocation. Every parallel
+path in this package resolves its worker count here.
 """
 
 from __future__ import annotations
@@ -24,7 +22,7 @@ def cpu_only_children():
     """Spawn workers with JAX pinned to the CPU, for the duration of the block.
 
     ``import shearnet.methods.ngmix`` pulls in JAX, and a ``spawn``-ed worker
-    performs that import while unpickling the function it was given -- *before*
+    performs that import while unpickling the function it was given -- before
     any initializer of ours can run. So an initializer cannot fix this; the
     environment has to be right at spawn time, which means setting it in the
     parent and letting the children inherit it. Eighteen ngmix workers each

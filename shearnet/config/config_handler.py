@@ -10,9 +10,8 @@ Values are read with dotted keys::
     config.get("training.epochs")
     config.get("training.response")      # a whole block, as a dict
 
-A key the schema does not have raises :class:`KeyError`. That is deliberate:
-reading a misspelled key and getting ``None`` back is how settings used to be
-ignored without anyone noticing.
+A key the schema does not have raises :class:`KeyError`, preventing
+misspelled settings from being silently ignored.
 """
 
 from __future__ import annotations
@@ -49,20 +48,20 @@ class Config:
                  notes: Iterable[str] = ()):
         self._data = copy.deepcopy(dict(resolved))
         self.source = source
-        #: What a legacy translation changed; empty for a current-schema file.
+        #: Config translation notes; empty for a schema-conforming file.
         self.notes: List[str] = list(notes)
 
     # -- construction ------------------------------------------------------
     @classmethod
     def from_dict(cls, mapping: Mapping[str, Any], base_dir: Optional[str] = None,
                   source: Optional[str] = None) -> "Config":
-        """Validate ``mapping`` (current schema, or either legacy dialect)."""
+        """Validate ``mapping`` (config schema, or either supported dialect)."""
         notes: List[str] = []
         mapping = dict(mapping)
         if legacy.is_legacy(mapping):
             mapping, notes = legacy.migrate(mapping)
             where = source or "a config"
-            logger.warning("%s uses the pre-schema layout; translated it. Convert the "
+            logger.warning("%s uses an alternate config layout; translated it. Convert the "
                            "file with `python -m shearnet.config.legacy`.", where)
             for note in notes:
                 logger.warning("  %s", note)

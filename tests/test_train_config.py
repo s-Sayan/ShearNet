@@ -43,8 +43,8 @@ def test_a_run_needs_a_name(tmp_path):
 
 
 def test_the_architecture_is_taken_as_asked_for(tmp_path):
-    """Nothing rewrites model.type behind the caller (the old process_psf did)."""
-    path = tmp_path / "legacy.yaml"
+    """The process_psf setting must not override model.type."""
+    path = tmp_path / "package_layout.yaml"
     path.write_text("model:\n  type: d4-fork-like\n  process_psf: false\n"
                     "  output_keys: [g1, g2]\noutput:\n  model_name: m\n")
     cfg = build_train_config(create_parser().parse_args(

@@ -157,9 +157,8 @@ _warned_f32 = False
 def render_dtype():
     """Render dtype implied by the process-wide ``jax_enable_x64`` flag.
 
-    Deliberately read-only. An earlier version scoped x64 with a context
-    manager so generation could be float64 while training stayed float32; that
-    is unsafe, because jax-galsim caches jitted internals without precision in
+    Deliberately read-only. Switching x64 with a context manager is unsafe
+    because jax-galsim caches jitted internals without precision in
     the cache key, and a cached float32 interpolant reused under float64 fails
     at lowering with a dtype verifier error. Set ``JAX_ENABLE_X64=1`` in the
     environment instead, and cast to float32 before the network (the in-loop
@@ -436,8 +435,7 @@ def sample_truth(
 
     # The label is the shape of the object that was actually drawn: intrinsic
     # shape composed with the applied shear, matching sim_func. Exactly
-    # (p["g1"], p["g2"]) when no applied shear is requested, which is every
-    # historical run.
+    # (p["g1"], p["g2"]) when no applied shear is requested.
     obs_g1, obs_g2 = compose_shear(p["g1"], p["g2"], p["base_g1"], p["base_g2"])
 
     return Truth(

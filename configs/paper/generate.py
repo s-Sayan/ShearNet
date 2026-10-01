@@ -345,7 +345,7 @@ a no-op costing 8x the data.""",
 the predicted shear exactly spin-2 equivariant for any square-map backbone --
 measured to 2.4e-07 at initialization. Against rung 5 this separates a symmetry
 that holds on average from one that holds identically. Note what it does NOT
-give you: every D4 element acts on (e1, e2) as diag(+/-1, +/-1), so it forces
+enforce: every D4 element acts on (e1, e2) as diag(+/-1, +/-1), so it forces
 the off-diagonal response to zero and leaves R11 and R22 completely unrelated.""",
         delta={
             **_PRE_INLOOP,
@@ -436,7 +436,7 @@ architecture cannot substitute for it.""",
         title="Tier 3: the isotropy penalty removed",
         why="""lambda_iso penalises (D11 - D22)^2 + (D12 + D21)^2 on the
 RESIDUAL D = R - target, and it is the one thing D4 equivariance structurally
-cannot give you: every group element acts as diag(+/-1, +/-1), which zeroes the
+cannot enforce: every group element acts as diag(+/-1, +/-1), which zeroes the
 off-diagonals and leaves R11 and R22 free. Measured on this model at
 initialization, R12 and R21 sit at 1.8 and 1.0 sigma while R11 - R22 is at 35
 sigma.

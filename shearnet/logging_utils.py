@@ -55,7 +55,7 @@ def configure_logging(level=logging.INFO, stream=None, force=False):
     """Configure the ``shearnet`` logger (idempotent).
 
     Attaches a single stdout :class:`logging.StreamHandler` with a
-    message-only formatter, so output matches the previous ``print`` behavior.
+    message-only formatter.
 
     Args:
         level: Logging level for the package logger.
@@ -116,6 +116,6 @@ def run_log(path, level=logging.INFO):
         handler.close()
 
 
-# Configure on import so library output is visible by default (preserving the
-# previous print-to-stdout behavior) while remaining user-overridable.
+# Configure on import so library output is visible on stdout by default.
+# Callers can override this configuration.
 configure_logging()

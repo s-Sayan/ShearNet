@@ -1,9 +1,4 @@
-"""Backward-compatibility shim.
-
-Metrics/evaluation was promoted to the top-level :mod:`shearnet.metrics` module
-(it sits above ``core`` in the dependency stack). This keeps the old
-``shearnet.utils.metrics`` import path working.
-"""
+"""Re-export :mod:`shearnet.metrics`, which sits above ``core`` in the dependency stack."""
 
 from ..metrics import *  # noqa: F401,F403
 from ..metrics import __dict__ as _metrics_dict

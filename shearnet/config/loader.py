@@ -1,7 +1,7 @@
 """YAML in and out, without PyYAML's two traps.
 
 * ``1e-4`` is a float. PyYAML implements YAML 1.1, where a float needs a dot,
-  so ``learning_rate: 1e-4`` used to arrive as the *string* ``"1e-4"``. The
+  so its default loader parses ``learning_rate: 1e-4`` as the *string* ``"1e-4"``. The
   resolver below is the one SuperBIT's ``utils.read_yaml`` installs, on a
   private loader class rather than on ``yaml.SafeLoader`` itself.
 * A key written twice is an error. PyYAML keeps the last one silently, which

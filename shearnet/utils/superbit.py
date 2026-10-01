@@ -1,9 +1,7 @@
 """Utility functions copied verbatim from the superbit-lensing repository.
 
-These helpers were previously imported as ``superbit_lensing.utils`` by the
-research scripts and notebooks under ``research/shear_bias``. To remove the
-external ``superbit-lensing`` dependency, the specific functions ShearNet
-relies on are copied here **unchanged**.
+The functions ShearNet uses from ``superbit_lensing.utils`` are vendored here
+**unchanged**, avoiding an external ``superbit-lensing`` dependency.
 
 Source: https://github.com/superbit-collaboration/superbit-lensing
         (``superbit_lensing/utils.py``)

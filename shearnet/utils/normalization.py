@@ -173,7 +173,7 @@ def load_normalizer(path: str) -> dict:
 # The label normalizer (fit_normalizer/transform_labels) standardizes the
 # network *outputs* (g1, g2, ...). The image normalizer below standardizes the
 # network *inputs* (the galaxy/PSF stamps). They act on different tensors and do
-# not interact: at inference you apply the image normalizer to the inputs, run
+# not interact: at inference apply the image normalizer to the inputs, run
 # the model, and apply inverse_transform_labels to the outputs.
 #
 # By design this is always DATASET-LEVEL (a single scalar mean/std per channel,

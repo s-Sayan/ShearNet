@@ -39,7 +39,7 @@ def test_an_occupied_run_directory_is_refused_unless_overwritten(tmp_path):
     with pytest.raises(RunError, match="already holds a run \\(completed\\)"):
         RunDir(tmp_path / "run").create()
     RunDir(tmp_path / "run").create(overwrite=True)
-    assert not run.evaluations_dir.exists()   # it measured the old model
+    assert not run.evaluations_dir.exists()   # evaluations must not survive run replacement
     assert run.state is None
 
 
@@ -92,7 +92,7 @@ def test_params_round_trip_exactly(tmp_path):
 
 
 def test_another_architecture_does_not_load(tmp_path):
-    """The no_multiscale_block ablation could not be restored by the old loader."""
+    """Loading rejects a checkpoint with a different multiscale-block setting."""
     common = dict(type="d4-fork-like", galaxy_branch="shearnet-d4", psf_branch="shearnet-d4",
                   d4_features=[4, 8, 8], d_model=8, num_heads=2, ffn_dim=8)
     with_block = _config(**common)

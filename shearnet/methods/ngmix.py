@@ -238,15 +238,13 @@ def _get_priors(seed):
     row_sigma, col_sigma = 0.2, 0.2  # a bit smaller than pix size of SuperBIT
     cen_prior = ngmix.priors.CenPrior(row, col, row_sigma, col_sigma, rng=rng)
 
-    # T prior.  This one is flat, but another uninformative you might
-    # try is the two-sided error function (TwoSidedErf)
+    # Flat prior on T.
 
     Tminval = -1.0  # arcsec squared
     Tmaxval = 1000
     T_prior = ngmix.priors.FlatPrior(Tminval, Tmaxval, rng=rng)
 
-    # similar for flux.  Make sure the bounds make sense for
-    # your images
+    # Flat flux prior; bounds must cover the image flux range.
 
     Fminval = -1.0e1
     Fmaxval = 1.0e5
@@ -311,12 +309,12 @@ def mp_fit_one(
     # GaussMom setup (if using moments-based measurement)
     if gal_model == "gaussmom":
         # FWHM of Gaussian weight function (in arcsec, typically)
-        # Rule of thumb: ~1-2x your typical PSF FWHM
-        weight_fwhm = 1.2  # You can adjust this
+        # Rule of thumb: ~1-2x the typical PSF FWHM
+        weight_fwhm = 1.2
         fitter = ngmix.gaussmom.GaussMom(fwhm=weight_fwhm)
         runner = ngmix.runners.Runner(fitter=fitter)
     else:
-        # Original ML fitting setup
+        # Maximum-likelihood fitting setup
         Tguess = 4 * scale**2
         ntry = 20
         lm_pars = {"maxfev": 2000, "xtol": 5.0e-5, "ftol": 5.0e-5}
@@ -482,9 +480,8 @@ _POOL_BOOT = None
 def _metacal_pool_init(boot):
     """Give each worker one bootstrapper, instead of pickling it per task.
 
-    It is ~11.5 kB, so shipping it alongside all 200k observations was never
-    the memory problem; building it once per worker is simply less work. The
-    consequence to know about: the bootstrapper's RNG stream now advances
+    Each bootstrapper is ~11.5 kB; building it once per worker avoids repeated
+    serialization. The bootstrapper's RNG stream advances
     across the objects a worker handles, so the metacal column is reproducible
     for a fixed worker count and not across different ones.
     """
@@ -512,8 +509,7 @@ def _metacal_map(boot, obslist, workers, chunksize=16, return_images=False):
     # imap over the observations, not starmap over [(obs, boot), ...]: an
     # Observation pickles to ~352 kB, so the task list alone would be ~70 GB at
     # 200k objects, queued before any fitting starts. imap streams it, and the
-    # worker returns only the 1.4 kB struct -- the obsdict it used to send back
-    # is 3.6 MB per object, and every caller in this repo discards it.
+    # worker returns only the 1.4 kB struct, avoiding a 3.6 MB obsdict per object.
     ctx = mp.get_context("spawn")
     with cpu_only_children(), ctx.Pool(
         workers, initializer=_metacal_pool_init, initargs=(boot,)
@@ -541,8 +537,8 @@ def mp_fit_one_single(
             that makes the bias benchmark finish. Results are reproducible for a
             fixed ``(rng seed, nproc)`` -- each worker seeds its own bootstrapper
             deterministically from its index -- but the random *guesses* differ
-            if you change the worker count, so record ``nproc`` beside any m you
-            intend to reproduce bit-for-bit.
+            with the worker count. Record ``nproc`` alongside m for bit-for-bit
+            reproducibility.
         collect_resdict: also return the per-object ``resdict``. Off by default:
             it is 4.3 MB per object (the sheared observations are still attached
             to the fit results), so accumulating it for a 200k population asks

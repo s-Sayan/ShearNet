@@ -1,6 +1,6 @@
-"""Translate the two pre-schema config dialects into the current schema.
+"""Translate the package and unit-test config dialects into the config schema.
 
-Before :mod:`shearnet.config.schema` there were two YAML layouts:
+The translator accepts two YAML layouts:
 
 * the package layout -- ``dataset`` / ``model`` / ``training`` / ``output`` /
   ``plotting`` / ``comparison`` / ``catalog`` -- deep-merged over
@@ -9,18 +9,14 @@ Before :mod:`shearnet.config.schema` there were two YAML layouts:
   ``galaxy`` / ``model`` / ``train`` / ``eval`` -- copied onto the package keys
   through a fixed map, after the same merge.
 
-:func:`migrate` reproduces that resolution exactly (the old defaults and the old
-map are frozen below), then renames every value the old code actually read onto
-its current key. Keys the old code never read are reported, not carried.
-
-Two keys are deliberately NOT reproduced, because reproducing them would
-reproduce a bug: the unit-test layout's ``train.loss`` and ``train.d4_augment``
-were never in the old map, so every config that set them trained with MSE and
-without augmentation. They now mean what they say, and :func:`migrate` notes it.
+:func:`migrate` merges the defaults below and maps supported settings onto
+schema keys. Unsupported settings are reported rather than carried over.
+``train.loss`` and ``train.d4_augment`` map explicitly to ``training.loss``
+and ``training.d4_augment``; these translations are included in the notes.
 
 Use it on a file::
 
-    python -m shearnet.config.legacy old.yaml > new.yaml
+    python -m shearnet.config.legacy input.yaml > translated.yaml
 """
 
 from __future__ import annotations
@@ -31,7 +27,7 @@ from typing import Any, Dict, List, Mapping, Tuple
 
 from .schema import DEFAULT_SCENES, FIELDS, SCHEMA_VERSION, ConfigError, flatten, unflatten
 
-#: ``shearnet/config/default_config.yaml`` as it was when the schema replaced it.
+#: Defaults for resolving the package config dialect.
 LEGACY_DEFAULTS: Dict[str, Any] = {
     "dataset": {
         "samples": 10000, "psf_fwhm": 0.5, "exp": "ideal", "nse_sd": 1.0e-5,
@@ -109,7 +105,7 @@ LEGACY_UNIT_TEST_MAP = {
     "train.noise": "training.noise",
 }
 
-#: Resolved package key -> current key, for everything the old code read.
+#: Resolved package key -> schema key.
 _RENAMES = {
     "dataset.samples": "training.nobj",
     "dataset.psf_fwhm": "simulation.psf.gaussian_fwhm",
@@ -146,7 +142,7 @@ for _key in FIELDS:
     if _key.startswith(("model.", "training.")) and _key not in _RENAMES.values():
         _RENAMES.setdefault(_key, _key)
 
-#: Read by nothing, or by code that no longer exists. Reported and dropped.
+#: Unsupported settings. Reported and dropped.
 _DROPPED = {
     "output.save_path", "output.plot_path", "comparison.mcal", "comparison.ngmix",
     "model.process_psf", "dataset.normalized", "paths.checkpoint_dir",
@@ -154,8 +150,7 @@ _DROPPED = {
     "eval.include_shearnet",
 }
 _DROPPED_PREFIXES = ("plotting.", "provenance.", "eval.leakage.", "eval.timing.")
-#: Analysis settings of the old evaluator. Cuts, responses, jackknives and the
-#: catalog level now belong to whatever reads the evaluation FITS.
+#: Analysis settings handled by evaluation FITS consumers, not the renderer.
 _EVAL_DROPPED = {
     "n_jackknife", "c_convention", "resample", "psf_response_apply", "catalog_level",
     "output", "anacal_epochs", "anacal_sigma_arcsec", "anacal_stamp_size",
@@ -164,19 +159,18 @@ _EVAL_DROPPED = {
     "psf_response_direct_step", "psf_response_shearnet", "psf_response_step",
     "reconv_psf",
 }
-#: The unit-test blocks the old map consumed (anything else in them is checked).
+#: Unit-test blocks accepted by the translator; all keys are checked.
 _UNIT_TEST_BLOCKS = ("meta", "paths", "image", "psf", "galaxy", "train", "eval")
-#: The ring an old ``shape_noise_cancel`` asked for.
+#: Rotation angles selected by ``shape_noise_cancel``.
 _RINGS = {1: [0.0], 2: [0.0, 90.0], 4: [0.0, 45.0, 90.0, 135.0]}
 
 
 def is_legacy(raw: Mapping[str, Any]) -> bool:
-    """True for a mapping in either old dialect.
+    """True for a mapping requiring dialect translation.
 
-    ``model``, ``training`` and ``evaluation`` exist in both the old and the
-    current layout, so only a block that exists nowhere else marks a file as
-    old; anything else is read as the current schema (and an old key in a
-    shared block then fails as an unknown key, with a suggestion).
+    ``model``, ``training`` and ``evaluation`` are shared blocks. Only a
+    dialect-specific block triggers translation; otherwise schema validation
+    reports unsupported keys with suggestions.
     """
     if "schema_version" in raw:
         return False
@@ -211,7 +205,7 @@ def _merge(base, update):
 
 
 def _old_resolution(raw: Mapping[str, Any]) -> Dict[str, Any]:
-    """What the old ``Config`` held after loading ``raw``."""
+    """Merge defaults and resolve dialect-specific keys in ``raw``."""
     user = copy.deepcopy(dict(raw))
     dataset = user.get("dataset")
     if isinstance(dataset, dict) and "psf_sigma" in dataset:
@@ -227,7 +221,7 @@ def _old_resolution(raw: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def _scenes(shear: float, component) -> List[dict]:
-    """The old harness's populations: the unsheared LEAKAGE one plus each pair."""
+    """Build the unsheared population and each requested shear pair."""
     if isinstance(component, str):
         text = component.strip().lower()
         comps = [0, 1] if text in ("both", "all", "01", "0,1") else [int(c) for c in text.split(",")]
@@ -258,7 +252,7 @@ def migrate(raw: Mapping[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
     result reads as the experiment rather than as the whole schema.
     """
     if not is_legacy(raw):
-        raise ConfigError("not a legacy config (it has schema_version, or no old blocks)")
+        raise ConfigError("config does not require translation (it has schema_version, or no dialect-specific blocks)")
     notes: List[str] = []
     old = _old_resolution(raw)
     unit_test = old.get("meta") is not None or old.get("train") is not None
@@ -270,10 +264,9 @@ def migrate(raw: Mapping[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
         if value is not missing:
             out[dst] = copy.deepcopy(value)
     if _get(old, "dataset.compute_metacal"):
-        raise ConfigError("dataset.compute_metacal is no longer supported; nothing ever "
-                          "read the images it stored")
+        raise ConfigError("dataset.compute_metacal is unsupported; use evaluation.metacal")
 
-    # the unit-test layout's own keys the map never reached
+    # Explicit translations for unit-test metadata and training settings.
     if unit_test:
         for src, dst in (("meta.description", "run_options.description"),
                          ("paths.root", "run_options.outdir"),
@@ -284,11 +277,9 @@ def migrate(raw: Mapping[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
                          ("train.d4_augment", "training.d4_augment")):
             if _get(raw, src) is not None:
                 out[dst] = _get(raw, src)
-                notes.append(f"{src} = {_get(raw, src)!r} is now honoured (it was never "
-                             "read: the run it configured trained the default)")
+                notes.append(f"{src} = {_get(raw, src)!r} translated to {dst}")
 
-    # the evaluation block of the old research harness. A config without one
-    # was never measured by it, so it gets the current defaults instead.
+    # Translate the unit-test evaluation block, or use schema defaults.
     eval_block = raw.get("eval") if isinstance(raw.get("eval"), Mapping) else {}
     if eval_block:
         section = eval_block.get("evaluate") or eval_block.get("bias") or {}
@@ -338,9 +329,9 @@ def migrate(raw: Mapping[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
                         "shearnet_metacal", "shearnet_batch_size", "ngmix_nproc"):
                 continue
         if key in _DROPPED or key.startswith(_DROPPED_PREFIXES):
-            notes.append(f"{key} dropped: nothing read it")
+            notes.append(f"{key} dropped: unsupported setting")
             continue
-        raise ConfigError(f"legacy key {key!r} has no translation")
+        raise ConfigError(f"config key {key!r} has no translation")
 
     # write only what differs from the current defaults
     from .schema import defaults as current_defaults
@@ -370,13 +361,13 @@ def flatten_any(tree: Mapping, prefix: str = "") -> List[str]:
 
 
 def main(argv=None) -> int:
-    """``python -m shearnet.config.legacy OLD.yaml`` prints the translation."""
+    """``python -m shearnet.config.legacy INPUT.yaml`` prints the translation."""
     from .loader import dump_yaml, read_yaml
 
     argv = sys.argv[1:] if argv is None else argv
     if len(argv) != 1:
         print(__doc__.strip().splitlines()[0], file=sys.stderr)
-        print("usage: python -m shearnet.config.legacy OLD.yaml", file=sys.stderr)
+        print("usage: python -m shearnet.config.legacy INPUT.yaml", file=sys.stderr)
         return 2
     config, notes = migrate(read_yaml(argv[0]))
     for note in notes:

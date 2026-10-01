@@ -626,6 +626,5 @@ def calculate_multiplicative_bias_ngmix(
     }
 
 
-# Re-exported from ``core.moments`` (moved there to avoid a core<->utils import
-# cycle); kept here for backward compatibility with ``utils.get_admoms_ngmix_fit``.
+# Re-exported from ``core.moments`` to avoid a core<->utils import cycle.
 __all__ = ["get_admoms_ngmix_fit"]

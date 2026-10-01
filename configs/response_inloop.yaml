@@ -8,8 +8,8 @@
 #
 # Requires JAX_ENABLE_X64=1 in the environment for float64 rendering (the
 # stamps are cast to float32 before the network, so it costs nothing in
-# training memory or speed) and a jax-galsim with a batchable DES_PSFEx if you
-# switch exp to superbit.
+# training memory or speed) and a jax-galsim with a batchable DES_PSFEx when
+# exp is superbit.
 
 schema_version: 1
 run_options:

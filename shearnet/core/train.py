@@ -366,7 +366,7 @@ def train_model(
     # Fresh-noise: the galaxy noise is added INSIDE the jitted step (fused with the
     # forward/backward as one XLA program) rather than eagerly in the Python loop.
     # ``use_resample_noise`` is a static closure, so when off no noise op is traced
-    # and the step is byte-for-byte the original; when on, folding it in avoids the
+    # in the step; when on, folding it in avoids the
     # per-batch un-fused kernels + host/device shuffling that otherwise serialize
     # the pipeline and inflate wall-clock. ``noise_rng`` is None when off.
     def _noised(gal, noise_rng):
@@ -537,10 +537,8 @@ def train_model(
             record["val_loss"] = float(val_loss)
             logger.info(f"Validation Loss: {val_loss:.4e}")
 
-            # Per-key validation MSE. Both paths already compute it; it used to
-            # be discarded for single-branch models, which meant the saved loss
-            # file silently changed shape with the architecture and the in-loop
-            # driver disagreed with this one.
+            # Save per-key validation MSE for both architectures, keeping the
+            # loss-file shape consistent with the in-loop driver.
             if per_key is not None:
                 val_per_key = val_per_key_sum / total_samples
                 val_losses_per_key.append(val_per_key)

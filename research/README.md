@@ -9,7 +9,4 @@ package. **None of it is needed to install or use ShearNet.**
 | `hyperparam_search/` | The hyperparameter sweep driver. |
 
 Configs live in `configs/`: the paper campaign in `configs/paper/`, the
-exploratory runs that led to the fiducial in `configs/variations/`. The old
-evaluation harness (`shear_bias/run.py` and the `m/`, `psf_leakage/` and
-`timing/` scripts, every per-run `sub.sh`) is in the git history before the
-rewrite of `shearnet-eval`.
+exploratory runs in `configs/variations/`. Evaluation uses `shearnet-eval`.

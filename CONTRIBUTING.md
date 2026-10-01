@@ -1,6 +1,6 @@
 # Contributing to ShearNet
 
-Thanks for your interest in improving ShearNet! Contributions of all kinds (bug reports, documentation, and code) are welcome.
+Contributions of all kinds (bug reports, documentation, and code) are welcome.
 
 ## Development setup
 
@@ -32,7 +32,7 @@ shearnet-train --config configs/smoke.yaml --run runs/smoke
 shearnet-eval  --run runs/smoke
 ```
 
-## Things the tests hold you to
+## Test requirements
 
 - **A new config key** goes in `shearnet/config/schema.py` (type, default, one
   line of meaning). Then `python scripts/make_docs.py` regenerates
@@ -55,6 +55,6 @@ shearnet-eval  --run runs/smoke
 ## Submitting changes
 
 1. Create a feature branch.
-2. Make your change and add or update a test where it makes sense.
+2. Make the change and add or update the relevant tests.
 3. Ensure `pytest tests/` passes (or skips cleanly) and the smoke run works.
 4. Open a pull request describing the change and its motivation.

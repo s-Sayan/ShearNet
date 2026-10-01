@@ -1,9 +1,4 @@
-"""Backward-compatibility shim.
-
-Plotting was promoted to the top-level :mod:`shearnet.plotting` module. This
-re-export keeps the old ``shearnet.utils.plot_helpers`` import path working for
-existing scripts and notebooks.
-"""
+"""Re-export plotting helpers from :mod:`shearnet.plotting`."""
 
 from ..plotting import *  # noqa: F401,F403
 from ..plotting import __dict__ as _plotting_dict

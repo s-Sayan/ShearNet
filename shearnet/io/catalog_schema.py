@@ -81,7 +81,7 @@ STAMP_COLUMNS = KEY_COLUMNS + [
     Column("psf_g", "f8", (2,), description="ngmix adaptive-moment ellipticity of the PSF "
            "stamp, epsilon convention"),
     Column("psf_T_hsm", "f8", unit="arcsec2", description="GalSim HSM 2 sigma^2 of the PSF "
-           "stamp, sigma = det(M)^(1/4): a determinant size (the historical Tpsf)"),
+           "stamp, sigma = det(M)^(1/4): a determinant size"),
     Column("psf_T_admom", "f8", unit="arcsec2", description="ngmix adaptive-moment trace "
            "Irr + Icc of the PSF stamp"),
     Column("psf_flags", "i4", description="non-zero where the PSF moments failed"),

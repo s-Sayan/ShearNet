@@ -1,8 +1,6 @@
-"""Backward-compatibility shim.
+"""Re-export WCS construction from :mod:`shearnet.core.wcs`.
 
-WCS construction moved to :mod:`shearnet.core.wcs` (so ``core`` no longer
-imports ``utils``). This keeps the old ``shearnet.utils.simutils`` import path
-working.
+The implementation lives in ``core`` to avoid importing ``utils`` from there.
 """
 
 from ..core.wcs import create_wcs_from_params  # noqa: F401
