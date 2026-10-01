@@ -1,0 +1,28 @@
+# second_gaussian_psf
+#
+# The second unit test has:
+#
+# - Varying g1 and g2 based off catalog phi and q.
+# - Varying sigma based off catalog hlr
+# - Constant flux
+# - Constant noise
+
+schema_version: 1
+run_options:
+  run_name: second_gaussian_psf
+  outdir: /home/adfield/ShearNet/runs/variations/second_gaussian_psf
+simulation:
+  noise_sigma: 12.719674
+  hlr_type: catalog
+  psf:
+    psfex_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
+model:
+  type: fork-like
+  output_keys: [g1, g2, hlr]
+training:
+  nobj: 3000
+  epochs: 300
+  batch_size: 128
+  learning_rate: 0.0001
+  patience: 50
+  loss_weights: [1.0, 1.0, 1.0]

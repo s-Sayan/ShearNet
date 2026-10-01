@@ -12,45 +12,19 @@
 # if these three sections differ between two runs, the comparison measures the
 # simulation rather than the architecture. Change them together or not at all.
 # ---------------------------------------------------------------------------
-dataset:
-  samples: 200000
-  seed: 42
-  psf_fwhm: 0.5
-  exp: "ideal"
-  nse_sd: 1.0e-3
-  stamp_size: 53
-  pixel_size: 0.141
-  hlr_type: "constant"
-  flux_type: "constant"
-  apply_psf_shear: true
-  psf_shear_range: 0.05
-  base_shear_range: 0.0
-  backend: "jax-galsim"
-  generation: "upfront"
-  jax_fft_size: 256
-  jax_batch_size: 256
-  normalize_labels: true
-  normalize_images: false
 
+schema_version: 1
+run_options:
+  run_name: baseline_forklens
+simulation:
+  noise_sigma: 0.001
+  apply_psf_shear: true
+  backend: jax-galsim
+model:
+  type: fork-like
+  output_keys: [g1, g2, hlr, flux]
 training:
+  nobj: 200000
   epochs: 200
   batch_size: 256
-  learning_rate: 1.0e-3
-  weight_decay: 1.0e-4
   patience: 20
-  val_split: 0.2
-  eval_interval: 1
-  loss: "mse"
-
-model:
-  type: "fork-like"
-  galaxy:
-    type: "research_backed"
-  psf:
-    type: "forklens_psf"
-  fusion: "concat"
-  output_keys: ['g1', 'g2', 'hlr', 'flux']
-  gap: false
-
-output:
-  model_name: "baseline_forklens"

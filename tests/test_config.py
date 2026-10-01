@@ -231,5 +231,16 @@ def test_the_migration_cli_prints_a_valid_config(tmp_path, capsys):
     assert resolve(printed)["training"]["nobj"] == 64
 
 
+def test_every_config_in_the_repository_is_current_and_valid():
+    """What the repo ships must load, and must be written in the current schema."""
+    from shearnet.config.loader import read_yaml
+
+    files = sorted(REPO.glob("configs/**/*.yaml"))
+    assert len(files) > 40
+    for path in files:
+        assert read_yaml(path).get("schema_version") == 1, path
+        Config.from_file(path)
+
+
 def test_flatten_and_resolve_agree_on_every_field():
     assert set(flatten(defaults())) - {"schema_version"} == set(FIELDS)

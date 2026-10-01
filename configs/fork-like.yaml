@@ -1,50 +1,19 @@
 # Dataset configuration
-dataset:
-  samples: 100000
-  psf_sigma: 0.25
-  exp: "superbit"
-  nse_sd: 1.0e-3
-  seed: 42
-  stamp_size: 53
-  pixel_size: 0.141
 
-# Model configuration  
-model:
-  type: "fork-like"  # Options: mlp, cnn, resnet, forklens_psf, 
-               #          research_backed, and fork-like
-  galaxy:
-    type: "research_backed"
+schema_version: 1
+run_options:
+  run_name: fork-like_-3_noise_superbits
+simulation:
   psf:
-    type: "forklens_psf"
-  
-# Training configuration
+    gaussian_fwhm: 0.25
+    mode: superbit
+  noise_sigma: 0.001
+model:
+  type: fork-like
 training:
+  nobj: 100000
   epochs: 300
   batch_size: 128
-  learning_rate: 1.0e-3
-  weight_decay: 1.0e-4
   patience: 25
-  val_split: 0.2
-  eval_interval: 1
-  
-# Evaluation configuration
 evaluation:
-  test_samples: 5000
-  seed: 58
-  
-# Output configuration
-output:
-  save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
-  plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "fork-like_-3_noise_superbits"
-  
-# Plotting configuration
-plotting:
-  plot: true  # Whether to plot learning curves
-  
-# Comparison methods
-comparison:
-  mcal: true
-  ngmix: true
-  psf_model: "gauss"
-  gal_model: "gauss"
+  nobj: 5000

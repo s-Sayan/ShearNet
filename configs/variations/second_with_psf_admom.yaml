@@ -1,0 +1,29 @@
+# second_with_psf_admom
+#
+# The first unit test has:
+#
+# - Varying g1 and g2 based off the catalog.
+# - Constant sigma and flux
+# - Constant noise
+#
+# this one particularly is trained on g1, g2, psf_e1, and psf_e2
+
+schema_version: 1
+run_options:
+  run_name: second_with_psf_admom
+  outdir: /home/adfield/ShearNet/runs/variations/second_with_psf_admom
+simulation:
+  psf:
+    mode: superbit
+    psfex_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
+  noise_sigma: 12.719674
+model:
+  type: fork-like
+  output_keys: [g1, g2, psf_e1, psf_e2]
+training:
+  nobj: 3000
+  epochs: 300
+  batch_size: 128
+  learning_rate: 0.0001
+  patience: 50
+  loss_weights: [1.0, 1.0, 1.0, 1.0]

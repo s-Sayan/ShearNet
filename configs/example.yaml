@@ -1,53 +1,52 @@
-# Dataset configuration
-dataset:
-  samples: 100000
-  psf_fwhm: 0.25
-  exp: "ideal"
-  nse_sd: 1.0e-3
-  seed: 42
-  stamp_size: 53
-  pixel_size: 0.141
-  apply_psf_shear: true
-  psf_shear_range: 0.05
+# A small, complete ShearNet config. Every key that can appear in a config is
+# in shearnet/config/schema.py (and docs/config.md); anything left out takes its
+# default, and a key that is not in the schema is an error.
+#
+#   shearnet-train --config configs/example.yaml --run runs/example
+#   shearnet-eval  --run runs/example
+schema_version: 1
 
-# Model configuration  
+run_options:
+  run_name: example
+  # outdir: runs/example     # relative paths resolve against this file
+  ncores: null               # null: SLURM_CPUS_PER_TASK on a cluster, else 1
+
+simulation:
+  backend: jax-galsim        # galsim | jax-galsim (in-loop and eval need jax-galsim)
+  pixel_scale: 0.141         # arcsec / pixel
+  stamp_size: 53             # pixels
+  noise_sigma: 1.0e-3        # Gaussian pixel noise, image counts
+  gal_model: exp
+  hlr_type: constant         # constant (0.5 arcsec) | catalog
+  flux_type: constant        # constant (12258.97) | catalog
+  psf:
+    mode: ideal              # ideal (round Gaussian) | superbit (PSFEx)
+    gaussian_fwhm: 0.5       # arcsec
+  catalogs:
+    train_file: null         # null draws a synthetic population (tests only)
+    eval_file: null
+
 model:
-  type: "cnn"  # Options: mlp, cnn, resnet, forklens_psf, 
-               #          research_backed, and fork-like
-  # Example fork-like setup
-  # galaxy:
-  #   type: "research_backed"
-  # psf:
-  #   type: "forklens_psf"
-  
-# Training configuration
+  type: fork-like
+  galaxy_branch: research_backed
+  psf_branch: forklens_psf
+  fusion: concat
+  output_keys: [g1, g2]
+
 training:
-  epochs: 300
-  batch_size: 128
+  seed: 42
+  nobj: 10000
+  generation: upfront        # upfront | inloop
+  epochs: 20
+  batch_size: 64
   learning_rate: 1.0e-3
   weight_decay: 1.0e-4
-  patience: 20
+  patience: 10
   val_split: 0.2
-  eval_interval: 1
-  
-# Evaluation configuration
+
 evaluation:
-  test_samples: 5000
   seed: 58
-  
-# Output configuration
-output:
-  save_path: null  # Will use SHEARNET_DATA_PATH/model_checkpoint if null
-  plot_path: null  # Will use SHEARNET_DATA_PATH/plots if null
-  model_name: "original_high_noise"
-  
-# Plotting configuration
-plotting:
-  plot: true  # Whether to plot learning curves
-  
-# Comparison methods
-comparison:
-  mcal: true
-  ngmix: true
-  psf_model: "gauss"
-  gal_model: "gauss"
+  nobj: 1000
+  estimators: [shearnet, ngmix]
+  rotations_deg: [0, 90]
+  # scenes: the default is zero shear plus a +/-0.01 pair on each component

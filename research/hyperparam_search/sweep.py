@@ -33,7 +33,7 @@ Three ways to run:
 
 Sweep spec (YAML)::
 
-    base_config: configs/dry_run.yaml     # relative to this file's dir or CWD
+    base_config: configs/smoke.yaml       # relative to this file's dir or CWD
     method: grid                          # "grid" or "random"
     n_samples: 12                         # random only: how many combos to draw
     seed: 0                               # random only: reproducible sampling

@@ -1,0 +1,84 @@
+# fourth_inloop_shearnet
+#
+# # Full-featured in-loop ShearNet
+#
+# This is the production ShearNet arm, separate from the existing control,
+# response-only, and ForkLens arms. It uses the smooth five-layer D4 two-branch
+# network with transformer fusion, so the galaxy/PSF pair is jointly
+# D4-equivariant and the response derivatives remain differentiable.
+#
+# The fused JAX-GalSim step renders every batch in the training graph. It draws
+# fresh noise on every optimizer step, samples the noise standard deviation from
+# half to 1.5 times the nominal SuperBIT depth, and expresses both inputs in
+# noise units. It also enables the analytic shear target, zero PSF and shift
+# targets, the protected-subspace complement penalty, and the K=2 PSF-only orbit
+# constraint. The latter re-renders the galaxy against the PSF rotated by 90
+# degrees with shared noise; it is not an architectural averaging operation.
+#
+# Run the training stage directly with:
+#
+# ```bash
+# JAX_ENABLE_X64=1 shearnet-train --config \
+#   configs/variations/fourth_inloop_shearnet.yaml
+# ```
+#
+# On the cluster, the existing submission helper also recognizes the variation:
+#
+# ```bash
+# sbatch scripts/shearnet.sbatch configs/variations/fourth_inloop_shearnet.yaml
+# ```
+#
+# The latter submits training followed by the matched bias, leakage, and timing
+# jobs. It requires the batchable DES_PSFEx build of JAX-GalSim used by the other
+# in-loop SuperBIT variations.
+
+schema_version: 1
+run_options:
+  run_name: fourth_inloop_shearnet
+  description: D4 ShearNet with in-loop rendering, depth resampling, and response
+    losses
+  outdir: /home/adfield/ShearNet/runs/variations/fourth_inloop_shearnet
+simulation:
+  psf:
+    mode: superbit
+    psfex_file: /home/adfield/weak_lensing/superbit-lensing-jax-test/simulated_data/sim_utils/emp_psfs/emp_psfs_best/psfex_all_except_best
+  noise_sigma: 12.719674
+  hlr_type: catalog
+  flux_type: catalog
+  backend: jax-galsim
+  jax_batch_size: 128
+  catalogs:
+    train_file: /home/adfield/ShearNet/cosmos_catalog_train.fits
+    eval_file: /home/adfield/ShearNet/cosmos_catalog_eval.fits
+model:
+  galaxy_branch: d4cnn
+  psf_branch: d4cnn
+  type: d4-fork-like
+  output_keys: [g1, g2, hlr, flux]
+  fusion: transformer
+  head: attention
+  branch_features: [32, 32, 32, 32, 32]
+training:
+  nobj: 300000
+  normalize_images: true
+  generation: inloop
+  epochs: 60
+  batch_size: 128
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  loss_weights: [1.0, 1.0, 1.0, 1.0]
+  ema_decay: 0.999
+  response:
+    gamma_weight: 0.01
+    psf_weight: 0.1
+    shift_weight: 0.01
+    complement_weight: 0.001
+    orbit_weight: 0.01
+    isotropy_weight: 0.01
+    every_n_steps: 2
+    report: true
+evaluation:
+  nobj: 200000
+  seed: 150
+  rotations_deg: [0.0, 45.0, 90.0, 135.0]
+  batch_size: 256

@@ -1,0 +1,30 @@
+# second_fusion_transformer
+#
+# The first unit test has:
+#
+# - Varying g1 and g2 based off the catalog.
+# - Constant sigma and flux
+# - Constant noise
+#
+# this particular one uses a transformer instead of the forklike
+
+schema_version: 1
+run_options:
+  run_name: second_fusion_transformer
+  outdir: /home/adfield/ShearNet/runs/variations/second_fusion_transformer
+simulation:
+  psf:
+    mode: superbit
+    psfex_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
+  noise_sigma: 12.719674
+model:
+  type: fork-like
+  fusion: transformer
+training:
+  nobj: 300000
+  epochs: 80
+  batch_size: 128
+  learning_rate: 0.0001
+  weight_decay: 0.005
+  patience: 20
+  loss_weights: [1.0, 1.0]

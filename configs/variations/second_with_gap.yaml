@@ -1,0 +1,29 @@
+# second_with_gap
+#
+# The first unit test has:
+#
+# - Varying g1 and g2 based off the catalog.
+# - Constant sigma and flux
+# - Constant noise
+#
+# this one global average pools the parameters of the galaxy branch (possibly loosing spatial context)
+
+schema_version: 1
+run_options:
+  run_name: second_with_gap
+  outdir: /home/adfield/ShearNet/runs/variations/second_with_gap
+simulation:
+  psf:
+    mode: superbit
+    psfex_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
+  noise_sigma: 12.719674
+model:
+  type: fork-like
+  gap: true
+training:
+  nobj: 3000
+  epochs: 300
+  batch_size: 128
+  learning_rate: 0.0001
+  patience: 50
+  loss_weights: [1.0, 1.0]

@@ -1,0 +1,54 @@
+# fourth_D4ForkLike
+#
+# The fourth unit test has:
+#
+# - SuperBIT psf
+# - Varying g1, g2, hlr, and flux based off the catalog.
+# - Constant noise
+#
+# This variation tests the D4ForkLike model architecture
+
+schema_version: 1
+run_options:
+  run_name: fourth_D4ForkLike
+  description: superbit PSF; g1, g2, hlr, flux from catalog; constant noise
+  outdir: /home/adfield/ShearNet/runs/variations/fourth_D4ForkLike
+simulation:
+  psf:
+    mode: superbit
+    psfex_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
+  noise_sigma: 12.719674
+  hlr_type: catalog
+  flux_type: catalog
+  catalogs:
+    train_file: /home/adfield/ShearNet/cosmos_catalog_train.fits
+    eval_file: /home/adfield/ShearNet/cosmos_catalog_eval.fits
+model:
+  galaxy_branch: d4cnn
+  psf_branch: d4cnn
+  type: d4-fork-like
+  output_keys: [g1, g2, hlr, flux]
+  fusion: transformer
+training:
+  nobj: 300000
+  epochs: 80
+  batch_size: 128
+  learning_rate: 0.0001
+  weight_decay: 0.015
+  patience: 20
+  loss_weights: [1.0, 1.0, 1.0, 1.0]
+evaluation:
+  nobj: 200000
+  seed: 150
+  scenes:
+  - name: zero
+    g1: 0.0
+    g2: 0.0
+  - name: g1_plus
+    g1: 0.01
+    g2: 0.0
+  - name: g1_minus
+    g1: -0.01
+    g2: 0.0
+  metacal:
+    shearnet: false

@@ -1,0 +1,28 @@
+# second_with_weights
+#
+# The first unit test has:
+#
+# - Varying g1 and g2 based off the catalog.
+# - Constant sigma and flux
+# - Constant noise
+#
+# This one in particular has weighted loss on g1 and g2.
+
+schema_version: 1
+run_options:
+  run_name: second_with_weights
+  outdir: /home/adfield/ShearNet/runs/variations/second_with_weights
+simulation:
+  psf:
+    mode: superbit
+    psfex_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
+  noise_sigma: 12.719674
+model:
+  type: fork-like
+training:
+  nobj: 3000
+  epochs: 300
+  batch_size: 128
+  learning_rate: 0.0001
+  patience: 50
+  loss_weights: [3.0, 3.0]

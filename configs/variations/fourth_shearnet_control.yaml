@@ -1,0 +1,72 @@
+# fourth_shearnet_control
+#
+# Control for the ShearNet arms (`fourth_inloop_shearnet` and
+# `fourth_shearnet_k4`): the same ShearNet, with every response weight set to 0.0
+# and nothing else changed. It is a valid control for either, because with all
+# weights at zero `every_n_steps` and `orbit_k` are inert.
+#
+# Without it a flagship m is a number with nothing to compare against -- you
+# cannot separate the response terms from the wider backbone, from the in-loop
+# fresh noise, or from anything else that moved at the same time. The parsed
+# configs differ in exactly the five response weights, `orbit_k` (inert at zero
+# weight), the model name and the output root.
+#
+# `report: true` is kept ON. Measuring R^gamma and R^PSF on a model that was
+# never trained to control them is exactly the quantity the response arm has to
+# beat.
+#
+#     sbatch scripts/shearnet.sbatch configs/variations/fourth_shearnet_control.yaml
+
+schema_version: 1
+run_options:
+  run_name: fourth_shearnet_control
+  description: superbit PSF; g1, g2, hlr, flux from catalog; constant noise
+  outdir: /home/adfield/ShearNet/runs/variations/fourth_shearnet_control
+simulation:
+  psf:
+    mode: superbit
+    psfex_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
+  noise_sigma: 12.719674
+  hlr_type: catalog
+  flux_type: catalog
+  backend: jax-galsim
+  jax_batch_size: 128
+  catalogs:
+    train_file: /home/adfield/ShearNet/cosmos_catalog_train.fits
+    eval_file: /home/adfield/ShearNet/cosmos_catalog_eval.fits
+model:
+  galaxy_branch: d4cnn
+  psf_branch: d4cnn
+  type: d4-fork-like
+  output_keys: [g1, g2, hlr, flux]
+  fusion: transformer
+  head: attention
+  branch_features: [32, 32, 32, 32, 32]
+training:
+  nobj: 300000
+  normalize_images: true
+  generation: inloop
+  epochs: 60
+  batch_size: 128
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  loss_weights: [1.0, 1.0, 1.0, 1.0]
+  ema_decay: 0.999
+  response:
+    report: true
+evaluation:
+  nobj: 200000
+  seed: 150
+  scenes:
+  - name: zero
+    g1: 0.0
+    g2: 0.0
+  - name: g1_plus
+    g1: 0.01
+    g2: 0.0
+  - name: g1_minus
+    g1: -0.01
+    g2: 0.0
+  metacal:
+    shearnet: false
+  batch_size: 256

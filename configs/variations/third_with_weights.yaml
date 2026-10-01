@@ -1,0 +1,30 @@
+# third_with_weights
+#
+# The second unit test has:
+#
+# - Varying g1, g2, and sigma based off the catalog.
+# - Constant flux
+# - Constant noise
+#
+# This one in particular has weighted loss on g1 and g2.
+
+schema_version: 1
+run_options:
+  run_name: third_with_weights
+  outdir: /home/adfield/ShearNet/runs/variations/third_with_weights
+simulation:
+  psf:
+    mode: superbit
+    psfex_file: /home/adfield/SHEARNET_DATA/psfex-output/Abell3411_1_300_1684688714_clean_starcat.psf
+  noise_sigma: 12.719674
+  hlr_type: catalog
+model:
+  type: fork-like
+  output_keys: [g1, g2, hlr]
+training:
+  nobj: 3000
+  epochs: 300
+  batch_size: 128
+  learning_rate: 0.0001
+  patience: 50
+  loss_weights: [3.0, 3.0, 1.0]

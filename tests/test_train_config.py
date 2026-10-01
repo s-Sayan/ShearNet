@@ -42,8 +42,8 @@ def test_the_architecture_is_taken_as_asked_for(tmp_path):
     assert any("process_psf" in note for note in cfg.notes)
 
 
-def test_the_shipped_dry_run_config_loads():
-    cfg_path = os.path.join(REPO_ROOT, "configs", "dry_run.yaml")
+def test_the_shipped_smoke_config_loads():
+    cfg_path = os.path.join(REPO_ROOT, "configs", "smoke.yaml")
     cfg = build_train_config(create_parser().parse_args(["--config", cfg_path]))
     assert cfg.get("model.type") == "fork-like"
-    assert cfg.get("run_options.run_name") == "dry_run"
+    assert cfg.get("run_options.run_name") == "smoke"

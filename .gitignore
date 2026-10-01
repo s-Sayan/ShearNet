@@ -79,6 +79,9 @@ datasets/
 *.sh.save
 *.save
 
-paper/
+/paper/
 *.pdf
 *.tex
+
+# run directories (shearnet-train --run / run_options.outdir)
+runs/

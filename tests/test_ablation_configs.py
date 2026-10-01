@@ -1,4 +1,4 @@
-"""Every generated ablation config loads, builds, and differs as advertised.
+"""Every generated paper config loads, builds, and differs as advertised.
 
 A config that silently fails to express its delta is worse than a missing one:
 it produces a run, a number, and a table row that says something untrue. These
@@ -6,6 +6,7 @@ tests are cheap insurance against that, and they run without GalSim or a GPU
 because building a Flax model needs neither.
 """
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -13,10 +14,11 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "research" / "ablations"))
+PAPER = REPO / "configs" / "paper"
 
-pytest.importorskip("yaml")
-generate_configs = pytest.importorskip("generate_configs")
+_spec = importlib.util.spec_from_file_location("paper_generate", PAPER / "generate.py")
+generate_configs = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(generate_configs)
 
 ARMS = generate_configs.ALL_ARMS
 
@@ -46,7 +48,7 @@ _BUILD_KEYS = {
 def _load(arm):
     from shearnet.config import Config
 
-    return Config.from_file(REPO / arm.path / "config.yaml")
+    return Config.from_file(PAPER / f"{arm.path}.yaml")
 
 
 def _build_and_count(config):
@@ -66,7 +68,7 @@ def _build_and_count(config):
 
 
 def _ids(arms):
-    return [a.path.split("research/")[-1] for a in arms]
+    return [a.path for a in arms]
 
 
 # ----------------------------------------------------------------------
@@ -79,8 +81,7 @@ def test_every_config_on_disk_matches_the_generator():
     a request.
     """
     result = subprocess.run(
-        [sys.executable, str(REPO / "research" / "ablations" / "generate_configs.py"),
-         "--check"],
+        [sys.executable, str(PAPER / "generate.py"), "--check"],
         capture_output=True, text=True, cwd=REPO,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -89,17 +90,19 @@ def test_every_config_on_disk_matches_the_generator():
 def test_the_ladder_and_every_tier_is_present():
     paths = {arm.path for arm in ARMS}
     for rung in ("first", "second", "third", "fourth"):
-        assert f"research/unit_tests/{rung}" in paths
+        assert f"unit_tests/{rung}" in paths
     for tier in ("tier1", "tier2", "tier3", "tier4"):
-        assert any(f"research/ablations/{tier}/" in p for p in paths), tier
+        assert any(p.startswith(f"ablations/{tier}/") for p in paths), tier
 
 
 def test_no_two_arms_share_a_directory_or_a_model_name():
-    """A collision would have two runs overwrite each other's checkpoints."""
+    """A collision would have two runs write into one run directory."""
     paths = [arm.path for arm in ARMS]
     assert len(paths) == len(set(paths))
     names = [_load(arm).get("run_options.run_name") for arm in ARMS]
     assert len(names) == len(set(names)), sorted(names)
+    outdirs = [_load(arm).get("run_options.outdir") for arm in ARMS]
+    assert len(outdirs) == len(set(outdirs))
 
 
 # ----------------------------------------------------------------------
@@ -111,10 +114,26 @@ def test_config_loads_and_declares_a_root_matching_its_directory(arm):
     assert config.get("run_options.outdir").endswith(arm.path), config.get("run_options.outdir")
 
 
-@pytest.mark.parametrize("arm", ARMS, ids=_ids(ARMS))
-def test_the_removed_process_psf_key_is_not_carried_forward(arm):
-    """It is inert now; carrying it would only warn on every run."""
-    assert not any("process_psf" in note for note in _load(arm).notes)
+@pytest.mark.parametrize("arm", [a for a in ARMS if a.path != "unit_tests/fourth"],
+                         ids=_ids([a for a in ARMS if a.path != "unit_tests/fourth"]))
+def test_every_arm_changes_what_the_code_reads(arm):
+    """The failure the schema migration found: an arm whose delta nobody read.
+
+    UT4 is excluded because it IS the fiducial simulation on the fiducial model.
+    """
+    from shearnet.config.schema import flatten
+
+    fiducial = flatten(_load_fiducial().to_dict())
+    resolved = flatten(_load(arm).to_dict())
+    changed = {k for k in resolved
+               if not k.startswith("run_options.") and resolved[k] != fiducial[k]}
+    assert changed, arm.path
+
+
+def _load_fiducial():
+    from shearnet.config import Config
+
+    return Config.from_file(generate_configs.FIDUCIAL)
 
 
 @pytest.mark.parametrize("arm", ARMS, ids=_ids(ARMS))
@@ -126,7 +145,7 @@ def test_every_declared_delta_is_actually_in_the_file(arm):
     """
     import yaml
 
-    raw = yaml.safe_load((REPO / arm.path / "config.yaml").read_text())
+    raw = yaml.safe_load((PAPER / f"{arm.path}.yaml").read_text())
     for dotted, expected in arm.delta.items():
         node = raw
         keys = dotted.split(".")
@@ -156,9 +175,9 @@ def _fiducial_count():
 
 @pytest.mark.slow
 @pytest.mark.parametrize("path,direction", [
-    ("research/ablations/tier4/no_multiscale_block", "fewer"),
-    ("research/ablations/tier4/untrimmed_stem", "more"),
-    ("research/ablations/tier4/full_resolution_psf_block", "more"),
+    ("ablations/tier4/no_multiscale_block", "fewer"),
+    ("ablations/tier4/untrimmed_stem", "more"),
+    ("ablations/tier4/full_resolution_psf_block", "more"),
 ])
 def test_the_backbone_arms_move_the_parameter_count(path, direction):
     """A backbone ablation that leaves the network identical is a null result
@@ -180,7 +199,7 @@ def test_the_rope_encoding_removes_the_learned_embedding():
     difference between them is exactly the absolute embedding table.
     """
     arm = next(a for a in ARMS
-               if a.path == "research/ablations/tier2/08_learned_pooling_head")
+               if a.path == "ablations/tier2/08_learned_pooling_head")
     assert _build_and_count(_load(arm)) > _fiducial_count()
 
 
@@ -192,7 +211,7 @@ def test_the_rope_encoding_removes_the_learned_embedding():
 def test_tier3_changes_exactly_one_response_key(arm):
     """A leave-one-out arm with two changes is not a leave-one-out."""
     assert len(arm.delta) == 1, arm.delta
-    assert all(k.startswith("train.response.") for k in arm.delta), arm.delta
+    assert all(k.startswith("training.response.") for k in arm.delta), arm.delta
 
 
 @pytest.mark.parametrize("arm", [a for a in ARMS if "/tier2/" in a.path],
@@ -216,7 +235,7 @@ def test_every_arm_explains_itself(arm):
 #: the simulation, not a free choice about the objective, and it changes no
 #: gradient: the term contributes exactly zero there either way.
 _LADDER_OBJECTIVE_EXCEPTIONS = {
-    "research/unit_tests/first": {"train.response.orbit_weight"},
+    "unit_tests/first": {"training.response.orbit_weight"},
 }
 
 
@@ -227,14 +246,14 @@ def test_the_unit_test_ladder_varies_only_the_simulation():
     simulation choice makes an objective term structurally inapplicable -- and
     those exceptions are enumerated above rather than waved through.
     """
-    ladder = [a for a in ARMS if a.path.startswith("research/unit_tests/")]
+    ladder = [a for a in ARMS if a.path.startswith("unit_tests/")]
     assert len(ladder) == 4
     for arm in ladder:
         allowed = _LADDER_OBJECTIVE_EXCEPTIONS.get(arm.path, set())
         for key in arm.delta:
             if key in allowed:
                 continue
-            assert key.startswith(("psf.", "galaxy.", "image.")), (arm.path, key)
+            assert key.startswith("simulation."), (arm.path, key)
 
 
 def test_the_ideal_psf_rung_switches_off_the_vacuous_orbit_term():
@@ -244,26 +263,26 @@ def test_the_ideal_psf_rung_switches_off_the_vacuous_orbit_term():
     is the failure that would have greeted UT1 immediately after the TypeError
     was fixed, so it is pinned rather than rediscovered.
     """
-    arm = next(a for a in ARMS if a.path == "research/unit_tests/first")
-    assert arm.delta.get("train.response.orbit_weight") == 0.0
+    arm = next(a for a in ARMS if a.path == "unit_tests/first")
+    assert arm.delta.get("training.response.orbit_weight") == 0.0
     assert _load(arm).get("training.response.orbit_weight") == 0.0
     # ...and only at that rung: the other three have a real PSF to rotate.
     for rung in ("second", "third", "fourth"):
-        other = next(a for a in ARMS if a.path == f"research/unit_tests/{rung}")
-        assert "train.response.orbit_weight" not in other.delta
+        other = next(a for a in ARMS if a.path == f"unit_tests/{rung}")
+        assert "training.response.orbit_weight" not in other.delta
 
 
 def test_the_ladder_rungs_agree_with_the_paper_table():
     """UT1 ideal PSF; UT2 adds the library; UT3 adds sizes; UT4 adds fluxes."""
     by_name = {a.path.rsplit("/", 1)[-1]: a.delta for a in ARMS
-               if a.path.startswith("research/unit_tests/")}
-    assert by_name["first"]["psf.mode"] == "ideal"
+               if a.path.startswith("unit_tests/")}
+    assert by_name["first"]["simulation.psf.mode"] == "ideal"
     for rung in ("second", "third", "fourth"):
-        assert by_name[rung]["psf.mode"] == "superbit"
-    assert by_name["second"]["galaxy.hlr_type"] == "constant"
-    assert by_name["third"]["galaxy.hlr_type"] == "catalog"
-    assert by_name["third"]["galaxy.flux_type"] == "constant"
-    assert by_name["fourth"]["galaxy.flux_type"] == "catalog"
+        assert by_name[rung]["simulation.psf.mode"] == "superbit"
+    assert by_name["second"]["simulation.hlr_type"] == "constant"
+    assert by_name["third"]["simulation.hlr_type"] == "catalog"
+    assert by_name["third"]["simulation.flux_type"] == "constant"
+    assert by_name["fourth"]["simulation.flux_type"] == "catalog"
 
 
 def test_a_blocked_arm_is_recorded_rather_than_quietly_skipped():
