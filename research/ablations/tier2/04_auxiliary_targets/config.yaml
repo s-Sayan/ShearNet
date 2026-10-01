@@ -9,19 +9,24 @@
 #   research/unit_test_variations/fourth_inloop_shearnet_d4_2drope/config.yaml
 #
 # Changed from the fiducial:
-#   train.generation        ->  'upfront'
-#   train.response          ->  <removed>
-#   model.architecture      ->  'fork-like'
-#   model.fusion            ->  'transformer'
-#   model.galaxy_branch     ->  'research_backed'
-#   model.psf_branch        ->  'forklens_psf'
-#   model.head              ->  'gap'
-#   model.design            ->  <removed>
-#   model.fusion_pos        ->  <removed>
-#   model.d4_features       ->  <removed>
-#   model.d4_depths_galaxy  ->  <removed>
-#   model.d4_depths_psf     ->  <removed>
-#   model.orbit_scan        ->  <removed>
+#   train.generation            ->  'upfront'
+#   train.response              ->  <removed>
+#   model.architecture          ->  'fork-like'
+#   model.fusion                ->  'transformer'
+#   model.galaxy_branch         ->  'research_backed'
+#   model.psf_branch            ->  'forklens_psf'
+#   model.head                  ->  'gap'
+#   model.design                ->  <removed>
+#   model.fusion_pos            ->  <removed>
+#   model.d4_features           ->  <removed>
+#   model.d4_depths_galaxy      ->  <removed>
+#   model.d4_depths_psf         ->  <removed>
+#   model.orbit_scan            ->  <removed>
+#   model.d_model               ->  <removed>
+#   model.num_heads             ->  <removed>
+#   model.num_self_attn_layers  ->  <removed>
+#   model.ffn_dim               ->  <removed>
+#   model.num_pool_heads        ->  <removed>
 #
 # Why:
 # The network is asked to predict half-light radius and flux
@@ -73,11 +78,6 @@ model:
   - flux
   gap: false
   dropout: 0.0
-  d_model: 64
-  num_heads: 4
-  num_self_attn_layers: 1
-  ffn_dim: 256
-  num_pool_heads: 4
 train:
   seed: 42
   samples: 300000
