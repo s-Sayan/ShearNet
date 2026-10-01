@@ -46,6 +46,6 @@ jobs:
 
       - name: Run training (dry run or short config)
         run: |
-          shearnet-train --config configs/smoke.yaml
+          shearnet-train --config configs/smoke.yaml --run runs/smoke
         env:
           SHEARNET_DATA_PATH: ${{ runner.temp }}/shearnet_data

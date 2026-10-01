@@ -37,12 +37,11 @@ def test_dataset_spec_from_config():
 
 
 def test_train_config_from_config():
-    tc = TrainConfig.from_config(Config.from_dict({}), save_path="/tmp/ckpt")
+    tc = TrainConfig.from_config(Config.from_dict({}))
     assert tc.epochs == 10
     assert tc.batch_size == 32
     assert tc.nn == "cnn"
     assert tc.lr == 1e-3  # training.learning_rate
-    assert tc.save_path == "/tmp/ckpt"
     assert tc.output_keys == ("g1", "g2")
 
 

@@ -19,6 +19,7 @@ Applications can adjust verbosity, e.g.::
     configure_logging(level=logging.WARNING)   # quieter
 """
 
+import contextlib
 import logging
 import os
 import sys
@@ -90,6 +91,29 @@ def get_logger(name=None):
     if not name.startswith(_LOGGER_NAME + "."):
         name = f"{_LOGGER_NAME}.{name}"
     return logging.getLogger(name)
+
+
+@contextlib.contextmanager
+def run_log(path, level=logging.INFO):
+    """Also write the package log to ``path`` while the block runs.
+
+    The file gets timestamps and the logger name, and never colour codes. It is
+    appended to, so a second evaluation of the same run does not erase the
+    first one's log.
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    handler = logging.FileHandler(path, mode="a")
+    handler.setLevel(level)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s",
+                          datefmt="%Y-%m-%d %H:%M:%S"))
+    logger = logging.getLogger(_LOGGER_NAME)
+    logger.addHandler(handler)
+    try:
+        yield handler
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
 
 
 # Configure on import so library output is visible by default (preserving the

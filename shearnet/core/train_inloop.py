@@ -33,6 +33,7 @@ Differences from the up-front path, all deliberate:
 
 from __future__ import annotations
 
+import time
 from typing import Optional, Sequence
 
 import jax
@@ -54,7 +55,6 @@ from .inloop import (
 )
 from .losses import resolve_loss
 from .models import attention_pool_diagnostics, build_model, is_fork_model
-from .train import save_checkpoint
 
 logger = get_logger(__name__)
 
@@ -94,8 +94,6 @@ def train_model_inloop(
     psf_type: str = "forklens_psf",
     fusion: str = "concat",
     head: str = "gap",
-    save_path: Optional[str] = None,
-    model_name: str = "my_model",
     val_split: float = 0.2,
     eval_interval: int = 1,
     patience: int = 10,
@@ -124,6 +122,8 @@ def train_model_inloop(
     num_pool_heads=None,
     num_self_attn_layers=None,
     ffn_dim=None,
+    checkpoint_fn=None,
+    history_fn=None,
 ):
     """Train with stamps generated inside the jitted step.
 
@@ -151,6 +151,9 @@ def train_model_inloop(
             MSE cannot see a drifting ``R^gamma`` or a growing PSF leakage, so
             training with response terms and only watching the loss is flying
             blind. It costs one extra jitted call per eval.
+        checkpoint_fn / history_fn: as for
+            :func:`~shearnet.core.train.train_model`; the history record also
+            carries the epoch means of the response terms when they are on.
 
     Returns ``(state, train_losses, val_losses, val_losses_per_key)`` -- the
     same tuple :func:`~shearnet.core.train.train_model` returns.
@@ -367,6 +370,8 @@ def train_model_inloop(
 
     for epoch in range(epochs):
         logger.info("Epoch %d/%d", epoch + 1, epochs)
+        epoch_start = time.perf_counter()
+        record = {"epoch": epoch + 1, "val_loss": None, "val_per_key": None, "best": False}
 
         rng_key, shuffle_key = jax.random.split(rng_key)
         idx_mat = gen.batches(train_ids, key=shuffle_key)
@@ -387,11 +392,17 @@ def train_model_inloop(
             train_loss += float(batch_loss)
         train_loss /= steps_per_epoch
         train_losses.append(train_loss)
+        record["train_loss"] = float(train_loss)
         if response.enabled:
             # The response terms are only evaluated on active steps, so divide
             # them by that count -- averaging over every step would report a
             # value every_n_steps times too small and look like convergence.
             n_active = max(float(response_sum[-1]), 1.0)
+            record["response"] = {"supervised": float(response_sum[0]) / steps_per_epoch}
+            record["response"].update({
+                name: float(response_sum[i + 1]) / n_active
+                for i, name in enumerate(RESPONSE_TERMS)
+            })
             logger.info(
                 "  response terms: supervised=%.4e %s (%d/%d active steps)",
                 float(response_sum[0]) / steps_per_epoch,
@@ -404,6 +415,9 @@ def train_model_inloop(
             )
 
         if (epoch + 1) % eval_interval:
+            record["seconds"] = time.perf_counter() - epoch_start
+            if history_fn is not None:
+                history_fn(record)
             continue
 
         eval_state = state.replace(params=ema_params) if use_ema else state
@@ -420,6 +434,8 @@ def train_model_inloop(
         val_losses.append(val_loss)
         val_per_key = per_key_sum / val_steps
         val_losses_per_key.append(val_per_key)
+        record["val_loss"] = float(val_loss)
+        record["val_per_key"] = [float(v) for v in val_per_key]
         logger.info("Validation Loss: %.4e", val_loss)
         logger.info(
             "  Per-key validation MSE: %s",
@@ -448,23 +464,21 @@ def train_model_inloop(
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
+            record["best"] = True
             logger.info("New best validation loss: %.4e", val_loss)
-            if save_path:
-                save_checkpoint(
-                    eval_state,
-                    step=epoch + 1,
-                    checkpoint_dir=save_path,
-                    model_name=model_name,
-                    overwrite=True,
-                )
+            if checkpoint_fn is not None:
+                checkpoint_fn(eval_state.params, epoch + 1)
         else:
             patience_counter += 1
             logger.info(
                 "No improvement in validation loss. Patience: %d/%d", patience_counter, patience
             )
-            if patience_counter >= patience:
-                logger.info("Early stopping triggered.")
-                break
+        record["seconds"] = time.perf_counter() - epoch_start
+        if history_fn is not None:
+            history_fn(record)
+        if patience_counter >= patience:
+            logger.info("Early stopping triggered.")
+            break
 
     final_state = state.replace(params=ema_params) if use_ema else state
     return final_state, train_losses, val_losses, val_losses_per_key

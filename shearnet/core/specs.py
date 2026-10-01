@@ -12,7 +12,7 @@ expands a spec back into the keyword arguments they already accept.
 from dataclasses import asdict, dataclass, field
 from typing import Optional, Tuple
 
-from .dataset import generate_dataset
+from .dataset import PSF_DATA_DIR, generate_dataset
 from .models import is_fork_model
 from .train import train_model
 
@@ -101,7 +101,8 @@ class DatasetSpec:
             base_shear_range=config.get("training.base_shear_range"),
             apply_psf_shear=config.get("simulation.apply_psf_shear"),
             psf_shear_range=config.get("simulation.psf_shear_range"),
-            psf_file_or_dir=config.get("simulation.psf.psfex_file"),
+            # null means the PSFEx library bundled with the repository
+            psf_file_or_dir=config.get("simulation.psf.psfex_file") or PSF_DATA_DIR,
             output_keys=tuple(config.get("model.output_keys")),
             hlr_type=config.get("simulation.hlr_type"),
             flux_type=config.get("simulation.flux_type"),
@@ -221,8 +222,6 @@ class TrainConfig:
     psf_type: str = "forklens_psf"
     fusion: str = "concat"
     head: str = "gap"
-    save_path: Optional[str] = None
-    model_name: str = "my_model"
     val_split: float = 0.2
     eval_interval: int = 1
     patience: int = 10
@@ -259,8 +258,8 @@ class TrainConfig:
     resample_noise_sd: float = 0.0
 
     @classmethod
-    def from_config(cls, config, save_path=None) -> "TrainConfig":
-        """Build a training config from a :class:`Config` (plus the save path)."""
+    def from_config(cls, config) -> "TrainConfig":
+        """Build a training config from a :class:`Config`."""
         return cls(
             epochs=config.get("training.epochs"),
             batch_size=config.get("training.batch_size"),
@@ -269,8 +268,6 @@ class TrainConfig:
             psf_type=config.get("model.psf_branch"),
             fusion=config.get("model.fusion"),
             head=config.get("model.head"),
-            save_path=save_path,
-            model_name=config.get("run_options.run_name"),
             val_split=config.get("training.val_split"),
             eval_interval=config.get("training.eval_interval"),
             patience=config.get("training.patience"),
@@ -302,13 +299,14 @@ class TrainConfig:
         """Return the config as keyword arguments for ``train_model``."""
         return asdict(self)
 
-    def run(self, galaxy_images, labels, rng_key, psf_images=None):
+    def run(self, galaxy_images, labels, rng_key, psf_images=None, checkpoint_fn=None,
+            history_fn=None):
         """Train a model with this configuration.
 
         Equivalent to ``train_model(galaxy_images, labels, rng_key,
-        psf_images=psf_images, **cfg.as_kwargs())``; groups the ~16
-        hyperparameters into one object at the call site.
+        psf_images=psf_images, **cfg.as_kwargs())`` plus the two hooks.
         """
         return train_model(
-            galaxy_images, labels, rng_key, psf_images=psf_images, **self.as_kwargs()
+            galaxy_images, labels, rng_key, psf_images=psf_images,
+            checkpoint_fn=checkpoint_fn, history_fn=history_fn, **self.as_kwargs()
         )

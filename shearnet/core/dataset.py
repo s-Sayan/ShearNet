@@ -76,20 +76,24 @@ _cosmos_cat_cache = {}
 
 
 def _load_cosmos_cat(seed=42, cat_path=None):
-    """Lazy-load the COSMOS catalog, with a random fallback for CI."""
+    """Lazy-load the catalog at ``cat_path``; ``None`` draws a synthetic one.
+
+    A path that does not exist is an error. It used to fall back to the random
+    population with a warning, which turned a typo in a catalog path into a
+    run on the wrong galaxies.
+    """
     key = (os.path.abspath(cat_path) if cat_path else None, int(seed))
     if key in _cosmos_cat_cache:
         return _cosmos_cat_cache[key]
 
-    if cat_path is not None and os.path.exists(cat_path):
+    if cat_path is not None:
+        if not os.path.isfile(cat_path):
+            raise FileNotFoundError(f"catalog not found: {cat_path}")
         with fits.open(cat_path) as hdul:
             _cosmos_cat_cache[key] = hdul[1].data
         return _cosmos_cat_cache[key]
 
-    logger.warning(
-        "WARNING: cosmos_catalog_train.fits not found. "
-        "Using synthetic random catalog for g1/g2/hlr/flux."
-    )
+    logger.info("no catalog configured: drawing a synthetic g1/g2 population")
     rng = np.random.RandomState(seed)
     n = 5000
     g_1 = rng.normal(0.0, 0.26, n)
@@ -252,8 +256,8 @@ def generate_dataset(
             ``{"g1", "g2", "hlr", "flux", "psf_e1", "psf_e2", "psf_T"}``.
         hlr_type: ``'constant'`` (0.5) or ``'catalog'`` half-light radius.
         flux_type: ``'constant'`` or ``'catalog'`` flux.
-        cosmos_cat_fname: Path to the COSMOS catalog FITS file; a synthetic
-            random catalog is used as a fallback (e.g. in CI) when absent.
+        cosmos_cat_fname: Path to the catalog FITS file; ``None`` draws a
+            synthetic population (tests only). A missing file is an error.
         as_result: Return a :class:`DatasetResult` (stable shape regardless of
             ``return_obs``) instead of a tuple.
         compute_metacal: Compute and store the four metacal (+/- e1/e2)

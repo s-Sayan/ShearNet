@@ -98,8 +98,7 @@ def test_train_config_fields_are_all_accepted_by_train_model():
 
     fields = set(TrainConfig.__dataclass_fields__)
     accepted = set(inspect.signature(train_model).parameters)
-    # save_path/model_name are handled by as_kwargs(), not passed through raw.
-    unexpected = fields - accepted - {"save_path", "model_name"}
+    unexpected = fields - accepted
     assert not unexpected, f"TrainConfig carries fields train_model rejects: {sorted(unexpected)}"
 
 
@@ -115,6 +114,6 @@ def test_the_upfront_path_actually_carries_the_d4_schedule():
     from shearnet.core.specs import TrainConfig
 
     config = Config.from_file(REPO / "configs/paper/ablations/tier2/06_d4_equivariant.yaml")
-    kwargs = TrainConfig.from_config(config, save_path="/tmp/unused").as_kwargs()
+    kwargs = TrainConfig.from_config(config).as_kwargs()
     for key in ("d4_features", "d4_depths_galaxy", "d4_depths_psf", "design"):
         assert kwargs.get(key) == config.get(f"model.{key}"), key

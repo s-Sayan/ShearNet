@@ -1,11 +1,12 @@
 """Core training functions for ShearNet models."""
 
 import functools
+import time
 
 import jax
 import jax.numpy as jnp
 import optax
-from flax.training import checkpoints, train_state
+from flax.training import train_state
 
 from .losses import resolve_loss
 from .models import build_model, is_fork_model
@@ -18,14 +19,6 @@ logger = get_logger(__name__)
 def _per_key_mse(preds, labels):
     """Per-output-key MSE, used as a diagnostic breakdown during validation."""
     return ((preds - labels) ** 2).mean(axis=0)
-
-
-def save_checkpoint(state, step, checkpoint_dir, model_name, overwrite=True):
-    """Save the model checkpoint."""
-    checkpoints.save_checkpoint(
-        ckpt_dir=checkpoint_dir, target=state, step=step, prefix=model_name, overwrite=overwrite
-    )
-    logger.info(f"Checkpoint saved at step {step}.")
 
 
 def _weighted_mse(preds, labels, weights, return_per_key):
@@ -134,8 +127,6 @@ def train_model(
     nn="simple",
     galaxy_type="cnn",
     psf_type="cnn",
-    save_path=None,
-    model_name="my_model",
     val_split=0.2,
     eval_interval=1,
     patience=5,
@@ -170,13 +161,16 @@ def train_model(
     num_pool_heads=None,
     num_self_attn_layers=None,
     ffn_dim=None,
+    checkpoint_fn=None,
+    history_fn=None,
 ):
     """Train a ShearNet model with validation and early stopping.
 
-    Builds the requested architecture, trains it with an AdamW optimizer and a
-    warmup + cosine-decay learning-rate schedule, and (if ``save_path`` is given)
-    saves only the best checkpoint by validation loss — the checkpoint on disk is
-    always the best epoch, never the final one.
+    Builds the requested architecture and trains it with an AdamW optimizer and a
+    warmup + cosine-decay learning-rate schedule. Whenever the validation loss
+    improves, ``checkpoint_fn(variables, epoch)`` is called with the weights that
+    were validated -- so whatever it saves is always the best epoch, never the
+    final one.
 
     Args:
         galaxy_images: Galaxy stamps, shape ``(N, npix, npix)``.
@@ -192,8 +186,6 @@ def train_model(
             fork models require ``psf_images``.
         galaxy_type, psf_type: Sub-model types for the two ``fork-like`` branches
             (ignored by ``'d4-fork-like'``, which uses its own smooth backbones).
-        save_path: Directory to write the best checkpoint to (no save if ``None``).
-        model_name: Checkpoint filename prefix.
         val_split: Fraction of the data held out for validation.
         eval_interval: Validate every this many epochs.
         patience: Stop after this many evals without validation improvement.
@@ -234,6 +226,11 @@ def train_model(
             ``std`` (or the raw physical std when image normalization is off), so
             that adding it to the (already-normalized) clean stamps reproduces a
             normalized noisy stamp. Only used when ``resample_noise`` is ``True``.
+        checkpoint_fn: ``(variables, epoch) -> None``, called on every new best
+            validation loss (EMA weights when EMA is on). ``None`` saves nothing.
+        history_fn: ``(record) -> None``, called once per epoch with ``epoch``,
+            ``train_loss``, ``val_loss`` and ``val_per_key`` (``None`` on epochs
+            without validation), ``best`` and ``seconds``.
 
     Returns:
         ``(state, train_losses, val_losses, val_losses_per_key)`` where ``state``
@@ -464,6 +461,8 @@ def train_model(
 
     for epoch in range(epochs):
         logger.info(f"Epoch {epoch + 1}/{epochs}")
+        epoch_start = time.perf_counter()
+        record = {"epoch": epoch + 1, "val_loss": None, "val_per_key": None, "best": False}
 
         # Shuffle training data (identical RNG consumption for both paths)
         rng_key, subkey = jax.random.split(rng_key)
@@ -507,6 +506,7 @@ def train_model(
             total_samples += batch_size_actual
         train_loss /= total_samples
         train_losses.append(train_loss)
+        record["train_loss"] = float(train_loss)
 
         # Validation phase. With EMA on, validate (and later checkpoint) the
         # averaged weights, not the live ones.
@@ -534,6 +534,7 @@ def train_model(
                 total_samples += batch_size_actual
             val_loss /= total_samples
             val_losses.append(val_loss)
+            record["val_loss"] = float(val_loss)
             logger.info(f"Validation Loss: {val_loss:.4e}")
 
             # Per-key validation MSE. Both paths already compute it; it used to
@@ -543,6 +544,7 @@ def train_model(
             if per_key is not None:
                 val_per_key = val_per_key_sum / total_samples
                 val_losses_per_key.append(val_per_key)
+                record["val_per_key"] = [float(v) for v in val_per_key]
                 per_key_str = ", ".join(
                     f"{k}={float(v):.4e}" for k, v in zip(output_keys, val_per_key)
                 )
@@ -551,24 +553,22 @@ def train_model(
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 patience_counter = 0
+                record["best"] = True
                 logger.info(f"New best validation loss: {val_loss:.4e}")
-                if save_path:
-                    save_checkpoint(
-                        eval_state,
-                        step=epoch + 1,
-                        checkpoint_dir=save_path,
-                        model_name=model_name,
-                        overwrite=True,
-                    )
+                if checkpoint_fn is not None:
+                    checkpoint_fn(eval_state.params, epoch + 1)
             else:
                 patience_counter += 1
                 logger.info(
                     "No improvement in validation loss. " f"Patience: {patience_counter}/{patience}"
                 )
 
-            if patience_counter >= patience:
-                logger.info("Early stopping triggered.")
-                break
+        record["seconds"] = time.perf_counter() - epoch_start
+        if history_fn is not None:
+            history_fn(record)
+        if patience_counter >= patience:
+            logger.info("Early stopping triggered.")
+            break
 
     # With EMA on, hand back the averaged-weight state (what was checkpointed).
     final_state = state.replace(params=ema_params) if use_ema else state

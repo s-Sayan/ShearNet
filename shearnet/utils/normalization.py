@@ -125,7 +125,7 @@ def inverse_transform_labels(labels_norm: np.ndarray, norm_params: dict) -> np.n
     return labels_norm * norm_params["std"] + norm_params["mean"]
 
 
-def save_normalizer(norm_params: dict, path: str) -> None:
+def save_normalizer(norm_params: dict, path: str, output_keys=None) -> None:
     """Save normalization statistics to a .npz file.
 
     Parameters
@@ -133,11 +133,15 @@ def save_normalizer(norm_params: dict, path: str) -> None:
     norm_params : dict
         Output of fit_normalizer.
     path : str
-        Destination path, e.g. "<plot_path>/<model_name>/label_normalizer.npz".
-        Parent directories are created automatically.
+        Destination path, e.g. "<run>/normalizers/labels.npz". Parent
+        directories are created automatically.
+    output_keys : sequence of str, optional
+        The label order the statistics belong to. Stored so a reader can refuse
+        to apply them to a model with another order of equally many outputs.
     """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    np.savez(path, mean=norm_params["mean"], std=norm_params["std"])
+    extra = {} if output_keys is None else {"output_keys": np.asarray(list(output_keys))}
+    np.savez(path, mean=norm_params["mean"], std=norm_params["std"], **extra)
     logger.info(f"Label normalizer saved to: {path}")
 
 
@@ -156,6 +160,8 @@ def load_normalizer(path: str) -> dict:
     """
     data = np.load(path)
     norm_params = {"mean": data["mean"], "std": data["std"]}
+    if "output_keys" in data.files:
+        norm_params["output_keys"] = tuple(str(k) for k in data["output_keys"])
     logger.info(f"Label normalizer loaded from: {path}")
     _print_normalizer_stats(norm_params)
     return norm_params
