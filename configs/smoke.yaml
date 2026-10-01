@@ -1,18 +1,31 @@
-# the tiny run CI trains: a few stamps, a few epochs, no science
-
+# The tiny end-to-end run: a few stamps, a few epochs, no science. CI trains and
+# evaluates this; it is also the quickest way to see the whole pipeline work:
+#
+#   shearnet-train --config configs/smoke.yaml --run runs/smoke
+#   shearnet-eval  --run runs/smoke
 schema_version: 1
+
 run_options:
   run_name: smoke
+  ncores: 1
+
 simulation:
-  psf:
-    gaussian_fwhm: 0.25
+  backend: jax-galsim
   noise_sigma: 0.01
+  jax_fft_size: 128
+  jax_batch_size: 32
+
 model:
   type: fork-like
+  galaxy_branch: cnn
+  psf_branch: cnn
+
 training:
   nobj: 100
+  epochs: 2
   batch_size: 16
   patience: 20
-  loss_weights: [1.0, 1.0]
+
 evaluation:
-  nobj: 10
+  nobj: 4
+  rotations_deg: [0, 90]
