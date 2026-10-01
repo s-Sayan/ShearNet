@@ -637,3 +637,25 @@ def validate(flat: Mapping[str, Any]) -> None:
     if problems:
         raise ConfigError("invalid configuration:\n" +
                           "\n".join(f"  - {p}" for p in problems))
+
+
+def markdown() -> str:
+    """The settings table of ``docs/config.md``, one section per block."""
+    lines = []
+    for section in SECTIONS:
+        lines += [f"### `{section}`", "", "| key | type | default | meaning |",
+                  "|---|---|---|---|"]
+        for key, field in FIELDS.items():
+            if not key.startswith(section + "."):
+                continue
+            kind = field.kind + (" or null" if field.nullable else "")
+            if field.choices:
+                kind += ": " + " / ".join(str(c) for c in field.choices)
+            default = field.default
+            if key == "evaluation.scenes":
+                default = "zero, +/-0.01 on g1, +/-0.01 on g2"
+            shown = "null" if default is None else f"`{default}`"
+            doc = field.doc + (f" [{field.unit}]" if field.unit else "")
+            lines.append(f"| `{key[len(section) + 1:]}` | {kind} | {shown} | {doc} |")
+        lines.append("")
+    return "\n".join(lines)
