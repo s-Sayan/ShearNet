@@ -1,272 +1,155 @@
 #!/usr/bin/env python
-"""Hyperparameter sweep runner for ShearNet (item 5: parameter search).
+"""Hyperparameter sweep: write one config per grid point, then rank the runs.
 
-Drives the existing ``shearnet-train`` CLI over a grid (or random sample) of
-config overrides and ranks the runs by their best validation loss. It writes one
-config per run, launches training as a subprocess (so the full, unmodified
-pipeline is exercised), then reads back the per-epoch ``*_loss.npz`` that
-training already saves and reports the minimum validation loss per run.
+It changes nothing about training -- every knob is an ordinary config key --
+and it runs nothing itself. ``--write`` turns a sweep spec into validated
+configs plus a run list for the one Slurm script; ``--collect`` reads each
+finished run's ``manifest.json`` and ranks them by best validation loss.
 
-This is intentionally thin: it changes nothing about training, and every knob it
-sweeps is an ordinary config key. Deeper m/c benchmarking is a separate,
-heavier step -- run ``research/shear_bias/m`` on the best few models the sweep
-surfaces.
-
-Three ways to run:
-
-* Sequential (one node runs every combo, then ranks)::
-
-      python sweep.py --sweep example_sweep.yaml
-
-* SLURM job array (one combo per array task, then collect) -- the right mode
-  when each run is a full 300k-sample training::
-
-      N=$(python sweep.py --sweep example_sweep.yaml --count)   # combo count
-      # sbatch --array=0-$((N-1)) ... running:
-      python sweep.py --sweep example_sweep.yaml --index $SLURM_ARRAY_TASK_ID
-      # after the array finishes:
-      python sweep.py --sweep example_sweep.yaml --collect
-
-* Preview (no training)::
-
-      python sweep.py --sweep example_sweep.yaml --dry-run
+    python research/hyperparam_search/sweep.py --sweep example_sweep.yaml --write
+    sbatch --array=0-$((N-1))%8 scripts/shearnet.sbatch --list sweep_out/runs.txt
+    python research/hyperparam_search/sweep.py --sweep example_sweep.yaml --collect
 
 Sweep spec (YAML)::
 
-    base_config: configs/smoke.yaml       # relative to this file's dir or CWD
-    method: grid                          # "grid" or "random"
-    n_samples: 12                         # random only: how many combos to draw
-    seed: 0                               # random only: reproducible sampling
-    model_name_prefix: sweep              # checkpoints/plots go under this name
-    grid:                                 # dotted config path -> list of values
+    base_config: ../../configs/smoke.yaml    # relative to the spec
+    method: grid                             # "grid" or "random"
+    n_samples: 12                            # random only
+    seed: 0                                  # random only
+    name_prefix: sweep
+    grid:                                    # dotted config key -> values
       training.learning_rate: [1.0e-3, 5.0e-4, 1.0e-4]
       training.batch_size: [32, 64, 128]
-      training.weight_decay: [1.0e-4, 1.0e-5]
-      training.ema_decay: [null, 0.999]
+
+The runs are trained only (``--train-only`` lines in the run list): ranking by
+validation loss needs no evaluation. Measure the winners with ``shearnet-eval``.
 """
+
+from __future__ import annotations
+
 import argparse
 import csv
-import glob
 import itertools
 import json
 import os
 import random as _random
-import subprocess
 import sys
+from pathlib import Path
 
-import numpy as np
-import yaml
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-
-
-def _resolve(path):
-    """Resolve ``path`` relative to CWD, else relative to this script's dir."""
-    if os.path.isabs(path) or os.path.exists(path):
-        return path
-    alt = os.path.join(HERE, path)
-    return alt if os.path.exists(alt) else path
+from shearnet.config import Config
+from shearnet.config.loader import dump_yaml, read_yaml
 
 
-def _set_nested(d, dotted, value):
-    """Set ``d['a']['b'] = value`` for a dotted ``'a.b'`` path (creating dicts)."""
+def _set(tree, dotted, value):
+    node = tree
     keys = dotted.split(".")
-    cur = d
-    for k in keys[:-1]:
-        cur = cur.setdefault(k, {})
-    cur[keys[-1]] = value
+    for key in keys[:-1]:
+        node = node.setdefault(key, {})
+    node[keys[-1]] = value
 
 
-def _combos(grid, method, n_samples, seed):
-    """Return the deterministic list of ``{path: value}`` dicts for the grid.
-
-    The order is stable across invocations (full product for ``grid``; a
-    seeded sample for ``random``) so ``--index N`` selects the same combo in
-    every array task.
-    """
-    keys = list(grid.keys())
-    value_lists = [grid[k] for k in keys]
-    out = []
+def combos(grid, method="grid", n_samples=10, seed=0):
+    """The deterministic list of ``{key: value}`` points of the sweep."""
+    keys = list(grid)
+    values = [grid[k] for k in keys]
     if method == "grid":
-        for values in itertools.product(*value_lists):
-            out.append(dict(zip(keys, values)))
-    elif method == "random":
-        rng = _random.Random(seed)
-        seen = set()
-        max_attempts = n_samples * 50
-        while len(out) < n_samples and max_attempts > 0:
-            max_attempts -= 1
-            combo = tuple(rng.choice(v) for v in value_lists)
-            if combo in seen:
-                continue
-            seen.add(combo)
-            out.append(dict(zip(keys, combo)))
-    else:
+        return [dict(zip(keys, point)) for point in itertools.product(*values)]
+    if method != "random":
         raise ValueError(f"method must be 'grid' or 'random', got {method!r}")
+    rng, seen, out = _random.Random(seed), set(), []
+    for _ in range(n_samples * 50):
+        if len(out) == n_samples:
+            break
+        point = tuple(rng.choice(v) for v in values)
+        if point not in seen:
+            seen.add(point)
+            out.append(dict(zip(keys, point)))
     return out
 
 
-def _slug(combo, idx):
-    """Short, filesystem-safe label for a combo (prefixed by its index)."""
-    parts = []
-    for k, v in combo.items():
-        parts.append(f"{k.split('.')[-1]}-{str(v).replace('.', 'p').replace('-', 'm')}")
-    return f"{idx:03d}_" + "_".join(parts)
+def slug(point, index):
+    parts = [f"{k.split('.')[-1]}-{str(v).replace('.', 'p').replace('-', 'm')}"
+             for k, v in point.items()]
+    return f"{index:03d}_" + "_".join(parts)
 
 
-def _best_val_loss(plot_path, model_name):
-    """Return the minimum validation loss recorded for ``model_name`` (or NaN)."""
-    loss_file = os.path.join(plot_path, model_name, f"{model_name}_loss.npz")
-    if not os.path.exists(loss_file):
-        return float("nan")
-    data = np.load(loss_file, allow_pickle=True)
-    val = np.asarray(data["val_loss"], dtype=float)
-    return float(np.min(val)) if val.size else float("nan")
+def write(spec_path: Path, outdir: Path):
+    spec = read_yaml(spec_path)
+    base = read_yaml((spec_path.parent / spec["base_config"]).resolve())
+    points = combos(spec["grid"], spec.get("method", "grid"), spec.get("n_samples", 10),
+                    spec.get("seed", 0))
+    (outdir / "configs").mkdir(parents=True, exist_ok=True)
+    lines = []
+    for index, point in enumerate(points):
+        name = f"{spec.get('name_prefix', 'sweep')}_{slug(point, index)}"
+        config = json.loads(json.dumps(base))
+        for key, value in point.items():
+            _set(config, key, value)
+        _set(config, "run_options.run_name", name)
+        _set(config, "run_options.outdir", str((outdir / "runs" / name).resolve()))
+        path = outdir / "configs" / f"{name}.yaml"
+        Config.from_dict(config, base_dir=str(spec_path.parent))  # validate
+        path.write_text(dump_yaml(config))
+        lines.append(f"--train-only {path.resolve()}")
+    (outdir / "runs.txt").write_text("\n".join(lines) + "\n")
+    print(f"{len(points)} configs in {outdir / 'configs'}")
+    print(f"sbatch --array=0-{len(points) - 1}%8 scripts/shearnet.sbatch --list "
+          f"{(outdir / 'runs.txt').resolve()}")
+    return points
 
 
-def _run_one(idx, combo, base_config, prefix, cfg_dir, parts_dir, plot_path,
-             train_cmd, dry_run):
-    """Train a single combo (unless ``dry_run``) and persist its result part."""
-    slug = _slug(combo, idx)
-    model_name = f"{prefix}_{slug}"
-
-    run_cfg = yaml.safe_load(yaml.safe_dump(base_config))  # deep copy
-    for path, value in combo.items():
-        _set_nested(run_cfg, path, value)
-    _set_nested(run_cfg, "output.model_name", model_name)
-    _set_nested(run_cfg, "plotting.plot", run_cfg.get("plotting", {}).get("plot", False))
-
-    cfg_file = os.path.join(cfg_dir, f"{model_name}.yaml")
-    with open(cfg_file, "w") as f:
-        yaml.safe_dump(run_cfg, f, sort_keys=False)
-
-    cmd = [train_cmd, "--config", cfg_file]
-    print(f"[sweep] combo {idx}: {model_name}\n        params: {combo}")
-
-    if dry_run:
-        print(f"        would run: {' '.join(cmd)}")
-        result = {**combo, "index": idx, "model_name": model_name,
-                  "val_loss": float("nan"), "status": "dry-run"}
-    else:
-        proc = subprocess.run(cmd)
-        status = "ok" if proc.returncode == 0 else f"failed({proc.returncode})"
-        val_loss = _best_val_loss(plot_path, model_name) if proc.returncode == 0 else float("nan")
-        print(f"        -> status={status}  best_val_loss={val_loss:.6e}")
-        result = {**combo, "index": idx, "model_name": model_name,
-                  "val_loss": val_loss, "status": status}
-
-    # One JSON part per combo -> safe for concurrent array tasks.
-    with open(os.path.join(parts_dir, f"result_{idx:04d}.json"), "w") as f:
-        json.dump(result, f)
-    return result
+def collect(spec_path: Path, outdir: Path):
+    spec = read_yaml(spec_path)
+    rows = []
+    for config_path in sorted((outdir / "configs").glob("*.yaml")):
+        config = Config.from_file(config_path)
+        run = Path(config.get("run_options.outdir"))
+        row = {key: config.get(key) for key in spec["grid"]}
+        row["run_name"] = config.get("run_options.run_name")
+        row["status"], row["best_val_loss"], row["best_epoch"] = "missing", None, None
+        if (run / "status.json").is_file():
+            row["status"] = json.loads((run / "status.json").read_text())["state"]
+        if (run / "manifest.json").is_file():
+            manifest = json.loads((run / "manifest.json").read_text())
+            row["best_val_loss"] = manifest.get("best_val_loss")
+            row["best_epoch"] = (manifest.get("checkpoint") or {}).get("epoch")
+        rows.append(row)
+    rows.sort(key=lambda r: (r["best_val_loss"] is None, r["best_val_loss"] or 0.0))
+    if rows:
+        with open(outdir / "results.csv", "w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+    for row in rows:
+        loss = row["best_val_loss"]
+        print(f"  {'n/a' if loss is None else f'{loss:.6e}':>12}  [{row['status']:>9}]  "
+              f"{row['run_name']}")
+    return rows
 
 
-def _collect(outdir, parts_dir, grid):
-    """Read every result part, rank by val loss, write results.csv, print table."""
-    parts = sorted(glob.glob(os.path.join(parts_dir, "result_*.json")))
-    results = []
-    for p in parts:
-        with open(p) as f:
-            results.append(json.load(f))
-    if not results:
-        print(f"[sweep] no result parts found in {parts_dir}")
-        return []
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--sweep", required=True, help="the sweep spec YAML")
+    parser.add_argument("--outdir", default=None, help="default: sweep_out next to the spec")
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--write", action="store_true", help="write configs and runs.txt")
+    action.add_argument("--count", action="store_true", help="print the number of runs")
+    action.add_argument("--collect", action="store_true", help="rank the finished runs")
+    args = parser.parse_args(argv)
 
-    results.sort(key=lambda r: (np.isnan(r.get("val_loss", float("nan"))),
-                                r.get("val_loss", float("nan"))))
-    results_file = os.path.join(outdir, "results.csv")
-    fieldnames = list(grid.keys()) + ["index", "model_name", "val_loss", "status"]
-    with open(results_file, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for r in results:
-            writer.writerow(r)
-
-    print("=" * 70)
-    print(f"[sweep] ranked results (best first) -> {results_file}")
-    print("=" * 70)
-    for r in results:
-        vl = r.get("val_loss", float("nan"))
-        vl_s = f"{vl:.6e}" if not np.isnan(vl) else "   n/a    "
-        print(f"  {vl_s}  [{r.get('status', '?'):>10}]  {r['model_name']}")
-    best = results[0]
-    if not np.isnan(best.get("val_loss", float("nan"))):
-        print(f"\n[sweep] best: {best['model_name']} (val_loss={best['val_loss']:.6e})")
-        print("[sweep] next: run research/shear_bias/m on the top few for m/c.")
-    return results
-
-
-def main():
-    ap = argparse.ArgumentParser(description="ShearNet hyperparameter sweep")
-    ap.add_argument("--sweep", required=True, help="Path to the sweep YAML spec.")
-    ap.add_argument("--outdir", default=None, help="Where to write run configs + results.")
-    ap.add_argument("--train-cmd", default="shearnet-train",
-                    help="Training entry point (default: shearnet-train).")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="Write configs and print commands, but do not train.")
-    ap.add_argument("--count", action="store_true",
-                    help="Print the number of combos and exit (for sizing --array).")
-    ap.add_argument("--index", type=int, default=None,
-                    help="Run ONLY this combo index (for SLURM job arrays), then exit.")
-    ap.add_argument("--collect", action="store_true",
-                    help="Aggregate all result parts into a ranked results.csv, then exit.")
-    args = ap.parse_args()
-
-    with open(_resolve(args.sweep)) as f:
-        spec = yaml.safe_load(f)
-
-    base_config_path = _resolve(spec["base_config"])
-    with open(base_config_path) as f:
-        base_config = yaml.safe_load(f)
-
-    method = spec.get("method", "grid")
-    n_samples = spec.get("n_samples", 10)
-    seed = spec.get("seed", 0)
-    prefix = spec.get("model_name_prefix", "sweep")
-    grid = spec["grid"]
-
-    combos = _combos(grid, method, n_samples, seed)
-
+    spec_path = Path(args.sweep).resolve()
+    outdir = Path(args.outdir).resolve() if args.outdir else spec_path.parent / "sweep_out"
     if args.count:
-        print(len(combos))
-        return 0
-
-    outdir = args.outdir or os.path.join(HERE, "sweep_out")
-    cfg_dir = os.path.join(outdir, "configs")
-    parts_dir = os.path.join(outdir, "parts")
-    os.makedirs(cfg_dir, exist_ok=True)
-    os.makedirs(parts_dir, exist_ok=True)
-
-    data_path = os.getenv("SHEARNET_DATA_PATH", os.path.abspath("."))
-    plot_path = os.path.join(data_path, "plots")
-
-    if args.collect:
-        _collect(outdir, parts_dir, grid)
-        return 0
-
-    print(f"[sweep] {len(combos)} combo(s); method={method}; base={base_config_path}")
-    print(f"[sweep] plots dir: {plot_path}\n")
-
-    if args.index is not None:
-        # Single-combo mode (SLURM array task). Out-of-range indices no-op so a
-        # slightly-too-large --array range is harmless.
-        if not (0 <= args.index < len(combos)):
-            print(f"[sweep] index {args.index} out of range [0,{len(combos)}); nothing to do.")
-            return 0
-        _run_one(args.index, combos[args.index], base_config, prefix, cfg_dir,
-                 parts_dir, plot_path, args.train_cmd, args.dry_run)
-        print("[sweep] single combo done; run with --collect once all array tasks finish.")
-        return 0
-
-    # Sequential: run every combo in this process, then rank.
-    for idx, combo in enumerate(combos):
-        print(f"[sweep] ({idx + 1}/{len(combos)})")
-        _run_one(idx, combo, base_config, prefix, cfg_dir, parts_dir, plot_path,
-                 args.train_cmd, args.dry_run)
-        print()
-    _collect(outdir, parts_dir, grid)
+        spec = read_yaml(spec_path)
+        print(len(combos(spec["grid"], spec.get("method", "grid"), spec.get("n_samples", 10),
+                         spec.get("seed", 0))))
+    elif args.write:
+        write(spec_path, outdir)
+    else:
+        collect(spec_path, outdir)
     return 0
 
 
 if __name__ == "__main__":
+    os.environ.setdefault("MPLBACKEND", "Agg")
     sys.exit(main())

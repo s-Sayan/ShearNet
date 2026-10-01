@@ -29,6 +29,26 @@ a key the model would ignore stops there instead of training the control.
 Each arm's run directory is `/home/adfield/ShearNet/runs/<arm path>` (its
 `run_options.outdir`).
 
+## Submitting
+
+`generate.py` also writes `runs.txt`, one arm per line, for the one Slurm
+script. From the repository root:
+
+```
+sbatch --array=0-27%4 scripts/shearnet.sbatch --list configs/paper/runs.txt
+```
+
+Each array task trains its arm and then evaluates it with the arm's own
+`evaluation` block, so the run directory ends up holding the model and its
+catalog, `evaluations/default/<run_name>_default.fits`. One arm by hand:
+
+```
+sbatch scripts/shearnet.sbatch configs/paper/ablations/tier3/orbit_k2.yaml
+```
+
+UT4 *is* the fiducial (same keys, different name), so `fiducial.yaml` is not in
+the list; it exists to be the base the arms are written from.
+
 ### Tier 2 is cumulative
 
 Rungs 1-8 each add one component to the rung above, so a row differs from the
