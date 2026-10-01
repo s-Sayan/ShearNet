@@ -43,8 +43,8 @@ meta:
 paths:
   root: /home/adfield/ShearNet/research/ablations/tier2/03_transformer_fusion
   psfex_model_file: /home/adfield/weak_lensing/superbit-lensing-jax-test/simulated_data/sim_utils/emp_psfs/emp_psfs_best/psfex_all_except_best
-  train_catalog: /home/adfield/ShearNet/cosmos_catalog_train.fits
-  eval_catalog: /home/adfield/ShearNet/cosmos_catalog_eval.fits
+  train_catalog: /home/adfield/ShearNet/cosmos_catalog_nocut_train.fits
+  eval_catalog: /home/adfield/ShearNet/cosmos_catalog_nocut_eval.fits
   checkpoint_dir: null
   plot_dir: null
 image:
@@ -103,7 +103,7 @@ train:
     condition: false
 eval:
   seed: 150
-  n_obs: 200000
+  n_obs: 199995
   gal_model: gauss
   evaluate:
     baseline: ngmix
