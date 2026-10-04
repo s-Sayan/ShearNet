@@ -1,7 +1,6 @@
 """Galaxy/PSF postage-stamp simulation and dataset generation for ShearNet."""
 
 import functools
-import multiprocessing as mp
 import os
 import sys
 from dataclasses import dataclass
@@ -16,7 +15,7 @@ from astropy.io import fits
 from tqdm import tqdm
 
 from ..logging_utils import get_logger
-from ..parallel import resolve_nproc
+from ..parallel import resolve_nproc, spawn_map
 from .moments import get_admoms_ngmix_fit
 from .shear_algebra import compose_shear
 from .wcs import create_wcs_from_params
@@ -372,20 +371,19 @@ def generate_dataset(
         # import -- i.e. inherited at spawn -- so the Pool initializer is too
         # late. The parent's already-initialized GPU backend is unaffected; we
         # restore the env once the pool is done.
-        ctx = mp.get_context("spawn")
         chunk = max(1, min(64, (samples // (nproc * 8)) or 1))
         _prev_platforms = os.environ.get("JAX_PLATFORMS")
         os.environ["JAX_PLATFORMS"] = "cpu"
         try:
-            with ctx.Pool(processes=nproc, initializer=_worker_init) as pool:
-                results = list(
-                    tqdm(
-                        pool.imap(worker, tasks, chunksize=chunk),
-                        total=samples,
-                        disable=_disable,
-                        mininterval=10,
-                    )
+            results = list(
+                tqdm(
+                    spawn_map(worker, tasks, nproc, initializer=_worker_init,
+                              chunksize=chunk),
+                    total=samples,
+                    disable=_disable,
+                    mininterval=10,
                 )
+            )
         finally:
             if _prev_platforms is None:
                 os.environ.pop("JAX_PLATFORMS", None)

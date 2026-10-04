@@ -1,12 +1,11 @@
 """NGmix-based shear estimation and metacalibration utilities for ShearNet."""
 
-import multiprocessing as mp
 
 import ngmix
 import numpy as np
 
 from ..logging_utils import get_logger
-from ..parallel import cpu_only_children, resolve_nproc
+from ..parallel import cpu_only_children, resolve_nproc, spawn_map
 
 logger = get_logger(__name__)
 
@@ -506,15 +505,14 @@ def _metacal_map(boot, obslist, workers, chunksize=16, return_images=False):
     worker = _metacal_pool_worker_images if return_images else _metacal_pool_worker
     if workers == 1:
         return [_metacal_struct(boot, obs, return_images=return_images) for obs in obslist]
-    # imap over the observations, not starmap over [(obs, boot), ...]: an
+    # map over the observations, not starmap over [(obs, boot), ...]: an
     # Observation pickles to ~352 kB, so the task list alone would be ~70 GB at
-    # 200k objects, queued before any fitting starts. imap streams it, and the
-    # worker returns only the 1.4 kB struct, avoiding a 3.6 MB obsdict per object.
-    ctx = mp.get_context("spawn")
-    with cpu_only_children(), ctx.Pool(
-        workers, initializer=_metacal_pool_init, initargs=(boot,)
-    ) as pool:
-        return list(pool.imap(worker, obslist, chunksize=chunksize))
+    # 200k objects, queued before any fitting starts. map streams it, and the
+    # worker returns only the 1.4 kB struct -- the obsdict it used to send back
+    # is 3.6 MB per object, and every caller in this repo discards it.
+    with cpu_only_children():
+        return list(spawn_map(worker, obslist, workers, initializer=_metacal_pool_init,
+                              initargs=(boot,), chunksize=chunksize))
 
 
 def mp_fit_one_single(
@@ -667,11 +665,10 @@ def fit_shapes(obslist, seed=42, psf_model="gauss", gal_model="gauss", nproc=Non
     if workers == 1:
         results = [_fit_one_shape(runner, psf_runner, obs, i) for i, obs in enumerate(obslist)]
     else:
-        ctx = mp.get_context("spawn")
-        with cpu_only_children(), ctx.Pool(
-            workers, initializer=_fit_pool_init, initargs=(runner, psf_runner)
-        ) as pool:
-            results = list(pool.imap(_fit_pool_worker, obslist, chunksize=64))
+        with cpu_only_children():
+            results = list(spawn_map(_fit_pool_worker, obslist, workers,
+                                     initializer=_fit_pool_init,
+                                     initargs=(runner, psf_runner), chunksize=64))
 
     e = np.full((n, 2), np.nan)
     flags = np.ones(n, dtype=bool)

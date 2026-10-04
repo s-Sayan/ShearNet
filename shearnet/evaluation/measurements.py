@@ -170,10 +170,9 @@ def fit_original(observations: Sequence, *, seed: int, psf_model: str, gal_model
     (:func:`shearnet.methods.ngmix.build_runners`), seeded with ``seed`` afresh
     for every call.
     """
-    import multiprocessing as mp
 
     from ..methods.ngmix import build_runners
-    from ..parallel import cpu_only_children, resolve_nproc
+    from ..parallel import cpu_only_children, resolve_nproc, spawn_map
 
     n = len(observations)
     out = _empty_fit(n)
@@ -187,10 +186,9 @@ def fit_original(observations: Sequence, *, seed: int, psf_model: str, gal_model
     if workers == 1:
         rows = [_fit_one(runner, psf_runner, obs, i) for i, obs in enumerate(observations)]
     else:
-        ctx = mp.get_context("spawn")
-        with cpu_only_children(), ctx.Pool(workers, initializer=_pool_init,
-                                           initargs=(runner, psf_runner)) as pool:
-            rows = list(pool.imap(_pool_fit, observations, chunksize=64))
+        with cpu_only_children():
+            rows = list(spawn_map(_pool_fit, observations, workers, initializer=_pool_init,
+                                  initargs=(runner, psf_runner), chunksize=64))
     for i, row in enumerate(rows):
         for name in FIT_FIELDS:
             out[name][i] = row[name]

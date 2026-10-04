@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from typing import Optional
+from typing import Callable, Iterable, Optional
 
-__all__ = ["cpu_only_children", "resolve_nproc", "slurm_cpus"]
+__all__ = ["cpu_only_children", "resolve_nproc", "slurm_cpus", "spawn_map"]
 
 
 #: Environment that keeps a child process off the accelerator.
@@ -68,3 +68,29 @@ def resolve_nproc(nproc: Optional[int] = None, n_tasks: Optional[int] = None) ->
     if n_tasks is not None:
         resolved = max(1, min(resolved, int(n_tasks)))
     return resolved
+
+
+def spawn_map(fn: Callable, items: Iterable, workers: int, *, initializer=None,
+              initargs=(), chunksize: int = 1):
+    """``fn`` over ``items`` on ``workers`` spawned processes, in order (an iterator).
+
+    ``concurrent.futures`` rather than ``multiprocessing.Pool``, on purpose. A
+    ``Pool`` whose workers die -- killed, or unable to even start because the
+    code they import changed on disk under a running job -- quietly starts
+    replacements forever, each printing the same traceback, while the map never
+    returns. That is how one evaluation once wrote 38 GB of identical
+    tracebacks. Here the first dead worker breaks the pool and the job fails.
+    """
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
+
+    with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("spawn"),
+                             initializer=initializer, initargs=initargs) as pool:
+        try:
+            yield from pool.map(fn, items, chunksize=chunksize)
+        except BrokenProcessPool as exc:
+            raise RuntimeError(
+                f"a worker process running {getattr(fn, '__name__', fn)} died; its "
+                "traceback is above. If it could not import its code, the checkout "
+                "this job runs from changed while it was running.") from exc
