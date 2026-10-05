@@ -105,7 +105,7 @@ def evaluate(run: RunDir, *, override: Optional[Path] = None, eval_name: str = "
 def _evaluate(config: Config, run: RunDir, edir: EvaluationDir) -> Path:
     from .predictor import RunPredictor
 
-    start = time.time()
+    began = time.time()
     run_name = config.get("run_options.run_name")
     work = plan(config)
     estimators = work["estimators"]
@@ -235,7 +235,7 @@ def _evaluate(config: Config, run: RunDir, edir: EvaluationDir) -> Path:
     extra = _metadata_hdus(config, run, renderer, blocks, scenes, rotations)
     writer.write(path, header, extra)
     writer.cleanup()
-    seconds = round(time.time() - start, 1)
+    seconds = round(time.time() - began, 1)
     edir.write_status("completed", catalog=path.name, records=work["records"], seconds=seconds)
     logger.info("")
     logger.info("EVALUATION COMPLETE")

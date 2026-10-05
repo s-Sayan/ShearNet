@@ -63,6 +63,13 @@ def test_one_catalog_with_every_extension(catalog, run):
     assert run.evaluation("default").state == "completed"
 
 
+def test_the_status_records_how_long_the_evaluation_took(catalog, run):
+    """A chunk loop's offset once shadowed the start time, so the status said
+    the evaluation had taken ~56 years."""
+    status = run.evaluation("default").read_status()
+    assert 0 < status["seconds"] < 3600
+
+
 def test_rows_are_scene_major_then_station_then_object(catalog):
     truth = fits.getdata(catalog, "TRUTH")
     np.testing.assert_array_equal(truth["record_id"], np.arange(len(truth)))
