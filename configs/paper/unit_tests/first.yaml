@@ -30,7 +30,7 @@
 schema_version: 1
 run_options:
   run_name: d4_unit_first
-  outdir: /home/adfield/ShearNet/runs/unit_tests/first
+  outdir: ../../../runs/unit_tests/first
   description: 'UT1: ideal Gaussian PSF, fixed size and flux'
 simulation:
   backend: jax-galsim

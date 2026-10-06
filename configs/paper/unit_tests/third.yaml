@@ -16,7 +16,7 @@
 schema_version: 1
 run_options:
   run_name: d4_unit_third
-  outdir: /home/adfield/ShearNet/runs/unit_tests/third
+  outdir: ../../../runs/unit_tests/third
   description: 'UT3: PSFEx library, COSMOS sizes, fixed flux'
 simulation:
   backend: jax-galsim

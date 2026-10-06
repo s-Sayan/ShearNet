@@ -19,8 +19,8 @@ III does. A single Gaussian cannot represent the SuperBIT PSFEx profiles: ngmix'
 measured R^PSF then stops describing its actual PSF leakage and the R^PSF
 correction overcorrects.
 
-Each run directory is `/home/adfield/ShearNet/runs/unit_tests/<name>` (its
-`run_options.outdir`).
+Each run directory is `runs/unit_tests/<name>` in the repository root (its
+`run_options.outdir`, relative to the config file, so it follows the clone).
 
 ## Submitting
 

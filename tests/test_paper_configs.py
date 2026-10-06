@@ -29,7 +29,8 @@ def test_the_paper_has_exactly_the_four_unit_tests():
 def test_each_unit_test_loads_and_lives_in_its_own_run_directory(rung):
     config = _load(rung)
     assert config.get("run_options.run_name") == f"d4_unit_{rung}"
-    assert config.get("run_options.outdir").endswith(f"runs/unit_tests/{rung}")
+    # relative to the config file, so the runs follow the clone wherever it lives
+    assert config.get("run_options.outdir") == str(REPO / "runs" / "unit_tests" / rung)
 
 
 @pytest.mark.parametrize("rung", RUNGS)

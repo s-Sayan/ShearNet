@@ -16,7 +16,7 @@
 schema_version: 1
 run_options:
   run_name: d4_unit_fourth
-  outdir: /home/adfield/ShearNet/runs/unit_tests/fourth
+  outdir: ../../../runs/unit_tests/fourth
   description: 'UT4: the fiducial simulation'
 simulation:
   backend: jax-galsim

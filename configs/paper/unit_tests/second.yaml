@@ -16,7 +16,7 @@
 schema_version: 1
 run_options:
   run_name: d4_unit_second
-  outdir: /home/adfield/ShearNet/runs/unit_tests/second
+  outdir: ../../../runs/unit_tests/second
   description: 'UT2: SuperBIT PSFEx library, fixed size and flux'
 simulation:
   backend: jax-galsim
