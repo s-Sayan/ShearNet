@@ -118,7 +118,7 @@ One YAML file with five blocks: `run_options`, `simulation`, `model`, `training`
 * Relative paths resolve against the config file's directory.
 
 `configs/example.yaml` is a short commented tour, `configs/smoke.yaml` the tiny
-CI run, and `configs/paper/` the paper campaign (generated from one fiducial; see
+CI run, and `configs/paper/` the paper's four unit tests (see
 [`configs/paper/README.md`](configs/paper/README.md)). Configs in the package and unit-test
 layouts are translated with a warning per changed key;
 `python -m shearnet.config.legacy INPUT.yaml` prints the translation.
@@ -131,7 +131,7 @@ layouts are translated with a warning per changed key;
 sbatch scripts/shearnet.sbatch CONFIG [RUN_DIR]                       # train, then evaluate
 sbatch scripts/shearnet.sbatch --train-only CONFIG [RUN_DIR]
 sbatch scripts/shearnet.sbatch --eval-only RUN_DIR [EVAL_CONFIG EVAL_NAME]
-sbatch --array=0-27%4 scripts/shearnet.sbatch --list configs/paper/runs.txt
+sbatch --array=0-3 scripts/shearnet.sbatch --list configs/paper/runs.txt
 ```
 
 It sources `$SHEARNET_ENV` (or `./setup_env.sh`) for the environment and sets

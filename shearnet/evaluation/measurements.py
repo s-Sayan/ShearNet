@@ -143,7 +143,10 @@ def _fit_one(runner, psf_runner, obs, index=0):
     row["flags"] = int(res.get("flags", FLAG_MISSING))
     psf_result = obs.psf.meta.get("result")
     if psf_result is not None and psf_result.get("flags", 1) == 0:
-        row["Tpsf"] = psf_result["T"]
+        # a single-model PSF fit reports T; an EM mixture (psf_model: em5, as
+        # SuperBIT uses) only carries the fitted mixture
+        row["Tpsf"] = (psf_result["T"] if "T" in psf_result
+                       else psf_result.get_gmix().get_T())
     if row["flags"] == 0:
         for name in ("g", "g_cov", "T", "flux", "s2n"):
             row[name] = np.asarray(res[name], dtype=float)

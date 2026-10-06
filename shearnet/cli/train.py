@@ -2,7 +2,7 @@
 
 ::
 
-    shearnet-train --config configs/paper/fiducial.yaml
+    shearnet-train --config configs/paper/unit_tests/fourth.yaml
     shearnet-train --config configs/example.yaml --run runs/example
     shearnet-train --config configs/example.yaml --run runs/example --dry-run
 
@@ -26,7 +26,7 @@ logger = get_logger(__name__)
 logging.getLogger("absl").setLevel(logging.ERROR)
 
 _EXAMPLES = """examples:
-  shearnet-train --config configs/paper/fiducial.yaml
+  shearnet-train --config configs/paper/unit_tests/fourth.yaml
   shearnet-train --config configs/example.yaml --run runs/example
   shearnet-train --config configs/example.yaml --run runs/example --dry-run
 """

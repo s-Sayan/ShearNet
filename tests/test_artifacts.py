@@ -108,7 +108,7 @@ def test_training_and_restoring_build_the_same_model():
     """model_kwargs is the one map from config to build_model; TrainConfig agrees."""
     from shearnet.core.specs import TrainConfig
 
-    config = Config.from_file("configs/paper/fiducial.yaml")
+    config = Config.from_file("configs/paper/unit_tests/fourth.yaml")
     tc = TrainConfig.from_config(config)
     rename = {"nn": "nn", "galaxy_type": "galaxy_type", "psf_type": "psf_type"}
     for key, value in model_kwargs(config).items():

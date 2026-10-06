@@ -21,6 +21,8 @@ plain mapping and returns a fully populated, validated nested dict.
 
 from __future__ import annotations
 
+import re
+
 import copy
 import difflib
 import math
@@ -59,6 +61,12 @@ def _positive(value):
 
 def _non_negative(value):
     return None if value >= 0 else "must be >= 0"
+
+
+def _ngmix_psf_model(value):
+    if value == "gauss" or re.fullmatch(r"(em|coellip)[1-9]\d*", value):
+        return None
+    return "must be gauss, emN (EM mixture of N Gaussians) or coellipN"
 
 
 def _fraction(value):
@@ -327,7 +335,11 @@ FIELDS: Dict[str, Field] = {
     "evaluation.metacal.shearnet": Field(
         "bool", True, "Also run ShearNet on the nine metacal images ngmix fits."),
     "evaluation.ngmix.gal_model": Field("str", "gauss", "ngmix galaxy model."),
-    "evaluation.ngmix.psf_model": Field("str", "gauss", "ngmix PSF model."),
+    "evaluation.ngmix.psf_model": Field(
+        "str", "gauss", "ngmix PSF model: gauss (one Gaussian), emN (EM mixture of N "
+        "Gaussians) or coellipN. LITB III fits em5; with one Gaussian the SuperBIT PSFEx "
+        "profiles are not represented and the R^PSF correction overcorrects.",
+        check=_ngmix_psf_model),
 }
 
 #: Settings an evaluation may change relative to the run it measures. Anything

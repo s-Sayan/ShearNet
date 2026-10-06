@@ -105,15 +105,20 @@ def test_train_config_fields_are_all_accepted_by_train_model():
 def test_the_upfront_path_actually_carries_the_d4_schedule():
     """Accepting a keyword is not the same as delivering its value.
 
-    tier2/06 is d4-fork-like with generation: upfront, so it routes through
+    UT4's d4-fork-like model trained with generation: upfront routes through
     TrainConfig -> train_model. Before this was threaded, that path fell back to
     the default (32,48,64)/(2,2,1)/(1,1,1) backbone while the config named the
     trimmed one -- silently, which is how a wrong number reaches a table.
     """
     from shearnet.config.config_handler import Config
+    from shearnet.config.loader import read_yaml
     from shearnet.core.specs import TrainConfig
 
-    config = Config.from_file(REPO / "configs/paper/ablations/tier2/06_d4_equivariant.yaml")
+    raw = read_yaml(REPO / "configs/paper/unit_tests/fourth.yaml")
+    raw["training"]["generation"] = "upfront"
+    for inloop_only in ("response", "noise"):
+        raw["training"].pop(inloop_only, None)
+    config = Config.from_dict(raw, base_dir=str(REPO / "configs/paper/unit_tests"))
     kwargs = TrainConfig.from_config(config).as_kwargs()
     for key in ("d4_features", "d4_depths_galaxy", "d4_depths_psf", "design"):
         assert kwargs.get(key) == config.get(f"model.{key}"), key

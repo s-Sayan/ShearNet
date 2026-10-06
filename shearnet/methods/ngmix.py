@@ -206,7 +206,12 @@ def make_struct(res, obs, shear_type):
     tpsf_list = []
 
     try:
-        tpsf_list.append(obs.psf.meta["result"]["T"])
+        psf_result = obs.psf.meta["result"]
+        # a single-model PSF fit reports T; an EM mixture (psf_model: em5, as
+        # SuperBIT uses) only carries the fitted mixture. Missing it here left
+        # Tpsf NaN, and every T/Tpsf cut then dropped every object.
+        tpsf_list.append(psf_result["T"] if "T" in psf_result
+                         else psf_result.get_gmix().get_T())
     except Exception:
         # No cached PSF fit result; Tpsf is left as NaN (handled below).
         pass

@@ -23,7 +23,7 @@
 #   sbatch scripts/shearnet.sbatch --train-only CONFIG [RUN_DIR]
 #       train without evaluating (a hyperparameter sweep ranks on val loss).
 #
-#   sbatch --array=0-27%4 scripts/shearnet.sbatch --list configs/paper/runs.txt
+#   sbatch --array=0-3 scripts/shearnet.sbatch --list configs/paper/runs.txt
 #       one line of the list per array task (0-based, comments and blank lines
 #       skipped). A line is the arguments of one of the forms above,
 #       whitespace separated, so paths cannot contain spaces.

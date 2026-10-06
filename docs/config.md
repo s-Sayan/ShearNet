@@ -138,6 +138,6 @@ the translation.
 | `metacal.step` | float | `0.01` | One-sided metacal shear step (ngmix 'step', SuperBIT 'mcal_shear'). The +/- products are 2*step apart. |
 | `metacal.shearnet` | bool | `True` | Also run ShearNet on the nine metacal images ngmix fits. |
 | `ngmix.gal_model` | str | `gauss` | ngmix galaxy model. |
-| `ngmix.psf_model` | str | `gauss` | ngmix PSF model. |
+| `ngmix.psf_model` | str | `gauss` | ngmix PSF model: gauss (one Gaussian), emN (EM mixture of N Gaussians) or coellipN. LITB III fits em5; with one Gaussian the SuperBIT PSFEx profiles are not represented and the R^PSF correction overcorrects. |
 
 <!-- generated:end -->

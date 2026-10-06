@@ -208,3 +208,55 @@ def test_a_failed_fit_is_a_flagged_row_not_a_missing_one():
     assert fit["flags"][0] != 0
     assert np.isnan(fit["g"][0]).all()
     assert FLAG_MISSING > 0
+
+
+@pytest.mark.parametrize("psf_model", ["gauss", "em3"])
+def test_the_plain_fit_takes_an_em_psf_model(psf_model):
+    """SuperBIT fits the PSF with an EM mixture; the plain fit read result["T"],
+    which an EM result does not have, so psf_model: em5 crashed the evaluation."""
+    import galsim
+    import ngmix
+
+    from shearnet.evaluation.measurements import fit_original
+
+    scale, npix = 0.141, 33
+    jac = ngmix.DiagonalJacobian(row=(npix - 1) / 2, col=(npix - 1) / 2, scale=scale)
+    psf = galsim.Moffat(beta=3, fwhm=0.5).shear(g1=0.03, g2=-0.02)
+    gal = galsim.Convolve(galsim.Exponential(half_light_radius=0.4, flux=1e4), psf)
+    rng = np.random.RandomState(3)
+    obs = []
+    for _ in range(3):
+        image = gal.drawImage(nx=npix, ny=npix, scale=scale).array
+        image = image + rng.normal(0, 1.0, image.shape)
+        psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
+        obs.append(ngmix.Observation(
+            image, weight=np.ones_like(image), jacobian=jac,
+            psf=ngmix.Observation(psf_im, weight=np.full(psf_im.shape, 1e6), jacobian=jac)))
+    out = fit_original(obs, seed=1, psf_model=psf_model, gal_model="gauss", nproc=1)
+    assert np.all(out["flags"] == 0)
+    assert np.all(np.isfinite(out["Tpsf"])) and np.all(out["Tpsf"] > 0)
+
+
+def test_metacal_records_tpsf_with_an_em_psf_model():
+    """With an EM PSF fit the metacal Tpsf came back NaN, so a T/Tpsf cut
+    silently removed every object."""
+    import galsim
+    import ngmix
+
+    from shearnet.evaluation.measurements import metacal
+
+    scale, npix = 0.141, 33
+    jac = ngmix.DiagonalJacobian(row=(npix - 1) / 2, col=(npix - 1) / 2, scale=scale)
+    psf = galsim.Moffat(beta=3, fwhm=0.5)
+    gal = galsim.Convolve(galsim.Exponential(half_light_radius=0.4, flux=1e4), psf)
+    image = gal.drawImage(nx=npix, ny=npix, scale=scale).array
+    image = image + np.random.RandomState(4).normal(0, 1.0, image.shape)
+    psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
+    obs = [ngmix.Observation(image, weight=np.ones_like(image), jacobian=jac,
+                             psf=ngmix.Observation(psf_im, weight=np.full(psf_im.shape, 1e6),
+                                                   jacobian=jac))]
+    fits, _, _ = metacal(obs, seed=1, step=0.01, psf="dilate", psf_model="em3",
+                         gal_model="gauss", nproc=1)
+    for t in ("noshear", "1p", "1m"):
+        assert fits[t]["flags"][0] == 0
+        assert np.isfinite(fits[t]["Tpsf"][0]) and fits[t]["Tpsf"][0] > 0

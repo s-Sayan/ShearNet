@@ -41,9 +41,8 @@ shearnet-eval  --run runs/smoke
   unit and meaning; the same script regenerates `docs/catalog.md`. The catalog
   holds raw measurements only -- anything derived (responses, biases, cuts)
   belongs downstream.
-- **The paper configs** are generated: edit `configs/paper/fiducial.yaml` or the
-  arm's entry in `configs/paper/generate.py`, then run it. `--check` (and the
-  test suite) catches a hand edit.
+- **The paper configs** are the four unit tests in `configs/paper/unit_tests/`;
+  `tests/test_paper_configs.py` checks they differ only in the simulation.
 
 ## Style
 

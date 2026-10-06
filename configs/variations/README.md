@@ -4,5 +4,5 @@ The exploratory runs that led to the fiducial, one config each, with the notes
 that were written for them as the header. They are not part of the paper
 campaign (that is `configs/paper/`); they are kept so any of them can be rerun.
 
-The fiducial config is `configs/paper/fiducial.yaml`.
+The fiducial config is UT4, `configs/paper/unit_tests/fourth.yaml`.
 Evaluation requires a held-out catalog.

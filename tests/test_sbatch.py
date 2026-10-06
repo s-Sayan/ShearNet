@@ -110,6 +110,6 @@ def test_usage_is_the_header(env):
 def test_paper_run_list_lines_are_real_configs():
     lines = [line.split() for line in (REPO / "configs/paper/runs.txt").read_text().splitlines()
              if line.strip() and not line.lstrip().startswith("#")]
-    assert len(lines) == 28
+    assert len(lines) == 4
     for fields in lines:
         assert len(fields) == 1 and (REPO / fields[0]).is_file(), fields
