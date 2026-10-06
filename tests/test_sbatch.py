@@ -90,6 +90,30 @@ def test_list_picks_the_array_task_line(env):
     assert run(environ, "--list", "runs.txt").returncode != 0  # not an array job
 
 
+def test_refuses_without_the_environment(env):
+    environ, log, _ = env
+    bare = "/usr/bin:/bin"
+    if shutil.which("shearnet-train", path=bare) or shutil.which("shearnet-eval", path=bare):
+        pytest.skip("shearnet is installed system-wide")
+    out = run(dict(environ, PATH=bare), "cfg.yaml", "runs/a")
+    assert out.returncode != 0 and not calls(log)
+    assert "activate the environment" in out.stderr
+
+
+def test_thread_and_x64_defaults_are_exported(env):
+    environ, log, tmp = env
+    (tmp / "bin" / "shearnet-train").write_text(
+        '#!/bin/bash\necho "$OMP_NUM_THREADS $OPENBLAS_NUM_THREADS $JAX_ENABLE_X64" >> "$STUB_LOG"\n')
+    for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "JAX_ENABLE_X64"):
+        environ.pop(name, None)
+    assert run(environ, "--train-only", "cfg.yaml", "runs/a").returncode == 0
+    assert calls(log) == ["1 1 1"]
+    # an explicit setting wins
+    assert run(dict(environ, OMP_NUM_THREADS="4"), "--train-only", "cfg.yaml",
+               "runs/a").returncode == 0
+    assert calls(log)[-1] == "4 1 1"
+
+
 def test_extra_args_pass_through(env):
     environ, log, _ = env
     out = run(dict(environ, SHEARNET_TRAIN_ARGS="--overwrite -v",

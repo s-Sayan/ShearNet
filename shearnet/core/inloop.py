@@ -46,7 +46,7 @@ never toggled at runtime -- see :func:`~shearnet.core.dataset_jax.render_dtype`
 for why that would break jax-galsim's internal caches). The stamps are then
 **cast to ``net_dtype`` (float32 by default) before the network sees them**.
 
-That cast is what makes ``JAX_ENABLE_X64=1`` in ``setup_env.sh`` free: the
+That cast is what makes ``JAX_ENABLE_X64=1`` (``scripts/shearnet.sbatch``) free: the
 renderer gets float64 where the k-space cancellations need it, while
 parameters, activations and optimiser state stay float32, so training memory
 and speed are unchanged. Without it, a global x64 flag silently doubles the

@@ -31,8 +31,8 @@
 # The #SBATCH lines above are this cluster's defaults; override any of them on
 # the sbatch command line (sbatch --time=12:00:00 ...).
 #
-# Environment: $SHEARNET_ENV (a script to source: conda activation, module
-# loads) if set, else ./setup_env.sh if the checkout has one. Extra flags for
+# Environment: the job inherits the shell you submit from, so activate the env
+# first (or set $SHEARNET_ENV to a script to source). Extra flags for
 # the two commands go in $SHEARNET_TRAIN_ARGS / $SHEARNET_EVAL_ARGS (e.g.
 # SHEARNET_TRAIN_ARGS=--overwrite to restart a failed run in place).
 
@@ -44,11 +44,14 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}"
 if [[ -n "${SHEARNET_ENV:-}" ]]; then
     # shellcheck disable=SC1090
     source "$SHEARNET_ENV"
-elif [[ -f setup_env.sh ]]; then
-    # shellcheck disable=SC1091
-    source setup_env.sh
 fi
 export MPLBACKEND=Agg
+# one thread per BLAS/OpenMP pool: the dataset and ngmix workers are processes
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-2}"
 # float64 rendering for the in-loop trainer and the evaluation; must be set
 # before Python starts, it cannot be changed inside a process
 export JAX_ENABLE_X64="${JAX_ENABLE_X64:-1}"
@@ -68,6 +71,12 @@ case "${1:-}" in
     --eval-only) MODE=eval; shift ;;
     --train-only) MODE=train-only; shift ;;
 esac
+
+if ! command -v shearnet-train >/dev/null || ! command -v shearnet-eval >/dev/null; then
+    echo "shearnet-train / shearnet-eval are not on PATH: activate the environment" \
+         "before sbatch (conda activate shearnet_all), or set SHEARNET_ENV" >&2
+    exit 1
+fi
 
 started=$(date +%s)
 echo "job ${SLURM_JOB_ID:-local} on $(hostname) at $(date)"

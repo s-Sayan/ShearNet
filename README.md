@@ -134,8 +134,9 @@ sbatch scripts/shearnet.sbatch --eval-only RUN_DIR [EVAL_CONFIG EVAL_NAME]
 sbatch --array=0-3 scripts/shearnet.sbatch --list configs/paper/runs.txt
 ```
 
-It sources `$SHEARNET_ENV` (or `./setup_env.sh`) for the environment and sets
-`JAX_ENABLE_X64=1`. The header of the script documents the rest.
+The job inherits the shell it is submitted from, so activate the environment
+first (or point `$SHEARNET_ENV` at a script to source); it sets `JAX_ENABLE_X64=1`
+and one thread per BLAS/OpenMP pool. The header of the script documents the rest.
 `research/hyperparam_search/` writes sweep configs and a run list for the same
 script.
 

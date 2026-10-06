@@ -31,7 +31,7 @@ FWHM = 0.5
 # Agreement with GalSim, and JVP-vs-finite-difference, are float64-level
 # statements. Rendering follows the process-wide flag (it is never toggled at
 # runtime -- see render_dtype), so these assertions only hold under
-# JAX_ENABLE_X64=1, which is what setup_env.sh exports.
+# JAX_ENABLE_X64=1, which is what scripts/shearnet.sbatch exports.
 needs_f64 = pytest.mark.skipif(
     not jax.config.jax_enable_x64,
     reason="float64-level agreement; run with JAX_ENABLE_X64=1",

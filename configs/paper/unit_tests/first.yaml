@@ -45,8 +45,8 @@ simulation:
     mode: ideal
     psfex_file: /home/adfield/weak_lensing/superbit-lensing-jax-test/simulated_data/sim_utils/emp_psfs/emp_psfs_best/psfex_all_except_best
   catalogs:
-    train_file: /home/adfield/ShearNet/cosmos_catalog_nocut_train.fits
-    eval_file: /home/adfield/ShearNet/cosmos_catalog_nocut_eval.fits
+    train_file: /home/adfield/SHEARNET_DATA/cosmos_catalog_train.fits
+    eval_file: /home/adfield/SHEARNET_DATA/cosmos_catalog_eval.fits
 model:
   type: d4-fork-like
   fusion: transformer
