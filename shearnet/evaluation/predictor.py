@@ -79,6 +79,26 @@ class RunPredictor:
         return (preds * jnp.asarray(self.label_normalizer["std"])
                 + jnp.asarray(self.label_normalizer["mean"]))
 
+    def compile(self, row_counts, batch_size: int, galaxy_npix: int, psf_npix: int) -> float:
+        """Compile every batch shape that calls with ``row_counts`` rows will use.
+
+        ``jax.jit`` compiles once per input shape: a full batch, plus each
+        distinct remainder. Doing it up front keeps compilation out of the
+        timed predictions. Returns the seconds it took.
+        """
+        import time
+
+        shapes = set()
+        for rows in row_counts:
+            full, rest = divmod(int(rows), batch_size)
+            shapes |= ({batch_size} if full else set()) | ({rest} if rest else set())
+        start = time.perf_counter()
+        for rows in sorted(shapes):
+            galaxy = np.zeros((rows, galaxy_npix, galaxy_npix), np.float32)
+            psf = np.zeros((rows, psf_npix, psf_npix), np.float32) if self.uses_psf else None
+            self(galaxy, psf, batch_size)
+        return time.perf_counter() - start
+
     def __call__(self, galaxy_images, psf_images, batch_size: int = 4096) -> np.ndarray:
         """``(N, len(output_keys))`` predictions, forwarded ``batch_size`` at a time."""
         import jax.numpy as jnp

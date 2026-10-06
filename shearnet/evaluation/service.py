@@ -34,6 +34,7 @@ from ..parallel import resolve_nproc
 from .measurements import (
     METACAL_TYPES,
     NGMIX_CHUNK,
+    TIMING_FIELDS,
     fit_original,
     measure_psf,
     metacal,
@@ -148,9 +149,15 @@ def _evaluate(config: Config, run: RunDir, edir: EvaluationDir) -> Path:
 
     blocks: List[Dict] = []
     psf_reference = psf_moments = None
+    compile_seconds = 0.0
+    workers = resolve_nproc(nproc, n_tasks=n) if runs_metacal else 0
     for s, scene in enumerate(scenes):
         for k, rotation in enumerate(rotations):
             t0 = time.time()
+            # wall seconds of each stage of this block; ngmix's per-object CPU
+            # seconds go in the NGMIX table
+            wall = dict.fromkeys(("shearnet", "shearnet_metacal", "ngmix_fit",
+                                  "ngmix_metacal"), 0.0)
             index = s * len(rotations) + k
             rows = slice(index * n, (index + 1) * n)
             keys = {
@@ -177,9 +184,18 @@ def _evaluate(config: Config, run: RunDir, edir: EvaluationDir) -> Path:
                                                                 config.get("simulation.noise_sigma"))))
 
             if want_shearnet:
+                if index == 0:
+                    chunks = [min(NGMIX_CHUNK, n - start) for start in range(0, n, NGMIX_CHUNK)]
+                    compile_seconds = predictor.compile(
+                        [n] + ([9 * m for m in chunks] if shearnet_metacal else []), batch,
+                        block.galaxy.shape[-1], block.psf.shape[-1])
+                    logger.info("ShearNet compiled in %.0f s (kept out of the timings)",
+                                compile_seconds)
+                tick = time.perf_counter()
+                preds = predictor(block.galaxy, block.psf, batch)
+                wall["shearnet"] += time.perf_counter() - tick
                 writer.fill("SHEARNET", rows, dict(
-                    keys, **_shearnet_values(predictor(block.galaxy, block.psf, batch),
-                                             output_keys, "original")))
+                    keys, **_shearnet_values(preds, output_keys, "original")))
             if want_ngmix:
                 writer.fill("NGMIX", rows, keys)
 
@@ -189,26 +205,38 @@ def _evaluate(config: Config, run: RunDir, edir: EvaluationDir) -> Path:
                 stop = min(start + NGMIX_CHUNK, n)
                 chunk = slice(rows.start + start, rows.start + stop)
                 if want_ngmix:
-                    fit = fit_original(renderer.observations(block.galaxy[start:stop],
-                                                             block.psf[start:stop]),
-                                       seed=seed, **ngmix_kw)
+                    observations = renderer.observations(block.galaxy[start:stop],
+                                                         block.psf[start:stop])
+                    tick = time.perf_counter()
+                    fit = fit_original(observations, seed=seed, **ngmix_kw)
+                    wall["ngmix_fit"] += time.perf_counter() - tick
                     failures["ngmix_original"] += int(np.count_nonzero(fit["flags"]))
-                    writer.fill("NGMIX", chunk, _ngmix_values(fit, "original"))
+                    timing = {f"fit_{name}": fit.pop(name) for name in TIMING_FIELDS}
+                    writer.fill("NGMIX", chunk, dict(_ngmix_values(fit, "original"), **timing))
                 if runs_metacal:
                     images = want_shearnet and shearnet_metacal
+                    observations = renderer.observations(block.galaxy[start:stop],
+                                                         block.psf[start:stop])
+                    tick = time.perf_counter()
                     fits, gal_stack, psf_stack = metacal(
-                        renderer.observations(block.galaxy[start:stop], block.psf[start:stop]),
-                        seed=mseed, step=step, psf=reconv, return_images=images, **ngmix_kw)
+                        observations, seed=mseed, step=step, psf=reconv, return_images=images,
+                        **ngmix_kw)
+                    wall["ngmix_metacal"] += time.perf_counter() - tick
                     bad = np.zeros(stop - start, dtype=bool)
                     for t in METACAL_TYPES:
                         bad |= fits[t]["flags"] != 0
                         if want_ngmix:
                             writer.fill("NGMIX", chunk, _ngmix_values(fits[t], t))
+                    if want_ngmix:
+                        writer.fill("NGMIX", chunk, {f"metacal_{name}": value
+                                                     for name, value in fits["timing"].items()})
                     failures["ngmix_metacal"] += int(bad.sum())
                     if images:
                         m, npix = gal_stack.shape[0], gal_stack.shape[-1]
+                        tick = time.perf_counter()
                         preds = predictor(gal_stack.reshape(m * 9, npix, npix),
                                           psf_stack.reshape(m * 9, npix, npix), batch)
+                        wall["shearnet_metacal"] += time.perf_counter() - tick
                         preds = preds.reshape(m, 9, len(output_keys))
                         values = {}
                         for j, t in enumerate(METACAL_TYPES):
@@ -221,7 +249,10 @@ def _evaluate(config: Config, run: RunDir, edir: EvaluationDir) -> Path:
                            "n_records": n, "metacal_seed": mseed if runs_metacal else -1,
                            "ngmix_seed": seed if want_ngmix else -1,
                            "noise_quarter_turns": quarter_turns(rotation),
-                           "seconds": round(seconds, 1)})
+                           "seconds": round(seconds, 1),
+                           "render_seconds": rendered,
+                           **{f"{stage}_seconds": value for stage, value in wall.items()},
+                           "ngmix_workers": workers})
             logger.info(
                 "block %d/%d: scene %s, rotation %g: rendered in %.0f s, measured in %.0f s%s",
                 index + 1, work["blocks"], scene["name"], rotation, rendered,
@@ -232,7 +263,7 @@ def _evaluate(config: Config, run: RunDir, edir: EvaluationDir) -> Path:
 
     path = edir.catalog_path(run_name)
     header = _primary_header(config, run, edir, work)
-    extra = _metadata_hdus(config, run, renderer, blocks, scenes, rotations)
+    extra = _metadata_hdus(config, run, renderer, blocks, scenes, rotations, compile_seconds)
     writer.write(path, header, extra)
     writer.cleanup()
     seconds = round(time.time() - began, 1)
@@ -287,7 +318,7 @@ def _primary_header(config: Config, run: RunDir, edir: EvaluationDir, work: Dict
     }
 
 
-def _metadata_hdus(config, run, renderer, blocks, scenes, rotations) -> list:
+def _metadata_hdus(config, run, renderer, blocks, scenes, rotations, compile_seconds) -> list:
     training = run.config_resolved.read_text()
     evaluation = config.to_yaml()
     return [
@@ -324,6 +355,15 @@ def _metadata_hdus(config, run, renderer, blocks, scenes, rotations) -> list:
                          "GPriorBA/CenPrior/flat priors of shearnet.methods.ngmix, PSF "
                          f"{config.get('evaluation.ngmix.psf_model')}",
             "ngmix_chunk": NGMIX_CHUNK,
+            "timing": "NGMIX.*_cpu_seconds: CPU seconds per object on one core, measured in "
+                      "the worker (the PSF part separately). BLOCKS.*_seconds: wall seconds "
+                      "of each stage of the block; ngmix ran on BLOCKS.ngmix_workers "
+                      "single-threaded processes, ShearNet on the JAX device in PROVENANCE, in batches "
+                      "of evaluation.batch_size, with its jit compilation done beforehand "
+                      "(shearnet_compile_seconds) and not counted",
+            "shearnet_compile_seconds": round(compile_seconds, 1),
+            "shearnet_batch_size": config.get("evaluation.batch_size"),
+            "ngmix_workers": blocks[0]["ngmix_workers"] if blocks else 0,
             "noise_sigma": config.get("simulation.noise_sigma"),
             "pixel_scale_arcsec": config.get("simulation.pixel_scale"),
             "eval_catalog": config.get("simulation.catalogs.eval_file"),

@@ -13,6 +13,7 @@ worker count -- see :func:`shearnet.methods.ngmix.mp_fit_one_single`).
 
 from __future__ import annotations
 
+import time
 from typing import Dict, Optional, Sequence
 
 import numpy as np
@@ -55,6 +56,10 @@ FIT_FIELDS = {
     "s2n": (),
     "flags": (),
 }
+
+#: Per-object cost of an ngmix measurement (plain fit, or the whole metacal
+#: bootstrap): CPU seconds on one core, and how many of them the PSF fits took.
+TIMING_FIELDS = ("cpu_seconds", "psf_cpu_seconds")
 
 #: Flag for "ngmix returned no result of this type at all".
 FLAG_MISSING = 1 << 30
@@ -131,10 +136,22 @@ def stamp_observables(galaxy_images, noise_sigma: float) -> Dict[str, np.ndarray
 # ngmix on the original stamp
 # ----------------------------------------------------------------------
 def _fit_one(runner, psf_runner, obs, index=0):
-    """One plain fit; a failure is reported in the flags, not raised."""
+    """One plain fit, timed; a failure is reported in the flags, not raised."""
+    start = time.process_time()
+    psf_start = getattr(psf_runner, "seconds", np.nan)
+    row = _fit_one_untimed(runner, psf_runner, obs, index)
+    row["cpu_seconds"] = time.process_time() - start
+    row["psf_cpu_seconds"] = getattr(psf_runner, "seconds", np.nan) - psf_start
+    return row
+
+
+def _fit_one_untimed(runner, psf_runner, obs, index):
+    from ..methods.ngmix import set_tguess
+
     row = {name: np.full(shape, np.nan) for name, shape in FIT_FIELDS.items()}
     try:
         psf_runner.go(obs=obs.psf)
+        set_tguess(runner, obs)
         res = runner.go(obs=obs)
     except Exception as exc:  # ngmix raises a zoo of errors on hopeless stamps
         logger.debug("ngmix fit failed on object %d: %s", index, exc)
@@ -171,20 +188,21 @@ def fit_original(observations: Sequence, *, seed: int, psf_model: str, gal_model
 
     Same fitter, guesser and tolerances as the metacal fits
     (:func:`shearnet.methods.ngmix.build_runners`), seeded with ``seed`` afresh
-    for every call.
+    for every call. Besides :data:`FIT_FIELDS` it returns each object's
+    :data:`TIMING_FIELDS`.
     """
 
-    from ..methods.ngmix import build_runners
+    from ..methods.ngmix import CpuStopwatch, build_runners
     from ..parallel import cpu_only_children, resolve_nproc, spawn_map
 
     n = len(observations)
     out = _empty_fit(n)
+    out.update({name: np.full(n, np.nan) for name in TIMING_FIELDS})
     if n == 0:
         return out
     rng = np.random.RandomState(seed)
-    tguess = 4 * observations[0]._jacobian.get_scale() ** 2
-    runner, psf_runner = build_runners(rng, psf_model=psf_model, gal_model=gal_model,
-                                       Tguess=tguess)
+    runner, psf_runner = build_runners(rng, psf_model=psf_model, gal_model=gal_model)
+    psf_runner = CpuStopwatch(psf_runner)
     workers = resolve_nproc(nproc, n_tasks=n)
     if workers == 1:
         rows = [_fit_one(runner, psf_runner, obs, i) for i, obs in enumerate(observations)]
@@ -193,7 +211,7 @@ def fit_original(observations: Sequence, *, seed: int, psf_model: str, gal_model
             rows = list(spawn_map(_pool_fit, observations, workers, initializer=_pool_init,
                                   initargs=(runner, psf_runner), chunksize=64))
     for i, row in enumerate(rows):
-        for name in FIT_FIELDS:
+        for name in (*FIT_FIELDS, *TIMING_FIELDS):
             out[name][i] = row[name]
     return out
 
@@ -207,7 +225,9 @@ def metacal(observations: Sequence, *, seed: int, step: float, psf: str, psf_mod
 
     Returns ``(fits, galaxy_stack, psf_stack)``. ``fits[t]`` holds
     :data:`FIT_FIELDS` for metacal type ``t``; a type ngmix did not return is
-    flagged :data:`FLAG_MISSING`. With ``return_images`` the stacks are
+    flagged :data:`FLAG_MISSING`. ``fits["timing"]`` holds each object's
+    :data:`TIMING_FIELDS` for its whole bootstrap: making the products, their
+    PSF fits and their galaxy fits. With ``return_images`` the stacks are
     ``(N, 9, npix, npix)`` float32 -- the exact image/PSF pairs ngmix fitted, so
     another estimator can measure the same products -- else ``None``.
     """
@@ -215,6 +235,7 @@ def metacal(observations: Sequence, *, seed: int, step: float, psf: str, psf_mod
 
     n = len(observations)
     fits = {t: _empty_fit(n) for t in METACAL_TYPES}
+    fits["timing"] = {name: np.full(n, np.nan) for name in TIMING_FIELDS}
     if n == 0:
         return fits, None, None
     results, _ = mp_fit_one_single(
@@ -229,6 +250,8 @@ def metacal(observations: Sequence, *, seed: int, step: float, psf: str, psf_mod
     )
     rows = [r[0] for r in results] if return_images else results
     for i, struct in enumerate(rows):
+        for name in TIMING_FIELDS:
+            fits["timing"][name][i] = struct[name][0] if len(struct) else np.nan
         for row in struct:
             t = str(row["shear_type"])
             if t not in fits:

@@ -41,7 +41,7 @@ row and never a zero.
 | `NGMIX` | ngmix's fits (if `ngmix` was measured) |
 | `SCHEMA` | every column: dtype, shape, unit, meaning |
 | `SCENES`, `ROTATIONS` | the scenes and ring stations |
-| `BLOCKS` | per scene x station: first record, ngmix seeds, seconds |
+| `BLOCKS` | per scene x station: first record, ngmix seeds, wall seconds of each stage, ngmix worker count |
 | `PSF_FILES` | the PSFEx files `TRUTH.psf_file_id` points into |
 | `PROTOCOL` | the measurement protocol in words and numbers |
 | `CONFIG` | the run's training config and this evaluation's config, as YAML |
@@ -93,6 +93,18 @@ corrected shape is `g_noshear - Rbar_psf @ psf_g` for both signs. Average the
 corrected shapes and `Rgamma` over the stations (an object failed at one
 station is failed), then form the paired estimator `<(e+ - e-)/2> / <R>`.
 All stations are rendered in float32, as are the training stamps.
+
+**Timing.** `NGMIX.fit_cpu_seconds` and `NGMIX.metacal_cpu_seconds` are what
+each object cost ngmix: CPU seconds on one core, measured inside the
+single-threaded worker, for the plain fit and for the whole metacal bootstrap
+(nine products, their PSF fits and galaxy fits). `*_psf_cpu_seconds` is the
+part spent fitting PSFs -- with `psf_model: em5`, most of it. ShearNet runs in
+batches on the device recorded in `PROVENANCE`, so it has no per-object time:
+`BLOCKS.shearnet_seconds` (original stamps) and `BLOCKS.shearnet_metacal_seconds`
+(the nine products) are wall seconds per block, with jit compilation done
+beforehand and reported separately (`PROTOCOL.shearnet_compile_seconds`).
+`BLOCKS.ngmix_fit_seconds` / `ngmix_metacal_seconds` are ngmix's wall seconds on
+`BLOCKS.ngmix_workers` processes, and `render_seconds` the simulation's.
 
 ## Columns
 
@@ -168,6 +180,10 @@ Every `*_original` column repeats for each metacal product with the suffix `_nos
 | `flux_original` | f8 | count | fitted flux, on the original stamp |
 | `s2n_original` | f8 |  | ngmix s2n of the fit, on the original stamp |
 | `flags_original` | i4 |  | ngmix flags; 0 is a good fit, 2**30 means no result, on the original stamp |
+| `fit_cpu_seconds` | f8 | s | CPU seconds of the plain fit of the original stamp (T guess, PSF fit, galaxy fit), on one core |
+| `fit_psf_cpu_seconds` | f8 | s | of fit_cpu_seconds, the PSF fit |
+| `metacal_cpu_seconds` | f8 | s | CPU seconds of this object's whole metacal bootstrap (making the nine products, their PSF fits and galaxy fits), on one core; once per object, not per product |
+| `metacal_psf_cpu_seconds` | f8 | s | of metacal_cpu_seconds, the PSF fits of the nine products |
 
 Every `*_original` column repeats for each metacal product with the suffix `_noshear`, `_1p`, `_1m`, `_2p`, `_2m`, `_1p_psf`, `_1m_psf`, `_2p_psf`, `_2m_psf`.
 

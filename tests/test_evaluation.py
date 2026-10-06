@@ -260,3 +260,130 @@ def test_metacal_records_tpsf_with_an_em_psf_model():
     for t in ("noshear", "1p", "1m"):
         assert fits[t]["flags"][0] == 0
         assert np.isfinite(fits[t]["Tpsf"][0]) and fits[t]["Tpsf"][0] > 0
+
+
+def _two_sizes(npix=33, scale=0.141):
+    """A small and a large galaxy: two different superbit-lensing T guesses."""
+    import galsim
+    import ngmix
+
+    jac = ngmix.DiagonalJacobian(row=(npix - 1) / 2, col=(npix - 1) / 2, scale=scale)
+    psf = galsim.Moffat(beta=3, fwhm=0.5)
+    psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
+    rng = np.random.RandomState(5)
+    obs = []
+    for hlr in (0.2, 0.6):
+        gal = galsim.Convolve(galsim.Exponential(half_light_radius=hlr, flux=1e4), psf)
+        image = gal.drawImage(nx=npix, ny=npix, scale=scale).array
+        obs.append(ngmix.Observation(
+            image + rng.normal(0, 1.0, image.shape), weight=np.ones_like(image), jacobian=jac,
+            psf=ngmix.Observation(psf_im, weight=np.full(psf_im.shape, 1e6), jacobian=jac)))
+    return obs
+
+
+def _record_t_guesses(monkeypatch):
+    import ngmix
+
+    seen = []
+    go = ngmix.runners.Runner.go
+
+    def spy(self, obs):
+        seen.append(self.guesser.T)
+        return go(self, obs)
+
+    monkeypatch.setattr(ngmix.runners.Runner, "go", spy)
+    return seen
+
+
+def test_the_plain_fit_guesses_t_per_object_like_superbit(monkeypatch):
+    """superbit-lensing (metacalibration/ngmix_fit.py) seeds each galaxy fit
+    with GaussMom(1.2).go(obs)['T'] of that object, not a fixed 4 * scale^2."""
+    import ngmix
+
+    from shearnet.evaluation.measurements import fit_original
+
+    obs = _two_sizes()
+    seen = _record_t_guesses(monkeypatch)
+    out = fit_original(obs, seed=1, psf_model="em3", gal_model="gauss", nproc=1)
+    assert np.all(out["flags"] == 0)
+    expected = [ngmix.gaussmom.GaussMom(fwhm=1.2).go(o)["T"] for o in obs]
+    assert seen == pytest.approx(expected) and expected[1] > 1.5 * expected[0]
+
+
+def test_every_metacal_product_is_guessed_from_the_original_stamp(monkeypatch):
+    import ngmix
+
+    from shearnet.evaluation.measurements import metacal
+
+    obs = _two_sizes()
+    seen = _record_t_guesses(monkeypatch)
+    fits, _, _ = metacal(obs, seed=1, step=0.01, psf="dilate", psf_model="em3",
+                         gal_model="gauss", nproc=1)
+    assert all(np.all(fits[t]["flags"] == 0) for t in ("noshear", "1p", "1m"))
+    per_object = len(seen) // len(obs)
+    for i, o in enumerate(obs):
+        t = ngmix.gaussmom.GaussMom(fwhm=1.2).go(o)["T"]
+        assert seen[i * per_object:(i + 1) * per_object] == pytest.approx([t] * per_object)
+
+
+def test_the_catalog_says_what_each_object_cost_ngmix(catalog):
+    ngmix = fits.getdata(catalog, "NGMIX")
+    for stage in ("fit", "metacal"):
+        total, psf = ngmix[f"{stage}_cpu_seconds"], ngmix[f"{stage}_psf_cpu_seconds"]
+        assert np.all(np.isfinite(total)) and np.all(total > 0), stage
+        assert np.all(psf >= 0) and np.all(psf <= total), stage
+    # metacal fits nine products, the plain fit one
+    assert np.median(ngmix["metacal_cpu_seconds"]) > np.median(ngmix["fit_cpu_seconds"])
+
+
+def test_the_blocks_time_every_stage(catalog):
+    blocks = fits.getdata(catalog, "BLOCKS")
+    for column in ("render_seconds", "shearnet_seconds", "shearnet_metacal_seconds",
+                   "ngmix_fit_seconds", "ngmix_metacal_seconds"):
+        assert np.all(np.isfinite(blocks[column])) and np.all(blocks[column] > 0), column
+    stages = sum(blocks[c] for c in ("render_seconds", "shearnet_seconds",
+                                     "shearnet_metacal_seconds", "ngmix_fit_seconds",
+                                     "ngmix_metacal_seconds"))
+    assert np.all(stages <= blocks["seconds"] + 0.1)
+    assert np.all(blocks["ngmix_workers"] >= 1)
+    protocol = {row["key"]: row["value"] for row in fits.getdata(catalog, "PROTOCOL")}
+    assert float(protocol["shearnet_compile_seconds"]) > 0
+
+
+def test_em_psf_fits_are_timed_apart_from_the_galaxy_fit():
+    import pickle
+
+    from shearnet.evaluation.measurements import fit_original, metacal
+    from shearnet.methods.ngmix import CpuStopwatch, build_runners
+
+    obs = _two_sizes()
+    out = fit_original(obs, seed=1, psf_model="em3", gal_model="gauss", nproc=1)
+    assert np.all((out["psf_cpu_seconds"] > 0) & (out["psf_cpu_seconds"] < out["cpu_seconds"]))
+    fits_, _, _ = metacal(obs, seed=1, step=0.01, psf="dilate", psf_model="em3",
+                          gal_model="gauss", nproc=1)
+    timing = fits_["timing"]
+    assert np.all((timing["psf_cpu_seconds"] > 0)
+                  & (timing["psf_cpu_seconds"] < timing["cpu_seconds"]))
+    # it travels to spawn workers with the runner it wraps
+    watch = pickle.loads(pickle.dumps(CpuStopwatch(build_runners(
+        np.random.RandomState(0), psf_model="em3")[1])))
+    watch.go(obs=obs[0].psf)
+    assert watch.seconds > 0 and watch.guesser is watch.runner.guesser
+
+
+def test_shearnet_is_compiled_before_it_is_timed(run):
+    """jit compiles once per batch shape; all of them are compiled up front so the
+    timed calls never include compilation."""
+    from shearnet.evaluation.predictor import RunPredictor
+
+    predictor = RunPredictor(run)
+    if not hasattr(predictor._jitted, "_cache_size"):
+        pytest.skip("this jax cannot report its compilation cache")
+    npix = 21  # the tiny run's stamp_size
+    rows = [10, 9 * 4]
+    assert predictor.compile(rows, 8, npix, npix) > 0
+    compiled = predictor._jitted._cache_size()
+    for r in rows:
+        psf = np.zeros((r, npix, npix), np.float32) if predictor.uses_psf else None
+        predictor(np.zeros((r, npix, npix), np.float32), psf, 8)
+    assert predictor._jitted._cache_size() == compiled

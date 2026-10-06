@@ -1,6 +1,8 @@
 """NGmix-based shear estimation and metacalibration utilities for ShearNet."""
 
 
+import time
+
 import ngmix
 import numpy as np
 
@@ -179,8 +181,14 @@ def make_struct(res, obs, shear_type):
         ("flux", "f8"),
         ("Tpsf", "f8"),
         ("g_cov", "f8", (2, 2)),
+        # the whole object's metacal cost, repeated on each of its rows; set by
+        # _metacal_struct, NaN otherwise
+        ("cpu_seconds", "f8"),
+        ("psf_cpu_seconds", "f8"),
     ]
     data = np.zeros(1, dtype=dt)
+    data["cpu_seconds"] = np.nan
+    data["psf_cpu_seconds"] = np.nan
     data["shear_type"] = shear_type
     data["flags"] = res["flags"]
 
@@ -406,14 +414,12 @@ def ngmix_pred(data_list, return_bad_indices=False):
     return preds
 
 
-def _metacal_bootstrapper(prior, rng, psf_model, gal_model, mcal_pars, Tguess):
+def _metacal_bootstrapper(prior, rng, psf_model, gal_model, mcal_pars):
     """The metacal bootstrapper, built one way for both the serial and pool paths."""
-    runner, psf_runner = build_runners(
-        rng, psf_model=psf_model, gal_model=gal_model, Tguess=Tguess, prior=prior
-    )
+    runner, psf_runner = build_runners(rng, psf_model=psf_model, gal_model=gal_model, prior=prior)
     metacal_kws = dict(
         runner=runner,
-        psf_runner=psf_runner,
+        psf_runner=CpuStopwatch(psf_runner),
         rng=rng,
         psf=mcal_pars["psf"],
         step=mcal_pars["mcal_shear"],
@@ -459,10 +465,15 @@ def _metacal_struct(boot, obs, return_images=False):
     ShearNet must see the exact galaxy/PSF pair ngmix fitted. Missing types come
     back as NaN planes so the stack shape never depends on the object.
     """
+    start = time.process_time()
+    psf_start = getattr(boot.psf_runner, "seconds", np.nan)
+    set_tguess(boot.runner, obs)
     resdict, obsdict = boot.go(obs)
     struct = np.hstack(
         [make_struct(res=sres, obs=obsdict[stype], shear_type=stype) for stype, sres in resdict.items()]
     )
+    struct["cpu_seconds"] = time.process_time() - start
+    struct["psf_cpu_seconds"] = getattr(boot.psf_runner, "seconds", np.nan) - psf_start
     if not return_images:
         return struct
     reference = next(iter(obsdict.values()))
@@ -556,13 +567,13 @@ def mp_fit_one_single(
     n = len(obslist)
     if n == 0:
         return [], []
-    Tguess = 4 * obslist[0]._jacobian.get_scale() ** 2
-    boot = _metacal_bootstrapper(prior, rng, psf_model, gal_model, mcal_pars, Tguess)
+    boot = _metacal_bootstrapper(prior, rng, psf_model, gal_model, mcal_pars)
 
     if collect_resdict:
         logger.info("metacal: %d objects, serial (collecting resdict)", n)
         data_list, resdict_list = [], []
         for obs in obslist:
+            set_tguess(boot.runner, obs)
             resdict, obsdict = boot.go(obs)
             data_list.append(
                 np.hstack(
@@ -580,6 +591,50 @@ def mp_fit_one_single(
     return _metacal_map(boot, obslist, workers, return_images=return_images), []
 
 
+class CpuStopwatch:
+    """A runner that adds up the CPU seconds spent in its ``go``.
+
+    Wraps the PSF runner so a fit can say how much of its cost was the PSF
+    (with ``psf_model: em5`` most of it). CPU time of the calling process, not
+    wall time: the fits run one per single-threaded worker, so it is the cost
+    of the object on one core whatever the pool size. Every other attribute is
+    the wrapped runner's; it pickles with the runner into spawn workers.
+    """
+
+    def __init__(self, runner):
+        self.runner = runner
+        self.seconds = 0.0
+
+    def go(self, *args, **kwargs):
+        start = time.process_time()
+        try:
+            return self.runner.go(*args, **kwargs)
+        finally:
+            self.seconds += time.process_time() - start
+
+    def __getattr__(self, name):
+        if name == "runner":  # not set yet: unpickling
+            raise AttributeError(name)
+        return getattr(self.runner, name)
+
+
+#: FWHM (arcsec) of the GaussMom weight whose T seeds every galaxy fit, as in
+#: superbit-lensing's ``metacalibration/ngmix_fit.py``.
+TGUESS_GAUSSMOM_FWHM = 1.2
+
+
+def set_tguess(runner, obs):
+    """Centre the galaxy T guess on this object, the way superbit-lensing does.
+
+    superbit-lensing measures ``GaussMom(1.2).go(obs)['T']`` on each object
+    before its fit and hands it to ``TPSFFluxAndPriorGuesser``; the metacal
+    products are all guessed from the original stamp's T. A stamp GaussMom
+    cannot measure (flux <= 0 under the weight) gives a NaN guess there too, and
+    the fit is then flagged rather than raised, as it is in superbit-lensing.
+    """
+    runner.guesser.T = ngmix.gaussmom.GaussMom(fwhm=TGUESS_GAUSSMOM_FWHM).go(obs)["T"]
+
+
 def build_runners(rng, psf_model="gauss", gal_model="gauss", ntry=20, Tguess=None, prior=None):
     """Construct the ngmix PSF/galaxy runners used by every fit in this module.
 
@@ -588,6 +643,9 @@ def build_runners(rng, psf_model="gauss", gal_model="gauss", ntry=20, Tguess=Non
     tolerances. If they drifted apart, a comparison between an ngmix baseline
     calibrated by metacal and the same baseline calibrated by a renderer
     response would be measuring the fitter, not the calibration.
+
+    ``Tguess`` is only a placeholder: every fit sets it per object with
+    :func:`set_tguess` first.
     """
     lm_pars = {"maxfev": 2000, "xtol": 5.0e-5, "ftol": 5.0e-5}
     psf_lm_pars = {"maxfev": 4000, "xtol": 5.0e-5, "ftol": 5.0e-5}
@@ -619,6 +677,7 @@ def _fit_one_shape(runner, psf_runner, obs, index=0):
     """One plain shape fit: ``(e, ok)``, with a failed fit reported not raised."""
     try:
         psf_runner.go(obs=obs.psf)
+        set_tguess(runner, obs)
         res = runner.go(obs=obs)
     except Exception as exc:
         logger.debug("ngmix shape fit failed on object %d: %s", index, exc)
@@ -663,8 +722,7 @@ def fit_shapes(obslist, seed=42, psf_model="gauss", gal_model="gauss", nproc=Non
     if n == 0:
         return np.zeros((0, 2)), np.zeros(0, dtype=bool)
     rng = np.random.RandomState(seed)
-    Tguess = 4 * obslist[0]._jacobian.get_scale() ** 2
-    runner, psf_runner = build_runners(rng, psf_model=psf_model, gal_model=gal_model, Tguess=Tguess)
+    runner, psf_runner = build_runners(rng, psf_model=psf_model, gal_model=gal_model)
     workers = resolve_nproc(nproc, n_tasks=n)
 
     if workers == 1:

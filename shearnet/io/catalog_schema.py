@@ -110,11 +110,28 @@ def _variant_columns(variant: str) -> List[Column]:
             for name, dtype, shape, unit, text in _NGMIX_FIELDS]
 
 
+#: What each object cost ngmix: CPU seconds on one core (the fits run one per
+#: single-threaded worker), and the part of them spent fitting PSFs.
+NGMIX_FIT_TIMING = [
+    Column("fit_cpu_seconds", "f8", (), "s", "CPU seconds of the plain fit of the original "
+           "stamp (T guess, PSF fit, galaxy fit), on one core"),
+    Column("fit_psf_cpu_seconds", "f8", (), "s", "of fit_cpu_seconds, the PSF fit"),
+]
+NGMIX_METACAL_TIMING = [
+    Column("metacal_cpu_seconds", "f8", (), "s", "CPU seconds of this object's whole metacal "
+           "bootstrap (making the nine products, their PSF fits and galaxy fits), on one "
+           "core; once per object, not per product"),
+    Column("metacal_psf_cpu_seconds", "f8", (), "s", "of metacal_cpu_seconds, the PSF fits "
+           "of the nine products"),
+]
+
+
 def ngmix_columns(metacal: bool = True) -> List[Column]:
-    columns = list(KEY_COLUMNS) + _variant_columns("original")
+    columns = list(KEY_COLUMNS) + _variant_columns("original") + NGMIX_FIT_TIMING
     if metacal:
         for variant in METACAL_TYPES:
             columns += _variant_columns(variant)
+        columns += NGMIX_METACAL_TIMING
     return columns
 
 
@@ -160,7 +177,7 @@ def markdown(output_keys: Sequence[str] = ("g1", "g2", "hlr", "flux")) -> str:
         "SHEARNET": [c for c in shearnet_columns(output_keys)
                      if c.name.endswith("_original") or c in KEY_COLUMNS],
         "NGMIX": [c for c in ngmix_columns() if c.name.endswith("_original")
-                  or c in KEY_COLUMNS],
+                  or c in KEY_COLUMNS] + NGMIX_FIT_TIMING + NGMIX_METACAL_TIMING,
     }
     for name, columns in tables.items():
         lines = [f"### {name}", "", "| column | type | unit | meaning |", "|---|---|---|---|"]
