@@ -1,11 +1,14 @@
 # The evaluation catalog
 
-`shearnet-eval --run RUN` writes one FITS file,
-`RUN/evaluations/<name>/<run_name>_<name>.fits`. It holds **raw measurements
-only**: what ShearNet predicted and what ngmix fitted, on every stamp, plus the
-truth the stamps were drawn from and everything needed to interpret them. It
-holds no response, no bias, no leakage slope, no selection, no weight and no
-correction -- those are computed from this file, downstream.
+Each evaluator writes its estimator's raw measurements, shared truth and stamp
+properties to a standalone FITS file. `shearnet-merge` joins the two complete
+catalogs after checking that both jobs observed the same things.
+
+Schema 2 keeps the scientific columns and adds SHA-256 object and observation
+UIDs plus fingerprints of the original and metacal images. It is the current
+format; readers must use schema 2. Its random streams differ from schema 1, so
+an old simulation realization should not be compared byte for byte with a new
+one.
 
 ## Rows
 
@@ -14,7 +17,9 @@ Every per-record table (`TRUTH`, `STAMP`, `SHEARNET`, `NGMIX`) has one row per
 
     record_id = (scene_id * n_rotations + rotation_id) * n_objects + catalog_row
 
-so the four tables line up row for row (and join on `record_id`).
+The tables line up row for row. The merge verifies `observation_uid`, the
+shared truth and the image fingerprints; a row number alone is not proof of a
+match.
 
 * A **scene** (`SCENES`: `scene_id`, `name`, `g1`, `g2`) is one applied reduced
   shear. The default five are `zero`, `g1_plus`, `g1_minus`, `g2_plus`,
@@ -34,14 +39,14 @@ row and never a zero.
 
 | HDU | what |
 |---|---|
-| `PRIMARY` | header: `SCHEMA`/`SCHEMAV`, `RUNNAME`, `EVALNAME`, `CKPTSHA` (sha256 of the model), `CKPTEPO`, `NOBJ`, `NSCENE`, `NROT`, `NRECORD`, `BACKEND`, `PSFMODE`, `X64`, `MCALSTEP`, `MCALPSF` |
+| `PRIMARY` | header: `SCHEMA`/`SCHEMAV`, `RUNNAME`, `EVALNAME`, `OBSSHA`, `IMPLSHA`, `CKPTSHA` (ShearNet model), `CKPTEPO`, `NOBJ`, `NSCENE`, `NROT`, `NRECORD`, `BACKEND`, `PSFMODE`, `X64`, `MCALSTEP`, `MCALPSF` |
 | `TRUTH` | what each stamp was drawn from |
 | `STAMP` | PSF moments and stamp-level observables |
 | `SHEARNET` | ShearNet's predictions (if `shearnet` was measured) |
 | `NGMIX` | ngmix's fits (if `ngmix` was measured) |
 | `SCHEMA` | every column: dtype, shape, unit, meaning |
 | `SCENES`, `ROTATIONS` | the scenes and ring stations |
-| `BLOCKS` | per scene x station: first record, ngmix seeds, wall seconds of each stage, ngmix worker count |
+| `BLOCKS` | per scene and station: record coverage and worker count |
 | `PSF_FILES` | the PSFEx files `TRUTH.psf_file_id` points into |
 | `PROTOCOL` | the measurement protocol in words and numbers |
 | `CONFIG` | the run's training config and this evaluation's config, as YAML |
@@ -68,7 +73,7 @@ particular one.
 * Two PSF sizes, both arcsec^2: `STAMP.psf_T_hsm` is GalSim HSM's `2 sigma^2`
   with `sigma = det(M)^(1/4)`;
   `STAMP.psf_T_admom` is the adaptive-moment trace `Irr + Icc`. `NGMIX.Tpsf_<t>`
-  is the T of ngmix's own Gaussian fit to the PSF of that variant -- for metacal
+  is the T of ngmix's configured model fit to the PSF of that variant -- for metacal
   products the dilated reconvolution PSF -- which is the `Tpsf_noshear`
   SuperBIT's `T/Tpsf` cut divides by.
 
@@ -92,19 +97,51 @@ separately, keep the objects good in both signs (all flags 0, finite `Rpsf` and
 corrected shape is `g_noshear - Rbar_psf @ psf_g` for both signs. Average the
 corrected shapes and `Rgamma` over the stations (an object failed at one
 station is failed), then form the paired estimator `<(e+ - e-)/2> / <R>`.
-All stations are rendered in float32, as are the training stamps.
+**Rendering and the merge.** Stamps are rendered in float64 on JAX's default
+device -- the GPU in the ShearNet job, the CPU in the ngmix job -- and cast to
+float32. The two devices agree to roundoff, not bit for bit, so `STAMP` records a
+fingerprint of every image both jobs measured -- the original galaxy and PSF
+stamps and the galaxy and PSF image of each metacal product: `sum |x|` and the
+image's projections on three fixed random +-1 patterns. Roundoff moves them by
+~1e-7 of `sum |x|`; a different galaxy, noise field or PSF, or the same image
+rotated, flipped or shifted, moves the projections hundreds of times the merge's
+tolerance. The merge requires every shared `TRUTH` and `STAMP` value to agree,
+each on its own: integers and identifiers exactly, floats to 1e-4 of their own
+size, fingerprints to 1e-4 of their image's `sum |x|`, and `flux_stamp` (which
+can sit near zero) to 1e-4 of its stamp's `sum |x|`. The merged file takes
+`TRUTH` and `STAMP` from the ngmix job and copies both measurement tables
+unchanged.
 
-**Timing.** `NGMIX.fit_cpu_seconds` and `NGMIX.metacal_cpu_seconds` are what
-each object cost ngmix: CPU seconds on one core, measured inside the
-single-threaded worker, for the plain fit and for the whole metacal bootstrap
-(nine products, their PSF fits and galaxy fits). `*_psf_cpu_seconds` is the
-part spent fitting PSFs -- with `psf_model: em5`, most of it. ShearNet runs in
-batches on the device recorded in `PROVENANCE`, so it has no per-object time:
-`BLOCKS.shearnet_seconds` (original stamps) and `BLOCKS.shearnet_metacal_seconds`
-(the nine products) are wall seconds per block, with jit compilation done
-beforehand and reported separately (`PROTOCOL.shearnet_compile_seconds`).
-`BLOCKS.ngmix_fit_seconds` / `ngmix_metacal_seconds` are ngmix's wall seconds on
-`BLOCKS.ngmix_workers` processes, and `render_seconds` the simulation's.
+**Pairing in metacal.** Every scene and station of a galaxy uses the same
+metacal fixnoise field. Schema 1 drew a separate one per scene.
+
+**PSF fits.** The PSF is the same in every scene and station, and metacal makes
+only six distinct PSF stamps from it (the original, the dilated reconvolution
+PSF shared by `noshear` and the four galaxy-shear products, and the four sheared
+ones). ngmix fits each of the six once per galaxy, seeded from the stamp, so the
+answer is the one a refit would give; the 200 PSF fits of five scenes x four
+stations x ten measurements become six.
+
+**Timing.** `NGMIX.fit_cpu_seconds` and `NGMIX.metacal_cpu_seconds` are measured
+CPU seconds on one core for one observation; `*_psf_cpu_seconds` is the PSF part.
+A PSF fit shared by several observations of a galaxy is charged to the one that
+ran it, so the measured columns sum to what the job spent
+(`TIMING.ngmix_psf_cpu_seconds` over `TIMING.ngmix_psf_fits` fits). Separately,
+`*_psf_uncached_cpu_seconds` is an estimate: the cost of every PSF fit an
+observation used, counted where it is used, as a pipeline that refits each PSF
+(SuperBIT's) would pay. Its uncached cost is
+`*_cpu_seconds - *_psf_cpu_seconds + *_psf_uncached_cpu_seconds`.
+
+**Failures.** Any measurement that raises -- metacal, a PSF fit, the size guess,
+the galaxy fit -- is a flagged row (`flags = 2**30`, NaN values), logged with its
+error and counted in `TIMING.failures_raised`; the job never stops for one stamp.
+
+The `TIMING` table
+also gives ShearNet's inference wall seconds and image count
+(`shearnet_inference_seconds`, `shearnet_images`), compilation kept separate
+(`shearnet_compile_seconds`), and rendering (`render_seconds`), each summed over
+the committed work of every attempt. `BLOCKS` records coverage and the worker
+count.
 
 ## Columns
 
@@ -114,6 +151,8 @@ beforehand and reported separately (`PROTOCOL.shearnet_compile_seconds`).
 
 | column | type | unit | meaning |
 |---|---|---|---|
+| `object_uid` | S64 |  | SHA-256 identity of the galaxy realization, the same in every scene and station |
+| `observation_uid` | S64 |  | SHA-256 identity of this observation: the object plus its applied shear and rotation |
 | `record_id` | i8 |  | unique row id: (scene_id * n_rotations + rotation_id) * n_objects + catalog_row |
 | `catalog_row` | i8 |  | row of the evaluation catalog this object is drawn from (0-based); the same galaxy in every scene and station |
 | `scene_id` | i2 |  | index into the SCENES table |
@@ -139,10 +178,14 @@ beforehand and reported separately (`PROTOCOL.shearnet_compile_seconds`).
 
 | column | type | unit | meaning |
 |---|---|---|---|
+| `object_uid` | S64 |  | SHA-256 identity of the galaxy realization, the same in every scene and station |
+| `observation_uid` | S64 |  | SHA-256 identity of this observation: the object plus its applied shear and rotation |
 | `record_id` | i8 |  | unique row id: (scene_id * n_rotations + rotation_id) * n_objects + catalog_row |
 | `catalog_row` | i8 |  | row of the evaluation catalog this object is drawn from (0-based); the same galaxy in every scene and station |
 | `scene_id` | i2 |  | index into the SCENES table |
 | `rotation_id` | i2 |  | index into the ROTATIONS table |
+| `input_fingerprint` | f4 2x4 |  | sum |x| and three fixed random projections of the galaxy stamp and of the PSF stamp; the merge checks both jobs saw the same images |
+| `metacal_fingerprint` | f4 9x2x4 |  | the same for the galaxy and PSF image of each metacal product, in METACAL_TYPES order; NaN where ngmix made none |
 | `psf_g` | f8 2 |  | ngmix adaptive-moment ellipticity of the PSF stamp, epsilon convention |
 | `psf_T_hsm` | f8 | arcsec2 | GalSim HSM 2 sigma^2 of the PSF stamp, sigma = det(M)^(1/4): a determinant size |
 | `psf_T_admom` | f8 | arcsec2 | ngmix adaptive-moment trace Irr + Icc of the PSF stamp |
@@ -154,6 +197,8 @@ beforehand and reported separately (`PROTOCOL.shearnet_compile_seconds`).
 
 | column | type | unit | meaning |
 |---|---|---|---|
+| `object_uid` | S64 |  | SHA-256 identity of the galaxy realization, the same in every scene and station |
+| `observation_uid` | S64 |  | SHA-256 identity of this observation: the object plus its applied shear and rotation |
 | `record_id` | i8 |  | unique row id: (scene_id * n_rotations + rotation_id) * n_objects + catalog_row |
 | `catalog_row` | i8 |  | row of the evaluation catalog this object is drawn from (0-based); the same galaxy in every scene and station |
 | `scene_id` | i2 |  | index into the SCENES table |
@@ -169,6 +214,8 @@ Every `*_original` column repeats for each metacal product with the suffix `_nos
 
 | column | type | unit | meaning |
 |---|---|---|---|
+| `object_uid` | S64 |  | SHA-256 identity of the galaxy realization, the same in every scene and station |
+| `observation_uid` | S64 |  | SHA-256 identity of this observation: the object plus its applied shear and rotation |
 | `record_id` | i8 |  | unique row id: (scene_id * n_rotations + rotation_id) * n_objects + catalog_row |
 | `catalog_row` | i8 |  | row of the evaluation catalog this object is drawn from (0-based); the same galaxy in every scene and station |
 | `scene_id` | i2 |  | index into the SCENES table |
@@ -180,10 +227,12 @@ Every `*_original` column repeats for each metacal product with the suffix `_nos
 | `flux_original` | f8 | count | fitted flux, on the original stamp |
 | `s2n_original` | f8 |  | ngmix s2n of the fit, on the original stamp |
 | `flags_original` | i4 |  | ngmix flags; 0 is a good fit, 2**30 means no result, on the original stamp |
-| `fit_cpu_seconds` | f8 | s | CPU seconds of the plain fit of the original stamp (T guess, PSF fit, galaxy fit), on one core |
-| `fit_psf_cpu_seconds` | f8 | s | of fit_cpu_seconds, the PSF fit |
-| `metacal_cpu_seconds` | f8 | s | CPU seconds of this object's whole metacal bootstrap (making the nine products, their PSF fits and galaxy fits), on one core; once per object, not per product |
-| `metacal_psf_cpu_seconds` | f8 | s | of metacal_cpu_seconds, the PSF fits of the nine products |
+| `fit_cpu_seconds` | f8 | s | measured CPU seconds of the plain fit of the original stamp (T guess, galaxy fit, and the PSF fit if this observation ran it), on one core |
+| `fit_psf_cpu_seconds` | f8 | s | measured: of fit_cpu_seconds, the PSF fit; zero where the fit was shared from another observation of the galaxy |
+| `fit_psf_uncached_cpu_seconds` | f8 | s | estimate: CPU seconds of the PSF fit this observation used, whichever observation ran it |
+| `metacal_cpu_seconds` | f8 | s | measured CPU seconds of this observation's metacal (making the nine products, their galaxy fits, and the PSF fits it ran), on one core; once per observation, not per product |
+| `metacal_psf_cpu_seconds` | f8 | s | measured: of metacal_cpu_seconds, the PSF fits this observation ran |
+| `metacal_psf_uncached_cpu_seconds` | f8 | s | estimate: CPU seconds of all nine PSF fits the products used, each counted where it is used, as a pipeline that refits every PSF would pay |
 
 Every `*_original` column repeats for each metacal product with the suffix `_noshear`, `_1p`, `_1m`, `_2p`, `_2m`, `_1p_psf`, `_1m_psf`, `_2p_psf`, `_2m_psf`.
 

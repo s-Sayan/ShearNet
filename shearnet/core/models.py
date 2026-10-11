@@ -1,8 +1,9 @@
 """Flax neural-network architectures for galaxy shear estimation."""
 
-import jax
 import flax.linen as nn
+import jax
 import jax.numpy as jnp
+import numpy as np
 
 
 class ResidualBlock(nn.Module):
@@ -766,8 +767,10 @@ def _d4_inverse_apply(x, i):
 # These reproduce Eqs. (25)-(26) of Lin et al. (2026):
 #   Psi_1 signs: +, -, +, -, +, -, +, -
 #   Psi_2 signs: +, -, +, -, -, +, -, +
-_D4_W1 = jnp.array([(-1.0) ** (i % 4) for i in range(8)])
-_D4_W2 = jnp.array([(-1.0) ** ((i % 4) + (i // 4)) for i in range(8)])
+# NumPy, not jnp: a jnp array here would start JAX's backend at import, so even
+# `shearnet-pipeline status` on a GPU-less login node would probe for CUDA.
+_D4_W1 = np.array([(-1.0) ** (i % 4) for i in range(8)])
+_D4_W2 = np.array([(-1.0) ** ((i % 4) + (i // 4)) for i in range(8)])
 
 
 def _d4_gaussian_window(size, sigma_frac=0.25):

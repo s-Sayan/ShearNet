@@ -1,28 +1,4 @@
-"""Render held-out evaluation stamps with the renderer the model trained on.
-
-Every scene and every ring station goes through the one path here: draw the
-per-object truth table (:func:`~shearnet.core.dataset_jax.sample_truth`, the
-same draw-for-draw replica of the GalSim path that training uses), rotate the
-source shape for a ring station, render, add the noise, cast to float32 like
-the training stamps. Nothing about the population comes from anywhere but the
-run's own resolved config, the evaluation seed and the evaluation catalog.
-
-Pairing
--------
-Object ``i`` is catalog row ``i`` and is seeded from ``i`` alone, and neither
-the applied shear nor the rotation consumes a random number. So every scene of
-one evaluation is the same galaxies, at the same offsets, behind the same PSFs,
-with the same noise (rotated by quarter turns for the 90/180/270 stations, see
-:meth:`EvaluationRenderer.render`). That is what lets any two scenes be
-differenced object by object downstream.
-
-Held out
---------
-The seed must differ from the training seed and the catalog from the training
-catalog; :mod:`shearnet.config.schema` refuses both. A different seed alone is
-not enough: row ``i`` is row ``i`` whatever the seed.
-"""
-
+"""Render paired observations in bounded batches on JAX's default device."""
 from __future__ import annotations
 
 import math
@@ -83,11 +59,14 @@ class EvaluationRenderer:
         psf = config.get("simulation.psf.psfex_file") or PSF_DATA_DIR
         self.psf_source = psf
         if self.cfg.exp == "superbit":
-            self.psf_files = [psf] if os.path.isfile(psf) else list(search_psf_files(psf))
+            self.psf_files = [psf] if os.path.isfile(psf) else sorted(search_psf_files(psf))
         else:
             self.psf_files = []
         self._psf_index = {path: i for i, path in enumerate(self.psf_files)}
         self._catalog_extra = self._read_catalog_extras()
+        from .identity import observation_recipe, digest
+        self.recipe = observation_recipe(config, self.psf_files)
+        self.identity = digest(self.recipe)
 
     # ------------------------------------------------------------------
     def _read_catalog_extras(self) -> Dict[str, np.ndarray]:
@@ -112,7 +91,8 @@ class EvaluationRenderer:
         return list(self.psf_files)
 
     # ------------------------------------------------------------------
-    def render(self, g1: float, g2: float, rotation_deg: float = 0.0) -> RenderedBlock:
+    def render(self, g1: float, g2: float, rotation_deg: float = 0.0,
+               indices=None) -> RenderedBlock:
         """The evaluation population under applied reduced shear ``(g1, g2)``.
 
         ``rotation_deg`` rotates every galaxy's *source* shape on the sky, for a
@@ -134,8 +114,9 @@ class EvaluationRenderer:
         from ..core.shear_algebra import compose_shear
 
         config = self.config
+        indices = np.arange(self.nobj) if indices is None else np.asarray(indices)
         truth = sample_truth(
-            self.nobj,
+            len(indices),
             self.cfg,
             seed=self.seed,
             nse_sd=config.get("simulation.noise_sigma"),
@@ -149,6 +130,7 @@ class EvaluationRenderer:
             flux_type=config.get("simulation.flux_type"),
             cosmos_cat_fname=self.catalog,
             add_noise=True,
+            indices=indices, random_namespace=self.identity,
         )
         p = truth.params
         if rotation_deg:
@@ -165,18 +147,20 @@ class EvaluationRenderer:
             obs_g1, obs_g2 = compose_shear(p["g1"], p["g2"], p["base_g1"], p["base_g2"])
             truth.labels_raw = dict(truth.labels_raw, g1=obs_g1, g2=obs_g2)
 
+        # on JAX's default device: the GPU in the ShearNet job, the CPU in the
+        # ngmix job (JAX_PLATFORMS=cpu); the merge allows for the roundoff
         gal, psf = render_truth(truth, self.cfg,
                                 trace_psf_shear=config.get("simulation.apply_psf_shear"))
         gal = gal + truth.noise
         labels = _build_labels(truth, psf, self.output_keys, self.cfg.scale)
 
-        n = self.nobj
+        n = len(indices)
         psf_ids = np.full(n, -1, dtype=np.int32)
         if truth.psf_files:
             psf_ids = np.array([self._psf_index[path] for path in truth.psf_files],
                                dtype=np.int32)
         truth_table = {
-            "catalog_row": np.arange(n, dtype=np.int64),
+            "catalog_row": indices.astype(np.int64),
             "e_source": np.stack([p["g1"], p["g2"]], axis=1),
             "g_applied": np.stack([p["base_g1"], p["base_g2"]], axis=1),
             "e_prepsf": np.stack([truth.labels_raw["g1"], truth.labels_raw["g2"]], axis=1),
@@ -188,7 +172,8 @@ class EvaluationRenderer:
             "psf_file_id": psf_ids,
         }
         for key in ("q_source", "phi_source"):
-            truth_table[key] = self._catalog_extra.get(key, np.full(n, np.nan))
+            truth_table[key] = (self._catalog_extra[key][indices] if key in self._catalog_extra
+                                else np.full(n, np.nan))
         return RenderedBlock(
             galaxy=gal.astype(np.float32),
             psf=psf.astype(np.float32),

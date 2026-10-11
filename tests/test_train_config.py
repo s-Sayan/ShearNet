@@ -42,15 +42,12 @@ def test_a_run_needs_a_name(tmp_path):
             ["--config", str(path), "--run", str(tmp_path / "run")]))
 
 
-def test_the_architecture_is_taken_as_asked_for(tmp_path):
-    """The process_psf setting must not override model.type."""
-    path = tmp_path / "package_layout.yaml"
-    path.write_text("model:\n  type: d4-fork-like\n  process_psf: false\n"
-                    "  output_keys: [g1, g2]\noutput:\n  model_name: m\n")
-    cfg = build_train_config(create_parser().parse_args(
-        ["--config", str(path), "--run", str(tmp_path / "run")]))
-    assert cfg.get("model.type") == "d4-fork-like"
-    assert any("process_psf" in note for note in cfg.notes)
+def test_obsolete_model_settings_are_rejected(tmp_path):
+    path = tmp_path / "obsolete.yaml"
+    path.write_text("model:\n  type: d4-fork-like\n  process_psf: false\n")
+    with pytest.raises(ConfigError, match="process_psf"):
+        build_train_config(create_parser().parse_args(
+            ["--config", str(path), "--run", str(tmp_path / "run")]))
 
 
 def test_the_shipped_smoke_config_loads(tmp_path):

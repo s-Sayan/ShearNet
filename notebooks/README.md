@@ -14,10 +14,10 @@ run against the current `shearnet` API and use only *simulated* data by default
 
 ## Conventions
 
-- `02` and `04` read **run directories** -- what `shearnet-train --run DIR` writes
-  and `shearnet-eval --run DIR` adds an evaluation catalog to. Set `RUNS` / `RUN`
-  at the top. `configs/smoke.yaml` makes one in a couple of minutes:
-  `shearnet-train --config configs/smoke.yaml --run runs/smoke && shearnet-eval --run runs/smoke`.
+- `02` reads training directories and merged evaluation catalogs; `04` reads a
+  training directory when measuring model leakage. Set `RUNS` / `RUN` at the top.
+  Use the training, split evaluation, and merge commands in the repository README
+  with `configs/smoke.yaml` to make a small example.
 - Each notebook opens with a small **configuration** cell — edit those constants
   rather than the code below them.
 - Plots adapt to `output_keys`, so the notebooks keep working whether a model

@@ -43,7 +43,10 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run", default=None,
                         help="run directory (overrides run_options.outdir)")
     parser.add_argument("--overwrite", action="store_true",
-                        help="delete an existing run directory first (its evaluations too)")
+                        help="delete an existing training directory first")
+    parser.add_argument("--resume", action="store_true",
+                        help="continue from the last complete training checkpoint")
+    parser.add_argument("--checkpoint-seconds", type=float, default=300)
     parser.add_argument("--dry-run", action="store_true",
                         help="validate and report; write nothing")
     verbosity = parser.add_mutually_exclusive_group()
@@ -119,8 +122,14 @@ def main(argv=None) -> int:
     from ..artifacts import RunDir
     from ..training.service import train
 
-    train(config, RunDir(config.get("run_options.outdir")),
-          input_text=Path(args.config).read_text(), overwrite=args.overwrite)
+    from ..artifacts.recovery import Interrupted
+    try:
+        train(config, RunDir(config.get("run_options.outdir")),
+              input_text=Path(args.config).read_text(), overwrite=args.overwrite,
+              resume=args.resume, checkpoint_seconds=args.checkpoint_seconds)
+    except Interrupted as exc:
+        logger.warning("%s", exc)
+        return 75
     return 0
 
 

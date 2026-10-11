@@ -6,9 +6,8 @@ from pathlib import Path
 import pytest
 
 from shearnet.config import Config, ConfigError
-from shearnet.config import legacy
 from shearnet.config.loader import dump_yaml, load_yaml
-from shearnet.config.schema import FIELDS, defaults, flatten, resolve
+from shearnet.config.schema import FIELDS, defaults, flatten
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -167,68 +166,9 @@ def test_an_evaluation_override_cannot_touch_the_model(tmp_path):
 # ----------------------------------------------------------------------
 # the package and unit-test layouts
 # ----------------------------------------------------------------------
-def test_package_layout_migrates(tmp_path):
-    path = _write(tmp_path, "dataset:\n  samples: 128\n  psf_sigma: 0.3\n  exp: superbit\n"
-                            "model:\n  type: fork-like\n  galaxy:\n    type: cnn\n"
-                            "  process_psf: true\n"
-                            "output:\n  model_name: old\n  save_path: /x\n")
-    config = Config.from_file(path)
-    assert config.get("training.nobj") == 128
-    assert config.get("simulation.psf.gaussian_fwhm") == 0.3  # the psf_sigma alias
-    assert config.get("simulation.psf.mode") == "superbit"
-    assert config.get("model.galaxy_branch") == "cnn"
-    assert config.get("run_options.run_name") == "old"
-    assert any("process_psf" in note for note in config.notes)
-
-
-def test_unit_test_layout_migrates_and_honours_the_keys_it_used_to_drop(tmp_path):
-    path = _write(tmp_path, """
-meta: {model_name: ut, description: hello}
-paths: {root: /runs/ut, train_catalog: /c/train.fits, eval_catalog: /c/eval.fits,
-        checkpoint_dir: null}
-image: {noise_sd: 12.7, normalize_images: true}
-psf: {mode: superbit, stamp_size: 53}
-galaxy: {hlr_type: catalog, hlr: catalog}
-model: {architecture: research_backed, output_keys: [g1, g2]}
-train: {seed: 4, samples: 99, loss: mae, d4_augment: true, backend: jax-galsim}
-eval:
-  seed: 150
-  n_obs: 30
-  evaluate: {component: both, shape_noise_cancel: 4, shear_true: 0.02,
-             shearnet_metacal: true, n_jackknife: 20, catalog_level: paper,
-             anacal_epochs: 35}
-""")
-    config = Config.from_file(path)
-    assert config.get("run_options.outdir") == "/runs/ut"
-    assert config.get("run_options.description") == "hello"
-    assert config.get("simulation.catalogs.eval_file") == "/c/eval.fits"
-    assert config.get("training.normalize_images") is True
-    assert config.get("training.loss") == "mae"
-    assert config.get("training.d4_augment") is True
-    assert config.get("evaluation.rotations_deg") == [0.0, 45.0, 90.0, 135.0]
-    assert [s["name"] for s in config.get("evaluation.scenes")] == [
-        "zero", "g1_plus", "g1_minus", "g2_plus", "g2_minus"]
-    assert config.get("evaluation.scenes")[1]["g1"] == 0.02
-    assert any("translated to training.loss" in note for note in config.notes)
-
-
-def test_unknown_dialect_key_is_an_error():
-    with pytest.raises(ConfigError, match="has no translation"):
-        legacy.migrate({"dataset": {"samplez": 3}})
-
-
-def test_migration_writes_only_what_differs_from_the_defaults():
-    config, _ = legacy.migrate({"dataset": {"samples": 10000, "seed": 7},
-                                "output": {"model_name": "m"}})
-    assert config == {"schema_version": 1, "run_options": {"run_name": "m"},
-                      "training": {"seed": 7}}
-
-
-def test_the_migration_cli_prints_a_valid_config(tmp_path, capsys):
-    path = _write(tmp_path, "dataset:\n  samples: 64\noutput:\n  model_name: m\n")
-    assert legacy.main([str(path)]) == 0
-    printed = load_yaml(capsys.readouterr().out)
-    assert resolve(printed)["training"]["nobj"] == 64
+def test_obsolete_layout_is_rejected():
+    with pytest.raises(ConfigError):
+        Config.from_dict({"dataset": {"samples": 100}, "output": {"model_name": "old"}})
 
 
 def test_every_config_in_the_repository_is_current_and_valid():

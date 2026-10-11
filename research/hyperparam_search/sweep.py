@@ -3,11 +3,11 @@
 
 It changes nothing about training -- every knob is an ordinary config key --
 and it runs nothing itself. ``--write`` turns a sweep spec into validated
-configs plus a run list for the one Slurm script; ``--collect`` reads each
+configs plus a submission script; ``--collect`` reads each
 finished run's ``manifest.json`` and ranks them by best validation loss.
 
     python research/hyperparam_search/sweep.py --sweep example_sweep.yaml --write
-    sbatch --array=0-$((N-1))%8 scripts/shearnet.sbatch --list sweep_out/runs.txt
+    bash sweep_out/submit.sh
     python research/hyperparam_search/sweep.py --sweep example_sweep.yaml --collect
 
 Sweep spec (YAML)::
@@ -21,7 +21,7 @@ Sweep spec (YAML)::
       training.learning_rate: [1.0e-3, 5.0e-4, 1.0e-4]
       training.batch_size: [32, 64, 128]
 
-The runs are trained only (``--train-only`` lines in the run list): ranking by
+The submission script trains each configuration: ranking by
 validation loss needs no evaluation. Measure the winners with ``shearnet-eval``.
 """
 
@@ -31,6 +31,7 @@ import argparse
 import csv
 import itertools
 import json
+import shlex
 import os
 import random as _random
 import sys
@@ -90,11 +91,16 @@ def write(spec_path: Path, outdir: Path):
         path = outdir / "configs" / f"{name}.yaml"
         Config.from_dict(config, base_dir=str(spec_path.parent))  # validate
         path.write_text(dump_yaml(config))
-        lines.append(f"--train-only {path.resolve()}")
-    (outdir / "runs.txt").write_text("\n".join(lines) + "\n")
+        from shearnet.cli.pipeline import DEFAULT_RESOURCES
+        resources = DEFAULT_RESOURCES["train"]
+        train_command = ("env JAX_ENABLE_X64=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 "
+                         f"shearnet-train --config {shlex.quote(str(path.resolve()))} --resume")
+        lines.append(f"sbatch --partition=long --time=4-00:00:00 --gres={resources['gres']} "
+                     f"--cpus-per-task={resources['cpus']} --mem={resources['memory']} "
+                     f"--wrap {shlex.quote(train_command)}")
+    (outdir / "submit.sh").write_text("#!/bin/bash\nset -euo pipefail\n" + "\n".join(lines) + "\n")
     print(f"{len(points)} configs in {outdir / 'configs'}")
-    print(f"sbatch --array=0-{len(points) - 1}%8 scripts/shearnet.sbatch --list "
-          f"{(outdir / 'runs.txt').resolve()}")
+    print(f"bash {shlex.quote(str((outdir / 'submit.sh').resolve()))}")
     return points
 
 
@@ -132,7 +138,7 @@ def main(argv=None) -> int:
     parser.add_argument("--sweep", required=True, help="the sweep spec YAML")
     parser.add_argument("--outdir", default=None, help="default: sweep_out next to the spec")
     action = parser.add_mutually_exclusive_group(required=True)
-    action.add_argument("--write", action="store_true", help="write configs and runs.txt")
+    action.add_argument("--write", action="store_true", help="write configs and submit.sh")
     action.add_argument("--count", action="store_true", help="print the number of runs")
     action.add_argument("--collect", action="store_true", help="rank the finished runs")
     args = parser.parse_args(argv)

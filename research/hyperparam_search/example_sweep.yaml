@@ -1,7 +1,7 @@
 # Example hyperparameter sweep.
 #
 #   python research/hyperparam_search/sweep.py --sweep research/hyperparam_search/example_sweep.yaml --write
-#   sbatch --array=0-35%8 scripts/shearnet.sbatch --list research/hyperparam_search/sweep_out/runs.txt
+#   bash research/hyperparam_search/sweep_out/submit.sh
 #   python research/hyperparam_search/sweep.py --sweep research/hyperparam_search/example_sweep.yaml --collect
 #
 # Each run is ranked by its best validation loss. Start from a light base config

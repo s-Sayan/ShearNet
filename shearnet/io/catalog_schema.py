@@ -1,9 +1,8 @@
 """Every column of the evaluation catalog: name, type, shape, unit, meaning.
 
 One row of every per-record table is one catalog object, in one scene, at one
-ring station. All of them share the key columns and the row order
-(scene-major, then station, then catalog row), so ``TRUTH``, ``STAMP``,
-``SHEARNET`` and ``NGMIX`` line up row for row and also join on ``record_id``.
+ring station. All tables share canonical row order. Observation UIDs identify the same
+rendered galaxy across estimators; record IDs describe its storage position.
 
 Ellipticity convention: every ``g``/``e`` here is the reduced-shear-style
 ellipticity epsilon = (1 - q) / (1 + q) exp(2 i phi) -- ngmix's ``g``, GalSim's
@@ -23,7 +22,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Sequence, Tuple
 
 SCHEMA_NAME = "shearnet-eval"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 #: Metacal products, as in :mod:`shearnet.evaluation.measurements`.
 METACAL_TYPES = (
@@ -43,6 +42,10 @@ class Column:
 
 
 KEY_COLUMNS = [
+    Column("object_uid", "S64", description="SHA-256 identity of the galaxy realization, "
+           "the same in every scene and station"),
+    Column("observation_uid", "S64", description="SHA-256 identity of this observation: the "
+           "object plus its applied shear and rotation"),
     Column("record_id", "i8", description="unique row id: (scene_id * n_rotations + "
            "rotation_id) * n_objects + catalog_row"),
     Column("catalog_row", "i8", description="row of the evaluation catalog this object is "
@@ -78,6 +81,12 @@ TRUTH_COLUMNS = KEY_COLUMNS + [
 ]
 
 STAMP_COLUMNS = KEY_COLUMNS + [
+    Column("input_fingerprint", "f4", (2, 4), description="sum |x| and three fixed random "
+           "projections of the galaxy stamp and of the PSF stamp; the merge checks both jobs "
+           "saw the same images"),
+    Column("metacal_fingerprint", "f4", (9, 2, 4), description="the same for the galaxy and "
+           "PSF image of each metacal product, in METACAL_TYPES order; NaN where ngmix made "
+           "none"),
     Column("psf_g", "f8", (2,), description="ngmix adaptive-moment ellipticity of the PSF "
            "stamp, epsilon convention"),
     Column("psf_T_hsm", "f8", unit="arcsec2", description="GalSim HSM 2 sigma^2 of the PSF "
@@ -112,17 +121,27 @@ def _variant_columns(variant: str) -> List[Column]:
 
 #: What each object cost ngmix: CPU seconds on one core (the fits run one per
 #: single-threaded worker), and the part of them spent fitting PSFs.
+#: Measured CPU seconds (what this job spent; a PSF fit shared by several
+#: observations is charged to the one that ran it) and, separately, the uncached
+#: PSF cost a pipeline that refits every PSF would have paid.
 NGMIX_FIT_TIMING = [
-    Column("fit_cpu_seconds", "f8", (), "s", "CPU seconds of the plain fit of the original "
-           "stamp (T guess, PSF fit, galaxy fit), on one core"),
-    Column("fit_psf_cpu_seconds", "f8", (), "s", "of fit_cpu_seconds, the PSF fit"),
+    Column("fit_cpu_seconds", "f8", (), "s", "measured CPU seconds of the plain fit of the "
+           "original stamp (T guess, galaxy fit, and the PSF fit if this observation ran it), "
+           "on one core"),
+    Column("fit_psf_cpu_seconds", "f8", (), "s", "measured: of fit_cpu_seconds, the PSF fit; "
+           "zero where the fit was shared from another observation of the galaxy"),
+    Column("fit_psf_uncached_cpu_seconds", "f8", (), "s", "estimate: CPU seconds of the PSF "
+           "fit this observation used, whichever observation ran it"),
 ]
 NGMIX_METACAL_TIMING = [
-    Column("metacal_cpu_seconds", "f8", (), "s", "CPU seconds of this object's whole metacal "
-           "bootstrap (making the nine products, their PSF fits and galaxy fits), on one "
-           "core; once per object, not per product"),
-    Column("metacal_psf_cpu_seconds", "f8", (), "s", "of metacal_cpu_seconds, the PSF fits "
-           "of the nine products"),
+    Column("metacal_cpu_seconds", "f8", (), "s", "measured CPU seconds of this observation's "
+           "metacal (making the nine products, their galaxy fits, and the PSF fits it ran), "
+           "on one core; once per observation, not per product"),
+    Column("metacal_psf_cpu_seconds", "f8", (), "s", "measured: of metacal_cpu_seconds, the "
+           "PSF fits this observation ran"),
+    Column("metacal_psf_uncached_cpu_seconds", "f8", (), "s", "estimate: CPU seconds of all "
+           "nine PSF fits the products used, each counted where it is used, as a pipeline "
+           "that refits every PSF would pay"),
 ]
 
 
@@ -143,7 +162,7 @@ def shearnet_columns(output_keys: Sequence[str], metacal: bool = True) -> List[C
     units = {"hlr": "arcsec", "flux": "count", "psf_T": "arcsec2"}
     for variant in variants:
         where = ("the original stamp" if variant == "original"
-                 else f"the metacal {variant} image/PSF pair ngmix fitted")
+                 else f"the metacal {variant} image/PSF pair")
         if "g1" in output_keys:
             columns.append(Column(f"g_{variant}", "f8", (2,), description=(
                 f"predicted (g1, g2) on {where}: the network's estimate of e_prepsf")))

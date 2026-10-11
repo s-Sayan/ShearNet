@@ -3,6 +3,7 @@
 import functools
 import time
 
+import numpy as np
 import jax
 import jax.numpy as jnp
 import optax
@@ -163,6 +164,7 @@ def train_model(
     ffn_dim=None,
     checkpoint_fn=None,
     history_fn=None,
+    recovery=None,
 ):
     """Train a ShearNet model with validation and early stopping.
 
@@ -459,21 +461,53 @@ def train_model(
         def _eval_batch(state, gal, psf, lab, noise_rng):
             return _eval_one(state, gal, lab, noise_rng)
 
-    for epoch in range(epochs):
+    resume = None
+    if recovery is not None:
+        state, resume = recovery.load(state)
+    if resume:
+        rng_key = resume["rng_key"]
+        ema_params = resume["ema_params"]
+        best_val_loss = resume["best_val_loss"]
+        patience_counter = resume["patience_counter"]
+        train_losses = resume["train_losses"]
+        val_losses = resume["val_losses"]
+        val_losses_per_key = resume["val_losses_per_key"]
+        if use_resample_noise:
+            val_noise_key = resume["val_noise_key"]
+
+    def save_progress(epoch, cursor, permutation, loss_sum, count, force=False):
+        if recovery is not None and (force or recovery.due()):
+            recovery.save(state, dict(epoch=epoch, cursor=cursor, permutation=permutation,
+                loss_sum=float(loss_sum), count=count, rng_key=rng_key,
+                ema_params=ema_params if use_ema else None, best_val_loss=float(best_val_loss),
+                patience_counter=patience_counter, train_losses=[float(v) for v in train_losses],
+                val_losses=[float(v) for v in val_losses],
+                val_losses_per_key=[np.asarray(v) for v in val_losses_per_key],
+                val_noise_key=val_noise_key if use_resample_noise else None), force=force)
+
+    first_epoch = resume["epoch"] if resume else 0
+    if patience_counter >= patience:
+        first_epoch = epochs
+    for epoch in range(first_epoch, epochs):
         logger.info(f"Epoch {epoch + 1}/{epochs}")
         epoch_start = time.perf_counter()
         record = {"epoch": epoch + 1, "val_loss": None, "val_per_key": None, "best": False}
 
         # Shuffle training data (identical RNG consumption for both paths)
-        rng_key, subkey = jax.random.split(rng_key)
-        perm = jax.random.permutation(subkey, len(train_galaxy_images))
+        cursor = resume["cursor"] if resume and epoch == first_epoch else 0
+        if cursor:
+            perm = resume["permutation"]
+        else:
+            rng_key, subkey = jax.random.split(rng_key)
+            perm = jax.random.permutation(subkey, len(train_galaxy_images))
         shuffled_train_galaxy_images = train_galaxy_images[perm]
         shuffled_train_labels = train_labels[perm]
         shuffled_train_psf_images = train_psf_images[perm] if is_fork else None
 
         # Training phase
-        train_loss, total_samples = 0, 0
-        for i in range(0, len(train_galaxy_images), batch_size):
+        train_loss = resume["loss_sum"] if cursor else 0
+        total_samples = resume["count"] if cursor else 0
+        for i in range(cursor, len(train_galaxy_images), batch_size):
             sl = slice(i, i + batch_size)
             batch_galaxy_images = shuffled_train_galaxy_images[sl]
             batch_psf_images = shuffled_train_psf_images[sl] if is_fork else None
@@ -504,6 +538,8 @@ def train_model(
                 ema_params = _ema_update(ema_params, state.params)
             train_loss += loss * batch_size_actual
             total_samples += batch_size_actual
+            save_progress(epoch, i + batch_size_actual, perm, train_loss, total_samples)
+        save_progress(epoch, len(train_galaxy_images), perm, train_loss, total_samples, force=True)
         train_loss /= total_samples
         train_losses.append(train_loss)
         record["train_loss"] = float(train_loss)
@@ -564,6 +600,8 @@ def train_model(
         record["seconds"] = time.perf_counter() - epoch_start
         if history_fn is not None:
             history_fn(record)
+        save_progress(epoch + 1, 0, None, 0, 0, force=True)
+        resume = None
         if patience_counter >= patience:
             logger.info("Early stopping triggered.")
             break

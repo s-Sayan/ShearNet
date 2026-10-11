@@ -45,8 +45,9 @@ def test_write_and_collect(tmp_path):
     assert len(sweep.write(spec, out)) == 2
     configs = sorted((out / "configs").glob("*.yaml"))
     assert len(configs) == 2
-    lines = (out / "runs.txt").read_text().split("\n")[:-1]
-    assert [line.split()[0] for line in lines] == ["--train-only"] * 2
+    lines = (out / "submit.sh").read_text().splitlines()[2:]
+    assert len(lines) == 2 and all(line.startswith("sbatch ") for line in lines)
+    assert all("shearnet-train --config" in line and "--resume" in line for line in lines)
     first = Config.from_file(configs[0])
     assert first.get("training.learning_rate") == 1e-3
     assert first.get("training.batch_size") == 16

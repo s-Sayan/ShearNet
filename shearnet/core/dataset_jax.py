@@ -370,6 +370,8 @@ def sample_truth(
     flux_type: str = "constant",
     cosmos_cat_fname: Optional[str] = None,
     add_noise: bool = True,
+    indices=None,
+    random_namespace=None,
 ) -> Truth:
     """Draw every per-object quantity, matching ``sim_func`` draw-for-draw.
 
@@ -388,7 +390,10 @@ def sample_truth(
     cat = _load_cosmos_cat(seed=seed, cat_path=cosmos_cat_fname)
     g1_list, g2_list = cat["G1"], cat["G2"]
     hlr_list, flux_list = cat["HLR"], cat["FLUX"]
-    if samples > len(g1_list):
+    indices = np.arange(samples) if indices is None else np.asarray(indices, dtype=int)
+    if len(indices) != samples or np.any(indices < 0):
+        raise ValueError("indices must contain one nonnegative catalog row per sample")
+    if len(indices) and indices.max() >= len(g1_list):
         raise ValueError(
             f"Requested {samples} samples but the catalog has only "
             f"{len(g1_list)} rows. Lower `samples` or use a larger catalog."
@@ -408,19 +413,26 @@ def sample_truth(
     p = {k: np.zeros(samples, dtype=np.float64) for k in PARAM_NAMES}
     chosen, noise = [], (np.empty((samples, cfg.npix, cfg.npix)) if add_noise else None)
 
-    for i in range(samples):
-        rng = np.random.RandomState(seed=i)  # sim_func: seed=i
+    for i, catalog_row in enumerate(indices):
+        if random_namespace is None:
+            rng = np.random.RandomState(seed=int(catalog_row))
+            noise_rng = rng
+        else:
+            from ..evaluation.identity import digest, rng as object_rng
+            identity = digest([random_namespace, int(catalog_row)])
+            rng = object_rng(identity, "geometry")
+            noise_rng = object_rng(identity, "noise")
         if apply_psf_shear:
             p["psf_g1"][i] = rng.uniform(-psf_shear_range, psf_shear_range)
             p["psf_g2"][i] = rng.uniform(-psf_shear_range, psf_shear_range)
         dx, dy = 2.0 * (rng.uniform(size=2) - 0.5) * 0.2
         p["dx"][i], p["dy"][i] = dx, dy
         if add_noise:
-            noise[i] = rng.normal(size=(cfg.npix, cfg.npix), scale=nse_sd)
+            noise[i] = noise_rng.normal(size=(cfg.npix, cfg.npix), scale=nse_sd)
 
-        p["g1"][i], p["g2"][i] = g1_list[i], g2_list[i]
-        p["hlr"][i] = float(hlr_list[i]) if hlr_type == "catalog" else CONSTANT_HLR
-        p["flux"][i] = float(flux_list[i]) if flux_type == "catalog" else CONSTANT_FLUX
+        p["g1"][i], p["g2"][i] = g1_list[catalog_row], g2_list[catalog_row]
+        p["hlr"][i] = float(hlr_list[catalog_row]) if hlr_type == "catalog" else CONSTANT_HLR
+        p["flux"][i] = float(flux_list[catalog_row]) if flux_type == "catalog" else CONSTANT_FLUX
         if base_shear_range:
             p["base_g1"][i] = rng.uniform(-base_shear_range, base_shear_range)
             p["base_g2"][i] = rng.uniform(-base_shear_range, base_shear_range)
@@ -428,7 +440,8 @@ def sample_truth(
             p["base_g1"][i], p["base_g2"][i] = base_shear_g1, base_shear_g2
 
         if psf_paths is not None:
-            ud = galsim.UniformDeviate(int(seed) * 1_000_003 + int(i))
+            ud = (galsim.UniformDeviate(int(seed) * 1_000_003 + int(catalog_row))
+                  if random_namespace is None else object_rng(identity, "psf").uniform)
             p["psf_x"][i] = MARGIN + (WCS_PARAMS["image_xsize"] - 2 * MARGIN) * ud()
             p["psf_y"][i] = MARGIN + (WCS_PARAMS["image_ysize"] - 2 * MARGIN) * ud()
             chosen.append(psf_paths[int(len(psf_paths) * ud())])

@@ -297,7 +297,7 @@ class TrainConfig:
         return asdict(self)
 
     def run(self, galaxy_images, labels, rng_key, psf_images=None, checkpoint_fn=None,
-            history_fn=None):
+            history_fn=None, recovery=None):
         """Train a model with this configuration.
 
         Equivalent to ``train_model(galaxy_images, labels, rng_key,
@@ -305,5 +305,6 @@ class TrainConfig:
         """
         return train_model(
             galaxy_images, labels, rng_key, psf_images=psf_images,
-            checkpoint_fn=checkpoint_fn, history_fn=history_fn, **self.as_kwargs()
+            checkpoint_fn=checkpoint_fn, history_fn=history_fn, recovery=recovery,
+            **self.as_kwargs()
         )

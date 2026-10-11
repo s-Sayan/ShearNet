@@ -36,6 +36,7 @@ from __future__ import annotations
 import time
 from typing import Optional, Sequence
 
+import numpy as np
 import jax
 import jax.numpy as jnp
 import optax
@@ -124,6 +125,7 @@ def train_model_inloop(
     ffn_dim=None,
     checkpoint_fn=None,
     history_fn=None,
+    recovery=None,
 ):
     """Train with stamps generated inside the jitted step.
 
@@ -368,18 +370,45 @@ def train_model_inloop(
     best_val_loss = float("inf")
     patience_counter = 0
 
-    for epoch in range(epochs):
+    resume = None
+    if recovery is not None:
+        state, resume = recovery.load(state)
+    if resume:
+        rng_key, val_noise_key = resume["rng_key"], resume["val_noise_key"]
+        ema_params = resume["ema_params"]
+        best_val_loss, patience_counter = resume["best_val_loss"], resume["patience_counter"]
+        train_losses, val_losses = resume["train_losses"], resume["val_losses"]
+        val_losses_per_key = resume["val_losses_per_key"]
+
+    def save_progress(epoch, cursor, indices, loss_sum, response_sum, force=False):
+        if recovery is not None and (force or recovery.due()):
+            recovery.save(state, dict(epoch=epoch, cursor=cursor, indices=indices,
+                loss_sum=float(loss_sum), response_sum=response_sum,
+                rng_key=rng_key, val_noise_key=val_noise_key, ema_params=ema_params,
+                best_val_loss=float(best_val_loss), patience_counter=patience_counter,
+                train_losses=[float(v) for v in train_losses],
+                val_losses=[float(v) for v in val_losses],
+                val_losses_per_key=[np.asarray(v) for v in val_losses_per_key]), force=force)
+
+    first_epoch = resume["epoch"] if resume else 0
+    if patience_counter >= patience:
+        first_epoch = epochs
+    for epoch in range(first_epoch, epochs):
         logger.info("Epoch %d/%d", epoch + 1, epochs)
         epoch_start = time.perf_counter()
         record = {"epoch": epoch + 1, "val_loss": None, "val_per_key": None, "best": False}
 
-        rng_key, shuffle_key = jax.random.split(rng_key)
-        idx_mat = gen.batches(train_ids, key=shuffle_key)
+        cursor = resume["cursor"] if resume and epoch == first_epoch else 0
+        if cursor:
+            idx_mat = resume["indices"]
+        else:
+            rng_key, shuffle_key = jax.random.split(rng_key)
+            idx_mat = gen.batches(train_ids, key=shuffle_key)
 
-        train_loss = 0.0
-        # [supervised, *RESPONSE_TERMS, n_active]
-        response_sum = jnp.zeros(len(RESPONSE_TERMS) + 2)
-        for s in range(steps_per_epoch):
+        train_loss = resume["loss_sum"] if cursor else 0.0
+        response_sum = (resume["response_sum"] if cursor else
+                        jnp.zeros(len(RESPONSE_TERMS) + 2))
+        for s in range(cursor, steps_per_epoch):
             rng_key, noise_key, dropout_key = jax.random.split(rng_key, 3)
             result = train_step(state, idx_mat[s], noise_key, dropout_key)
             if response.enabled:
@@ -390,6 +419,8 @@ def train_model_inloop(
             if use_ema:
                 ema_params = _ema_update(ema_params, state.params)
             train_loss += float(batch_loss)
+            save_progress(epoch, s + 1, idx_mat, train_loss, response_sum)
+        save_progress(epoch, steps_per_epoch, idx_mat, train_loss, response_sum, force=True)
         train_loss /= steps_per_epoch
         train_losses.append(train_loss)
         record["train_loss"] = float(train_loss)
@@ -418,6 +449,8 @@ def train_model_inloop(
             record["seconds"] = time.perf_counter() - epoch_start
             if history_fn is not None:
                 history_fn(record)
+            save_progress(epoch + 1, 0, None, 0, None, force=True)
+            resume = None
             continue
 
         eval_state = state.replace(params=ema_params) if use_ema else state
@@ -476,6 +509,8 @@ def train_model_inloop(
         record["seconds"] = time.perf_counter() - epoch_start
         if history_fn is not None:
             history_fn(record)
+        save_progress(epoch + 1, 0, None, 0, None, force=True)
+        resume = None
         if patience_counter >= patience:
             logger.info("Early stopping triggered.")
             break

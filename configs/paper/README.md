@@ -24,18 +24,24 @@ Each run directory is `runs/unit_tests/<name>` in the repository root (its
 
 ## Submitting
 
-From the repository root, all four as a job array:
+From the repository root:
 
 ```
-sbatch --array=0-3 scripts/shearnet.sbatch --list configs/paper/runs.txt
+for n in first second third fourth; do
+    SHEARNET_TRAIN_ARGS=--overwrite bash scripts/shearnet.sbatch \
+        configs/paper/unit_tests/$n.yaml --time 4-00:00:00
+done
 ```
 
 or one by hand:
 
 ```
-sbatch scripts/shearnet.sbatch configs/paper/unit_tests/fourth.yaml
+bash scripts/shearnet.sbatch configs/paper/unit_tests/fourth.yaml --time 4-00:00:00
 ```
 
-Each job trains its unit test and then evaluates it with the config's own
-`evaluation` block, writing `evaluations/default/<run_name>_default.fits` into
-the run directory.
+Each submission creates a generation beneath its run directory and submits
+training, ShearNet evaluation, independent CPU ngmix evaluation, and merging.
+The dispatcher log prints the generation path. Its `merged.fits` is the input
+for the plotting repository. `shearnet-pipeline status CONFIG` shows where each
+stage is; after an interruption, `shearnet-pipeline resume CONFIG` (with e.g.
+`--memory ngmix=96G`) continues it, keeping completed stages and measurements.

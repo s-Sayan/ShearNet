@@ -8,6 +8,10 @@ on:
 
 jobs:
   shearnet-test:
+    env:
+      JAX_ENABLE_X64: "1"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
     runs-on: ubuntu-latest
 
     steps:
@@ -23,10 +27,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install ".[test]"
-          # neither is on pypi: ngmix from github, and the JAX-GalSim fork
-          # with des.DES_PSFEx (in-loop training and the evaluation need it)
-          pip install git+https://github.com/esheldon/ngmix.git
-          pip install "git+https://github.com/AdamField118/JAX-GalSim@0213d84"
 
       - name: Run unit tests
         run: pytest tests/ -q -ra
@@ -34,4 +34,6 @@ jobs:
       - name: Smoke run (train + evaluate)
         run: |
           shearnet-train --config configs/smoke.yaml --run runs/smoke
-          shearnet-eval --run runs/smoke
+          shearnet-eval --config configs/smoke.yaml --run runs/smoke --estimator shearnet --output results/smoke/shearnet
+          shearnet-eval --config configs/smoke.yaml --estimator ngmix --output results/smoke/ngmix
+          shearnet-merge --shearnet results/smoke/shearnet/shearnet.fits --ngmix results/smoke/ngmix/ngmix.fits --output results/smoke/merged.fits

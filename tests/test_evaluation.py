@@ -1,389 +1,309 @@
-"""``shearnet-eval``: one raw catalog per evaluation, nothing derived in it."""
-
+"""Split evaluation, identical observations, and recovery after interruption."""
 import json
-
 import numpy as np
 import pytest
+from astropy.io import fits
+from shearnet.config import Config
+from shearnet.artifacts import RunDir
+from shearnet.artifacts.recovery import Interrupted
+from shearnet.training.service import train
+from shearnet.evaluation.service import evaluate
+from shearnet.evaluation.rendering import EvaluationRenderer
+from shearnet.io.catalog_schema import METACAL_TYPES
+from shearnet.evaluation.workers import perform
+from shearnet.evaluation.identity import digest
+from shearnet.io.merge import merge
 
-pytest.importorskip("jax_galsim")
-pytest.importorskip("ngmix")
-
-from astropy.io import fits  # noqa: E402
-
-from shearnet.artifacts import RunDir  # noqa: E402
-from shearnet.cli.evaluate import main as eval_main  # noqa: E402
-from shearnet.cli.train import main as train_main  # noqa: E402
-from shearnet.evaluation.measurements import METACAL_TYPES  # noqa: E402
-from shearnet.evaluation.service import metacal_seed  # noqa: E402
-
-TINY = """\
-schema_version: 1
-run_options: {run_name: tiny, ncores: 1}
-simulation: {backend: jax-galsim, noise_sigma: 0.05, stamp_size: 21, jax_fft_size: 64,
-             jax_batch_size: 8}
-model: {type: fork-like, galaxy_branch: cnn, psf_branch: cnn, output_keys: [g1, g2, hlr]}
-training: {nobj: 40, epochs: 1, batch_size: 8}
-evaluation:
-  seed: 7
-  nobj: 3
-  batch_size: 16
-  rotations_deg: [0, 90]
-"""
-
-N, SCENES, STATIONS = 3, 5, 2
+TINY = {
+    "schema_version": 1, "run_options": {"run_name": "tiny", "ncores": 1},
+    "simulation": {"backend": "jax-galsim", "noise_sigma": 1., "stamp_size": 21,
+                   "jax_fft_size": 64, "jax_batch_size": 2},
+    "model": {"type": "mlp", "output_keys": ["g1", "g2"]},
+    "training": {"nobj": 40, "epochs": 2, "batch_size": 8},
+    "evaluation": {"seed": 7, "nobj": 2, "batch_size": 8,
+                   "scenes": [{"name": "plus", "g1": .01, "g2": 0.},
+                              {"name": "minus", "g1": -.01, "g2": 0.}],
+                   "rotations_deg": [0., 90.]}}
 
 
 @pytest.fixture(scope="module")
-def run(tmp_path_factory):
-    root = tmp_path_factory.mktemp("eval")
-    config = root / "tiny.yaml"
-    config.write_text(TINY)
-    assert train_main(["--config", str(config), "--run", str(root / "run"), "-q"]) == 0
-    return RunDir(root / "run")
+def experiment(tmp_path_factory):
+    root = tmp_path_factory.mktemp("split")
+    config = Config.from_dict(TINY)
+    run = RunDir(root / "training")
+    train(config, run)
+    sn = evaluate(config, root / "shearnet", estimator="shearnet", run=run, chunk_size=2)
+    ng = evaluate(config, root / "ngmix", estimator="ngmix", chunk_size=1)
+    return root, config, run, sn, ng
 
 
-@pytest.fixture(scope="module")
-def catalog(run):
-    assert eval_main(["--run", str(run.root), "-q"]) == 0
-    return run.evaluation("default").catalog_path("tiny")
+def test_independent_inputs_and_exact_merge(experiment):
+    root, _, _, sn, ng = experiment
+    output = merge(sn, ng, root / "merged.fits")
+    repeat = merge(sn, ng, root / "merged-repeat.fits")
+    assert output.read_bytes() == repeat.read_bytes()
+    with fits.open(sn) as a, fits.open(ng) as b, fits.open(output) as c:
+        assert a["TRUTH"].data.tobytes() == b["TRUTH"].data.tobytes()
+        assert a["STAMP"].data.tobytes() == b["STAMP"].data.tobytes()
+        assert c["SHEARNET"].data.tobytes() == a["SHEARNET"].data.tobytes()
+        assert c["NGMIX"].data.tobytes() == b["NGMIX"].data.tobytes()
+        assert c[0].header["SCHEMAV"] == 2
+        assert len(np.unique(c["TRUTH"].data["observation_uid"])) == 8
+        uids = c["TRUTH"].data["object_uid"].reshape(4, 2)
+        assert np.all(uids == uids[0])
+        assert "NGMIX" not in a and "SHEARNET" not in b
 
 
-def test_one_catalog_with_every_extension(catalog, run):
-    with fits.open(catalog) as hdul:
-        names = [h.name for h in hdul]
-        assert names[:5] == ["PRIMARY", "TRUTH", "STAMP", "SHEARNET", "NGMIX"]
-        for extra in ("SCHEMA", "SCENES", "ROTATIONS", "BLOCKS", "PSF_FILES", "PROTOCOL",
-                      "CONFIG", "PROVENANCE"):
-            assert extra in names
-        header = hdul[0].header
-        assert header["NRECORD"] == N * SCENES * STATIONS
-        assert header["CKPTSHA"] == run.read_manifest()["checkpoint"]["sha256"]
-        for name in ("TRUTH", "STAMP", "SHEARNET", "NGMIX"):
-            assert len(hdul[name].data) == N * SCENES * STATIONS
-    assert run.evaluation("default").state == "completed"
+def _perturbed(source, target, table, column, factor):
+    with fits.open(source) as hdul:
+        hdul[table].data[column][0] *= factor
+        hdul.writeto(target, checksum=True)
+    return target
 
 
-def test_the_status_records_how_long_the_evaluation_took(catalog, run):
-    """A chunk loop's offset once shadowed the start time, so the status said
-    the evaluation had taken ~56 years."""
-    status = run.evaluation("default").read_status()
-    assert 0 < status["seconds"] < 3600
+def test_merge_rejects_changed_inputs(experiment):
+    root, _, _, sn, ng = experiment
+    bad = _perturbed(ng, root / "wrong.fits", "STAMP", "input_fingerprint", 1.01)
+    with pytest.raises(ValueError, match="STAMP.input_fingerprint"):
+        merge(sn, bad, root / "must-not-exist.fits")
+    assert not (root / "must-not-exist.fits").exists()
 
 
-def test_rows_are_scene_major_then_station_then_object(catalog):
-    truth = fits.getdata(catalog, "TRUTH")
-    np.testing.assert_array_equal(truth["record_id"], np.arange(len(truth)))
-    np.testing.assert_array_equal(truth["catalog_row"], np.tile(np.arange(N), SCENES * STATIONS))
-    np.testing.assert_array_equal(truth["scene_id"], np.repeat(np.arange(SCENES), N * STATIONS))
-    np.testing.assert_array_equal(truth["rotation_id"],
-                                  np.tile(np.repeat(np.arange(STATIONS), N), SCENES))
-    for name in ("STAMP", "SHEARNET", "NGMIX"):
-        np.testing.assert_array_equal(fits.getdata(catalog, name)["record_id"],
-                                      truth["record_id"])
+def test_merge_accepts_roundoff_between_devices(experiment):
+    """The ShearNet job renders on the GPU, ngmix on CPUs: the same stamps
+    agree to roundoff, and that must not stop the merge."""
+    root, _, _, sn, ng = experiment
+    near = _perturbed(ng, root / "roundoff.fits", "STAMP", "metacal_fingerprint", 1 + 1e-6)
+    near = _perturbed(near, root / "roundoff2.fits", "STAMP", "psf_g", 1 + 1e-9)
+    output = merge(sn, near, root / "merged-roundoff.fits")
+    with fits.open(output) as c, fits.open(near) as b:
+        assert c["STAMP"].data.tobytes() == b["STAMP"].data.tobytes()
 
 
-def test_truth_separates_source_shape_applied_shear_and_label(catalog):
-    truth = fits.getdata(catalog, "TRUTH")
-    scenes = fits.getdata(catalog, "SCENES")
-    for s, scene in enumerate(scenes):
-        rows = truth[truth["scene_id"] == s]
-        np.testing.assert_allclose(rows["g_applied"], [[scene["g1"], scene["g2"]]] * len(rows))
-    zero = truth[(truth["scene_id"] == 0)]
-    # no applied shear: the pre-PSF shape IS the source shape
-    np.testing.assert_allclose(zero["e_prepsf"], zero["e_source"], atol=1e-12)
-    # a 90-degree station negates the spin-2 source shape, object by object
-    r0, r90 = zero[zero["rotation_id"] == 0], zero[zero["rotation_id"] == 1]
-    np.testing.assert_allclose(r90["e_source"], -r0["e_source"], atol=1e-12)
-    np.testing.assert_allclose(truth["label_g1"], truth["e_prepsf"][:, 0], rtol=1e-6, atol=1e-7)
+def test_worker_count_and_chunk_size_do_not_change_measurements(experiment):
+    root, config, _, _, ng = experiment
+    parallel = config.with_overrides({"run_options": {"ncores": 2}})
+    other = evaluate(parallel, root / "parallel", estimator="ngmix", chunk_size=2)
+    with fits.open(ng) as a, fits.open(other) as b:
+        for table in ("TRUTH", "STAMP", "NGMIX"):
+            for name in a[table].columns.names:
+                if name.endswith("cpu_seconds"):
+                    continue
+                x, y = a[table].data[name], b[table].data[name]
+                if x.dtype.kind in "SU":
+                    np.testing.assert_array_equal(x, y)
+                else:
+                    np.testing.assert_array_equal(x, y)
 
 
-def test_the_psf_is_the_same_in_every_scene_and_station(catalog):
-    stamp = fits.getdata(catalog, "STAMP")
-    first = stamp[:N]
-    for block in range(SCENES * STATIONS):
-        np.testing.assert_array_equal(stamp["psf_g"][block * N:(block + 1) * N], first["psf_g"])
+def test_resume_keeps_committed_results(experiment):
+    root, config, _, _, ng = experiment
+    output = root / "interrupted"
+
+    class StopAfterCommit:
+        def check(self):
+            if (output / "progress.json").exists():
+                raise Interrupted("test interruption")
+
+    with pytest.raises(Interrupted):
+        evaluate(config, output, estimator="ngmix", chunk_size=1,
+                 checkpoint_seconds=.001, stop=StopAfterCommit())
+    assert json.loads((output / "status.json").read_text())["state"] == "paused"
+    committed = {p.name: p.read_bytes() for p in (output / "shards").glob("*.fits")}
+    assert committed
+    resumed = evaluate(config, output, estimator="ngmix", resume=True, chunk_size=2)
+    for name, content in committed.items():
+        assert (output / "shards" / name).read_bytes() == content
+    with fits.open(ng) as a, fits.open(resumed) as b:
+        for name in a["NGMIX"].columns.names:
+            if not name.endswith("cpu_seconds"):
+                np.testing.assert_array_equal(a["NGMIX"].data[name], b["NGMIX"].data[name])
 
 
-def test_every_variant_of_every_estimator_is_there(catalog):
-    shearnet = fits.getdata(catalog, "SHEARNET").columns.names
-    ngmix = fits.getdata(catalog, "NGMIX").columns.names
+def test_shearnet_preparation_never_fits_em5(monkeypatch):
+    import shearnet.methods.ngmix as methods
+    config = Config.from_dict(TINY)
+    renderer = EvaluationRenderer(config)
+    block = renderer.render(.01, 0, indices=np.array([0]))
+    observation = renderer.observations(block.galaxy, block.psf)[0]
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("ShearNet preparation called a model fitter")
+
+    monkeypatch.setattr(methods, "build_runners", forbidden)
+    result = perform(_task([(0, digest("observation"), observation)], "shearnet"))
+    assert result["psf_fits"] == 0
+    images = result["records"][0]["galaxy"]
+    assert images.shape == (10, 21, 21) and np.isfinite(images).all()
+
+
+def _task(observations, estimator, object_uid=None):
+    return dict(object_uid=object_uid or digest("object"), observations=observations,
+                scale=.141, step=.01, psf="dilate", estimator=estimator,
+                psf_model="em3", gal_model="gauss")
+
+
+def _observations(config, scenes):
+    renderer = EvaluationRenderer(config)
+    out = []
+    for i, (g1, angle) in enumerate(scenes):
+        block = renderer.render(g1, 0, angle, indices=np.array([0]))
+        out.append((i, digest(["observation", i]), renderer.observations(block.galaxy,
+                                                                            block.psf)[0]))
+    return out
+
+
+def test_each_distinct_psf_is_fitted_once_per_galaxy():
+    """The PSF is the same in every scene and station, and metacal makes only 6
+    distinct PSF stamps from it, so 3 observations x 10 fits are 6 PSF fits."""
+    observations = _observations(Config.from_dict(TINY), [(.01, 0.), (-.01, 0.), (.01, 90.)])
+    result = perform(_task(observations, "ngmix"))
+    assert result["psf_fits"] == 6 and not result["errors"]
+    measured = [m["values"] for m in result["records"].values()]
+    for values in measured:
+        assert values["flags_original"] == 0 and values["flags_noshear"] == 0
+        # the estimate counts every PSF fit where it is used, as a refit would
+        assert values["metacal_psf_uncached_cpu_seconds"] > 0
+    # the measured columns charge each PSF fit once, to the observation that ran it
+    spent = sum(v["fit_psf_cpu_seconds"] + v["metacal_psf_cpu_seconds"] for v in measured)
+    np.testing.assert_allclose(spent, result["psf_seconds"])
+    assert measured[1]["metacal_psf_cpu_seconds"] == 0
+
+
+def test_a_shared_psf_fit_does_not_depend_on_which_observation_came_first():
+    observations = _observations(Config.from_dict(TINY), [(.01, 0.), (-.01, 0.)])
+    alone = perform(_task(observations[1:], "ngmix"))["records"][1]["values"]
+    shared = perform(_task(observations, "ngmix"))["records"][1]["values"]
+    for name, value in alone.items():
+        if not name.endswith("cpu_seconds"):
+            np.testing.assert_array_equal(value, shared[name], err_msg=name)
+
+
+def _assert_all_flagged(result, message):
+    from shearnet.evaluation.measurements import FLAG_MISSING
+
+    values = result["records"][0]["values"]
     for variant in ("original",) + METACAL_TYPES:
-        assert {f"g_{variant}", f"hlr_{variant}", f"flags_{variant}"} <= set(shearnet)
-        assert {f"g_{variant}", f"g_cov_{variant}", f"T_{variant}", f"Tpsf_{variant}",
-                f"flux_{variant}", f"s2n_{variant}", f"flags_{variant}"} <= set(ngmix)
-    assert fits.getdata(catalog, "NGMIX")["g_cov_noshear"].shape[1:] == (2, 2)
+        assert values[f"flags_{variant}"] == FLAG_MISSING, variant
+        assert np.isnan(values[f"g_{variant}"]).all()
+    assert len(result["errors"]) == 10
+    assert all(message in error for _, error in result["errors"])
 
 
-def test_nothing_derived_is_in_the_catalog(catalog):
-    """No responses, biases, leakage fits, corrections or summary tables."""
-    import re
+def test_a_failing_size_guess_is_a_flagged_row(monkeypatch):
+    """Seeds are deterministic, so an error escaping a fit would recur on every
+    resume: everything from building the runner on is inside the boundary."""
+    import shearnet.methods.ngmix as methods
 
-    forbidden = re.compile(r"(^|_)(R|Rgamma|Rpsf|Rbarpsf|m|c|alpha|beta|weight|corrected|"
-                           r"ring|selected|mask)(_|$)", re.IGNORECASE)
-    with fits.open(catalog) as hdul:
-        names = [h.name for h in hdul]
-        for table in ("SUMMARY", "BINNED", "LEAKSUM", "LEAKAGE", "TAB_P", "TAB_M"):
-            assert table not in names
-        for name in ("TRUTH", "STAMP", "SHEARNET", "NGMIX"):
-            for column in hdul[name].columns.names:
-                assert not forbidden.search(column), (name, column)
+    def broken(runner, obs):
+        raise np.linalg.LinAlgError("singular moments")
+
+    monkeypatch.setattr(methods, "set_tguess", broken)
+    observations = _observations(Config.from_dict(TINY), [(.01, 0.)])
+    _assert_all_flagged(perform(_task(observations, "ngmix")), "LinAlgError: singular")
 
 
-def test_the_catalog_carries_its_own_provenance(catalog, run):
-    config = {row["key"]: row["value"] for row in fits.getdata(catalog, "CONFIG")}
-    assert "run_name: tiny" in config["training"]
-    assert "rotations_deg: [0.0, 90.0]" in config["evaluation"]
-    provenance = {row["key"]: row["value"] for row in fits.getdata(catalog, "PROVENANCE")}
-    assert json.loads(provenance["training_manifest"])["checkpoint"]["sha256"] == \
-        run.read_manifest()["checkpoint"]["sha256"]
-    blocks = fits.getdata(catalog, "BLOCKS")
-    assert len(blocks) == SCENES * STATIONS
-    assert list(blocks["metacal_seed"][:2]) == [7 + 100, 7 + 101]
+def test_a_psf_mixture_that_cannot_be_attached_is_a_flagged_row(monkeypatch):
+    import shearnet.methods.ngmix as methods
+
+    class Result(dict):
+        def get_gmix(self):
+            raise ValueError("bad mixture")
+
+    class Runner:
+        guesser = type("Guesser", (), {"T": None})()
+
+        def go(self, obs):
+            return Result(flags=0)
+
+    monkeypatch.setattr(methods, "build_runners", lambda *a, **k: (Runner(), Runner()))
+    observations = _observations(Config.from_dict(TINY), [(.01, 0.)])
+    _assert_all_flagged(perform(_task(observations, "ngmix")), "ValueError: bad mixture")
 
 
-def test_a_second_evaluation_leaves_the_model_and_the_first_alone(catalog, run, tmp_path):
-    before = run.best_params.read_bytes(), catalog.read_bytes()
-    override = tmp_path / "small.yaml"
-    override.write_text("evaluation:\n  nobj: 2\n  rotations_deg: [0]\n"
-                        "  estimators: [shearnet]\n  metacal: {shearnet: false}\n")
-    assert eval_main(["--run", str(run.root), "--config", str(override),
-                      "--eval-name", "small", "-q"]) == 0
-    assert (run.best_params.read_bytes(), catalog.read_bytes()) == before
-    small = run.evaluation("small").catalog_path("tiny")
-    with fits.open(small) as hdul:
-        assert "NGMIX" not in [h.name for h in hdul]
-        assert len(hdul["SHEARNET"].data) == 2 * SCENES
-        assert "g_noshear" not in hdul["SHEARNET"].columns.names
-    # the same name again is refused before any work
-    assert eval_main(["--run", str(run.root), "--config", str(override),
-                      "--eval-name", "small", "-q"]) == 2
+def test_fingerprints_see_where_the_pixels_are():
+    """Sums alone cannot tell an image from its rotation; the projections can."""
+    from shearnet.evaluation.identity import fingerprint
+    from shearnet.io.merge import agree
+
+    image = _observations(Config.from_dict(TINY), [(.01, 0.)])[0][2].image
+    same = fingerprint(image * (1 + 1e-7))
+    assert agree("input_fingerprint", fingerprint(image), same)
+    for moved in (np.rot90(image), np.fliplr(image), np.roll(image, 1, axis=0)):
+        assert not agree("input_fingerprint", fingerprint(image), fingerprint(moved))
 
 
-def test_an_override_cannot_change_the_model(run, tmp_path):
-    override = tmp_path / "bad.yaml"
-    override.write_text("model:\n  type: cnn\n")
-    assert eval_main(["--run", str(run.root), "--config", str(override), "-q"]) == 2
+def test_merge_tolerance_does_not_depend_on_the_other_rows():
+    from shearnet.io.merge import agree
+
+    assert not agree("psf_T_hsm", np.array([1e6, 1.0]), np.array([1e6, 2.0]))
+    assert not agree("psf_T_hsm", np.array([1.0]), np.array([2.0]))
+    assert agree("psf_T_hsm", np.array([1e6, 1.0]), np.array([1e6, 1.0 + 1e-9]))
+    # a stamp sum near zero is judged against its stamp, not its own size
+    assert agree("flux_stamp", np.array([0.0]), np.array([1e-3]), np.array([5e4]))
+    assert not agree("flux_stamp", np.array([0.0]), np.array([50.0]), np.array([5e4]))
 
 
-def test_an_unfinished_run_is_refused(tmp_path):
-    run = RunDir(tmp_path / "run")
-    run.create()
-    run.write_status("running")
-    assert eval_main(["--run", str(run.root), "-q"]) == 2
+def test_the_catalogs_say_what_the_work_cost(experiment):
+    _, _, _, sn, ng = experiment
+    with fits.open(sn) as a, fits.open(ng) as b:
+        shearnet = {r["key"]: r["value"] for r in a["TIMING"].data}
+        ngmix = {r["key"]: r["value"] for r in b["TIMING"].data}
+        assert int(shearnet["shearnet_images"]) == 8 * 10
+        assert float(shearnet["shearnet_compile_seconds"]) > 0
+        assert float(shearnet["shearnet_inference_seconds"]) > 0
+        # two galaxies, six distinct PSF stamps each
+        assert int(ngmix["ngmix_psf_fits"]) == 12
+        assert int(ngmix["failures_raised"]) == 0
+        table = b["NGMIX"].data
+        assert np.all(table["metacal_psf_cpu_seconds"] < table["metacal_cpu_seconds"])
+        assert np.all(table["metacal_psf_uncached_cpu_seconds"]
+                      >= table["metacal_psf_cpu_seconds"])
+        spent = table["fit_psf_cpu_seconds"].sum() + table["metacal_psf_cpu_seconds"].sum()
+        np.testing.assert_allclose(spent, float(ngmix["ngmix_psf_cpu_seconds"]), rtol=1e-6)
 
 
-def test_dry_run_writes_nothing(run):
-    assert eval_main(["--run", str(run.root), "--eval-name", "dry", "--dry-run"]) == 0
-    assert not run.evaluation("dry").root.exists()
+def test_resume_rejects_a_changed_seed(experiment):
+    root, config, _, _, _ = experiment
+    wrong = config.with_overrides({"evaluation": {"seed": 11}})
+    with pytest.raises(ValueError, match="resume inputs"):
+        evaluate(wrong, root / "ngmix", estimator="ngmix", resume=True)
 
 
-def test_metacal_seeds_reproduce_the_old_harness():
-    zero, plus, minus = ({"g1": 0.0, "g2": 0.0}, {"g1": 0.01, "g2": 0.0},
-                         {"g1": 0.0, "g2": -0.01})
-    assert [metacal_seed(150, zero, k) for k in range(4)] == [250, 251, 252, 253]
-    assert metacal_seed(150, plus, 3) == 151 and metacal_seed(150, minus, 0) == 152
-
-
-def test_psf_moments_are_reproducible():
-    import galsim
-
-    from shearnet.evaluation.measurements import measure_psf
-
-    psf = galsim.Gaussian(fwhm=0.5).shear(g1=0.05, g2=-0.02)
-    stamps = np.stack([psf.drawImage(nx=21, ny=21, scale=0.141).array] * 3)
-    a, b = measure_psf(stamps, 0.141, seed=3), measure_psf(stamps, 0.141, seed=3)
-    np.testing.assert_array_equal(a["psf_g"], b["psf_g"])
-    assert a["psf_T_admom"][0] > a["psf_T_hsm"][0]   # trace > determinant size when elliptical
-
-
-def test_a_failed_fit_is_a_flagged_row_not_a_missing_one():
-    import ngmix
-
-    from shearnet.evaluation.measurements import FLAG_MISSING, fit_original
-
-    jac = ngmix.DiagonalJacobian(row=10, col=10, scale=0.141)
-    psf = ngmix.Observation(np.zeros((21, 21)), weight=np.ones((21, 21)), jacobian=jac)
-    obs = ngmix.Observation(np.zeros((21, 21)), weight=np.ones((21, 21)), jacobian=jac, psf=psf)
-    fit = fit_original([obs], seed=1, psf_model="gauss", gal_model="gauss", nproc=1)
-    assert fit["flags"][0] != 0
-    assert np.isnan(fit["g"][0]).all()
-    assert FLAG_MISSING > 0
-
-
-@pytest.mark.parametrize("psf_model", ["gauss", "em3"])
-def test_the_plain_fit_takes_an_em_psf_model(psf_model):
-    """SuperBIT fits the PSF with an EM mixture; the plain fit read result["T"],
-    which an EM result does not have, so psf_model: em5 crashed the evaluation."""
-    import galsim
-    import ngmix
-
-    from shearnet.evaluation.measurements import fit_original
-
-    scale, npix = 0.141, 33
-    jac = ngmix.DiagonalJacobian(row=(npix - 1) / 2, col=(npix - 1) / 2, scale=scale)
-    psf = galsim.Moffat(beta=3, fwhm=0.5).shear(g1=0.03, g2=-0.02)
-    gal = galsim.Convolve(galsim.Exponential(half_light_radius=0.4, flux=1e4), psf)
-    rng = np.random.RandomState(3)
-    obs = []
-    for _ in range(3):
-        image = gal.drawImage(nx=npix, ny=npix, scale=scale).array
-        image = image + rng.normal(0, 1.0, image.shape)
-        psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
-        obs.append(ngmix.Observation(
-            image, weight=np.ones_like(image), jacobian=jac,
-            psf=ngmix.Observation(psf_im, weight=np.full(psf_im.shape, 1e6), jacobian=jac)))
-    out = fit_original(obs, seed=1, psf_model=psf_model, gal_model="gauss", nproc=1)
-    assert np.all(out["flags"] == 0)
-    assert np.all(np.isfinite(out["Tpsf"])) and np.all(out["Tpsf"] > 0)
-
-
-def test_metacal_records_tpsf_with_an_em_psf_model():
-    """With an EM PSF fit the metacal Tpsf came back NaN, so a T/Tpsf cut
-    silently removed every object."""
-    import galsim
-    import ngmix
-
-    from shearnet.evaluation.measurements import metacal
-
-    scale, npix = 0.141, 33
-    jac = ngmix.DiagonalJacobian(row=(npix - 1) / 2, col=(npix - 1) / 2, scale=scale)
-    psf = galsim.Moffat(beta=3, fwhm=0.5)
-    gal = galsim.Convolve(galsim.Exponential(half_light_radius=0.4, flux=1e4), psf)
-    image = gal.drawImage(nx=npix, ny=npix, scale=scale).array
-    image = image + np.random.RandomState(4).normal(0, 1.0, image.shape)
-    psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
-    obs = [ngmix.Observation(image, weight=np.ones_like(image), jacobian=jac,
-                             psf=ngmix.Observation(psf_im, weight=np.full(psf_im.shape, 1e6),
-                                                   jacobian=jac))]
-    fits, _, _ = metacal(obs, seed=1, step=0.01, psf="dilate", psf_model="em3",
-                         gal_model="gauss", nproc=1)
-    for t in ("noshear", "1p", "1m"):
-        assert fits[t]["flags"][0] == 0
-        assert np.isfinite(fits[t]["Tpsf"][0]) and fits[t]["Tpsf"][0] > 0
-
-
-def _two_sizes(npix=33, scale=0.141):
-    """A small and a large galaxy: two different superbit-lensing T guesses."""
-    import galsim
-    import ngmix
-
-    jac = ngmix.DiagonalJacobian(row=(npix - 1) / 2, col=(npix - 1) / 2, scale=scale)
-    psf = galsim.Moffat(beta=3, fwhm=0.5)
-    psf_im = psf.drawImage(nx=npix, ny=npix, scale=scale).array
-    rng = np.random.RandomState(5)
-    obs = []
-    for hlr in (0.2, 0.6):
-        gal = galsim.Convolve(galsim.Exponential(half_light_radius=hlr, flux=1e4), psf)
-        image = gal.drawImage(nx=npix, ny=npix, scale=scale).array
-        obs.append(ngmix.Observation(
-            image + rng.normal(0, 1.0, image.shape), weight=np.ones_like(image), jacobian=jac,
-            psf=ngmix.Observation(psf_im, weight=np.full(psf_im.shape, 1e6), jacobian=jac)))
-    return obs
-
-
-def _record_t_guesses(monkeypatch):
-    import ngmix
-
-    seen = []
-    go = ngmix.runners.Runner.go
-
-    def spy(self, obs):
-        seen.append(self.guesser.T)
-        return go(self, obs)
-
-    monkeypatch.setattr(ngmix.runners.Runner, "go", spy)
-    return seen
-
-
-def test_the_plain_fit_guesses_t_per_object_like_superbit(monkeypatch):
-    """superbit-lensing (metacalibration/ngmix_fit.py) seeds each galaxy fit
-    with GaussMom(1.2).go(obs)['T'] of that object, not a fixed 4 * scale^2."""
-    import ngmix
-
-    from shearnet.evaluation.measurements import fit_original
-
-    obs = _two_sizes()
-    seen = _record_t_guesses(monkeypatch)
-    out = fit_original(obs, seed=1, psf_model="em3", gal_model="gauss", nproc=1)
-    assert np.all(out["flags"] == 0)
-    expected = [ngmix.gaussmom.GaussMom(fwhm=1.2).go(o)["T"] for o in obs]
-    assert seen == pytest.approx(expected) and expected[1] > 1.5 * expected[0]
-
-
-def test_every_metacal_product_is_guessed_from_the_original_stamp(monkeypatch):
-    import ngmix
-
-    from shearnet.evaluation.measurements import metacal
-
-    obs = _two_sizes()
-    seen = _record_t_guesses(monkeypatch)
-    fits, _, _ = metacal(obs, seed=1, step=0.01, psf="dilate", psf_model="em3",
-                         gal_model="gauss", nproc=1)
-    assert all(np.all(fits[t]["flags"] == 0) for t in ("noshear", "1p", "1m"))
-    per_object = len(seen) // len(obs)
-    for i, o in enumerate(obs):
-        t = ngmix.gaussmom.GaussMom(fwhm=1.2).go(o)["T"]
-        assert seen[i * per_object:(i + 1) * per_object] == pytest.approx([t] * per_object)
-
-
-def test_the_catalog_says_what_each_object_cost_ngmix(catalog):
-    ngmix = fits.getdata(catalog, "NGMIX")
-    for stage in ("fit", "metacal"):
-        total, psf = ngmix[f"{stage}_cpu_seconds"], ngmix[f"{stage}_psf_cpu_seconds"]
-        assert np.all(np.isfinite(total)) and np.all(total > 0), stage
-        assert np.all(psf >= 0) and np.all(psf <= total), stage
-    # metacal fits nine products, the plain fit one
-    assert np.median(ngmix["metacal_cpu_seconds"]) > np.median(ngmix["fit_cpu_seconds"])
-
-
-def test_the_blocks_time_every_stage(catalog):
-    blocks = fits.getdata(catalog, "BLOCKS")
-    for column in ("render_seconds", "shearnet_seconds", "shearnet_metacal_seconds",
-                   "ngmix_fit_seconds", "ngmix_metacal_seconds"):
-        assert np.all(np.isfinite(blocks[column])) and np.all(blocks[column] > 0), column
-    stages = sum(blocks[c] for c in ("render_seconds", "shearnet_seconds",
-                                     "shearnet_metacal_seconds", "ngmix_fit_seconds",
-                                     "ngmix_metacal_seconds"))
-    assert np.all(stages <= blocks["seconds"] + 0.1)
-    assert np.all(blocks["ngmix_workers"] >= 1)
-    protocol = {row["key"]: row["value"] for row in fits.getdata(catalog, "PROTOCOL")}
-    assert float(protocol["shearnet_compile_seconds"]) > 0
-
-
-def test_em_psf_fits_are_timed_apart_from_the_galaxy_fit():
-    import pickle
-
-    from shearnet.evaluation.measurements import fit_original, metacal
-    from shearnet.methods.ngmix import CpuStopwatch, build_runners
-
-    obs = _two_sizes()
-    out = fit_original(obs, seed=1, psf_model="em3", gal_model="gauss", nproc=1)
-    assert np.all((out["psf_cpu_seconds"] > 0) & (out["psf_cpu_seconds"] < out["cpu_seconds"]))
-    fits_, _, _ = metacal(obs, seed=1, step=0.01, psf="dilate", psf_model="em3",
-                          gal_model="gauss", nproc=1)
-    timing = fits_["timing"]
-    assert np.all((timing["psf_cpu_seconds"] > 0)
-                  & (timing["psf_cpu_seconds"] < timing["cpu_seconds"]))
-    # it travels to spawn workers with the runner it wraps
-    watch = pickle.loads(pickle.dumps(CpuStopwatch(build_runners(
-        np.random.RandomState(0), psf_model="em3")[1])))
-    watch.go(obs=obs[0].psf)
-    assert watch.seconds > 0 and watch.guesser is watch.runner.guesser
-
-
-def test_shearnet_is_compiled_before_it_is_timed(run):
-    """jit compiles once per batch shape; all of them are compiled up front so the
-    timed calls never include compilation."""
-    from shearnet.evaluation.predictor import RunPredictor
-
-    predictor = RunPredictor(run)
-    if not hasattr(predictor._jitted, "_cache_size"):
-        pytest.skip("this jax cannot report its compilation cache")
-    npix = 21  # the tiny run's stamp_size
-    rows = [10, 9 * 4]
-    assert predictor.compile(rows, 8, npix, npix) > 0
-    compiled = predictor._jitted._cache_size()
-    for r in rows:
-        psf = np.zeros((r, npix, npix), np.float32) if predictor.uses_psf else None
-        predictor(np.zeros((r, npix, npix), np.float32), psf, 8)
-    assert predictor._jitted._cache_size() == compiled
+def test_allocation_kill_preserves_committed_observations(tmp_path):
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+    config = Config.from_dict(TINY).with_overrides({"evaluation": {"nobj": 8}})
+    config_path = tmp_path / "config.yaml"
+    config.save(config_path)
+    output = tmp_path / "killed"
+    args = [sys.executable, "-m", "shearnet.cli.evaluate", "--config", str(config_path),
+            "--estimator", "ngmix", "--output", str(output), "--chunk-size", "1",
+            "--checkpoint-seconds", ".001", "--quiet"]
+    with (tmp_path / "eval.log").open("w") as log:
+        process = subprocess.Popen(args, stdout=log, stderr=log, start_new_session=True)
+        try:
+            deadline = time.monotonic() + 90
+            while not (output / "progress.json").exists():
+                assert process.poll() is None, (tmp_path / "eval.log").read_text()
+                if time.monotonic() >= deadline:
+                    pytest.fail("evaluation did not commit a checkpoint within 90 seconds")
+                time.sleep(.05)
+            os.killpg(process.pid, signal.SIGKILL)
+            assert process.wait(timeout=10) == -signal.SIGKILL
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=10)
+    committed = {p.name: p.read_bytes() for p in (output / "shards").glob("*.fits")}
+    assert committed
+    result = subprocess.run(args + ["--resume"], capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    for name, data in committed.items():
+        assert (output / "shards" / name).read_bytes() == data
+    with fits.open(output / "ngmix.fits") as hdul:
+        assert len(hdul["NGMIX"].data) == 32
+        assert np.array_equal(hdul["TRUTH"].data["record_id"], np.arange(32))

@@ -6,7 +6,7 @@
       config.input.yaml        the YAML as given
       config.resolved.yaml     every setting, defaults filled, paths absolute
       manifest.json            identity and provenance, checkpoint hash
-      status.json              pending / running / completed / failed
+      status.json              pending / running / completed / failed / paused
       model/best.msgpack       the parameters to evaluate (EMA ones if EMA)
       normalizers/labels.npz   always (identity when label normalization is off)
       normalizers/images.npz   only when image normalization is on
@@ -14,7 +14,6 @@
       training/history.npz     the same numbers as arrays
       training/learning_curve.png
       logs/train.log
-      evaluations/<name>/      one per shearnet-eval run, see EvaluationDir
 
 A run is found by its directory, never by searching for a name prefix.
 """
@@ -29,9 +28,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-__all__ = ["RunDir", "EvaluationDir", "RunError", "atomic_write", "write_json"]
+__all__ = ["RunDir", "RunError", "atomic_write", "write_json"]
 
-STATES = ("pending", "running", "completed", "failed")
+STATES = ("pending", "running", "completed", "failed", "paused")
 
 
 class RunError(RuntimeError):
@@ -49,6 +48,8 @@ def atomic_write(path, data: bytes) -> None:
             out.flush()
             os.fsync(out.fileno())
         os.replace(tmp, path)
+        from .recovery import sync_directory
+        sync_directory(path.parent)
     except BaseException:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -74,7 +75,7 @@ class _StatusMixin:
         record = dict(current, state=state, updated=_now(), **info)
         if state == "running" and "started" not in current:
             record["started"] = record["updated"]
-        if state in ("completed", "failed"):
+        if state in ("completed", "failed", "paused"):
             record["finished"] = record["updated"]
         write_json(self.status_path, record)
 
@@ -112,7 +113,6 @@ class RunDir(_StatusMixin):
     learning_curve = property(lambda self: self.root / "training" / "learning_curve.png")
     logs_dir = property(lambda self: self.root / "logs")
     train_log = property(lambda self: self.root / "logs" / "train.log")
-    evaluations_dir = property(lambda self: self.root / "evaluations")
 
     def __repr__(self) -> str:
         return f"RunDir({str(self.root)!r})"
@@ -123,8 +123,7 @@ class RunDir(_StatusMixin):
 
         An existing non-empty directory is refused: a completed run is never
         silently replaced, and a half-written one should be looked at before it
-        is thrown away. ``overwrite`` deletes it first, evaluations included --
-        they measured the model being replaced.
+        is thrown away. ``overwrite`` deletes the existing training directory.
         """
         if self.root.exists() and any(self.root.iterdir()):
             if not overwrite:
@@ -157,35 +156,3 @@ class RunDir(_StatusMixin):
 
     def write_manifest(self, manifest: Dict[str, Any]) -> None:
         write_json(self.manifest_path, manifest)
-
-    def evaluation(self, name: str) -> "EvaluationDir":
-        return EvaluationDir(self, name)
-
-
-class EvaluationDir(_StatusMixin):
-    """One ``shearnet-eval`` of a run: ``<run>/evaluations/<name>/``."""
-
-    def __init__(self, run: RunDir, name: str):
-        if not name or "/" in name or name.startswith("."):
-            raise ValueError(f"bad evaluation name {name!r}")
-        self.run = run
-        self.name = name
-        self.root = run.evaluations_dir / name
-
-    config_input = property(lambda self: self.root / "config.input.yaml")
-    config_resolved = property(lambda self: self.root / "config.resolved.yaml")
-    status_path = property(lambda self: self.root / "status.json")
-    log = property(lambda self: self.root / "eval.log")
-    scratch = property(lambda self: self.root / ".partial")
-
-    def catalog_path(self, run_name: str) -> Path:
-        return self.root / f"{run_name}_{self.name}.fits"
-
-    def create(self, overwrite: bool = False) -> None:
-        if self.root.exists() and any(self.root.iterdir()):
-            if not overwrite:
-                raise RunError(
-                    f"{self.root} already holds an evaluation ({self.state or 'no status'}). "
-                    "Give this one another --eval-name, or pass --overwrite.")
-            shutil.rmtree(self.root)
-        self.root.mkdir(parents=True, exist_ok=True)

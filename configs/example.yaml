@@ -3,7 +3,7 @@
 # default, and a key that is not in the schema is an error.
 #
 #   shearnet-train --config configs/example.yaml --run runs/example
-#   shearnet-eval  --run runs/example
+#   shearnet-eval --config configs/example.yaml --run runs/example --estimator shearnet --output results/example/shearnet
 schema_version: 1
 
 run_options:

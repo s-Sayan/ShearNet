@@ -2,8 +2,7 @@
 
 Lives in ``core`` (rather than the metrics module) so that ``core.dataset`` can
 measure PSF moments without importing the heavier metrics module, which would
-otherwise create a dependency cycle. :mod:`shearnet.metrics` and
-``shearnet.utils.metrics`` re-export :func:`get_admoms_ngmix_fit`.
+otherwise create a dependency cycle.
 """
 
 import galsim
@@ -33,8 +32,7 @@ def get_admoms_ngmix_fit(obs: "ngmix.Observation", reduced: bool = True, rng=Non
 
     Two sizes come back and they are not the same quantity. ``T`` is GalSim
     HSM's ``2 sigma^2`` with ``sigma = det(M)^(1/4)`` -- a determinant size,
-    which is what every ``T`` this helper has ever returned meant, and what the
-    ``psf_T`` training label is. ``T_admom`` is ngmix's adaptive-moment trace
+    and is the ``psf_T`` training label. ``T_admom`` is ngmix's adaptive-moment trace
     ``Irr + Icc``, the PSF size SuperBIT's catalogs use. They agree for a round
     PSF and differ by ``1/sqrt(1 - |e|^2)`` otherwise.
     """

@@ -12,7 +12,7 @@ authors = [
 description = "Neural network-based galaxy shear estimation with JAX"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
@@ -27,8 +27,9 @@ dependencies = [
     "jaxlib>=0.4.0", 
     "flax>=0.7.0",
     "optax>=0.1.0",
-    "orbax-checkpoint==0.11.20",
     "galsim>=2.3",
+    "ngmix @ git+https://github.com/esheldon/ngmix.git@00f9f9209a462d5e6d7014381fa1dd8d3a6fc7cf",
+    "JAX-GalSim @ git+https://github.com/AdamField118/JAX-GalSim@0213d84d36fc381acc28d614ddf7269e8e30f696",
     # ngmix itself is installed from github (it isnt on pypi) and doesnt
     # declare numba, so it has to be declared here
     "numba>=0.57.0",
@@ -72,6 +73,8 @@ Repository = "https://github.com/s-Sayan/ShearNet.git"
 [project.scripts]
 shearnet-train = "shearnet.cli.train:main"
 shearnet-eval = "shearnet.cli.evaluate:main"
+shearnet-merge = "shearnet.io.merge:main"
+shearnet-pipeline = "shearnet.cli.pipeline:main"
 
 [tool.setuptools.packages.find]
 include = ["shearnet*"]

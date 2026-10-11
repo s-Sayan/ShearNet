@@ -1,387 +1,335 @@
-"""Measure a finished run and write one raw catalog.
-
-``shearnet-eval`` renders every configured scene at every configured ring
-station from the evaluation catalog, measures each stamp with every configured
-estimator, and writes what they measured -- nothing more -- to one FITS file:
-
-* ShearNet's prediction on the original stamp and on the nine metacal products,
-* ngmix's fit of the original stamp and of the nine metacal products,
-* the PSF moments and stamp-level observables,
-* the truth each stamp was drawn from,
-* the protocol, the configs and the provenance.
-
-No response, bias, leakage slope, selection, weight or correction is computed
-here; those are derived from this file, elsewhere. A failed fit is a flagged
-row, not a missing one.
-"""
-
-from __future__ import annotations
-
-import hashlib
-import time
+"""Run one estimator, committing completed observations throughout the job."""
 from pathlib import Path
-from typing import Dict, List, Optional
-
+import time
 import numpy as np
 
 from ..artifacts import provenance
-from ..artifacts.runs import EvaluationDir, RunDir, atomic_write
-from ..config import Config
+from ..artifacts.runs import atomic_write, write_json
+from ..artifacts.recovery import Interrupted, StopRequest, exclusive
 from ..io import catalog_schema as schema
-from ..io.fits_catalog import CatalogWriter, key_value_hdu, numeric_hdu
-from ..logging_utils import get_logger, run_log
+from ..io.fits_catalog import CatalogWriter, numeric_hdu, key_value_hdu
+from ..logging_utils import get_logger
 from ..parallel import resolve_nproc
-from .measurements import (
-    METACAL_TYPES,
-    NGMIX_CHUNK,
-    TIMING_FIELDS,
-    fit_original,
-    measure_psf,
-    metacal,
-    stamp_observables,
-)
+from .identity import digest, file_digest, implementation, observation_recipe
+from .journal import Journal
 from .rendering import EvaluationRenderer, quarter_turns
+from .measurements import stamp_observables
+from .workers import Workers
 
 logger = get_logger(__name__)
 
-__all__ = ["evaluate", "metacal_seed", "plan"]
+
+#: Shard-header keys of the work spent on a shard's records (see TIMING).
+TIMING_KEYS = ("RENDSEC", "INFSEC", "INFIMG", "CMPSEC", "PSFFITS", "PSFSEC", "FITERR")
 
 
-def metacal_seed(base_seed: int, scene: Dict, rotation_index: int) -> int:
-    """The seed of the metacal fits of one scene at one station.
-
-    Positive applied shear uses
-    ``seed + 1``, negative ``seed + 2``, the zero-shear scene ``seed + 100 +
-    station``. It only seeds ngmix's initial guesses.
-    """
-    total = scene["g1"] + scene["g2"]
-    if scene["g1"] == 0.0 and scene["g2"] == 0.0:
-        return base_seed + 100 + rotation_index
-    return base_seed + (1 if total > 0 else 2)
-
-
-def plan(config: Config) -> Dict:
-    """How much work an evaluation is, before any of it is done."""
+def plan(config):
     n = config.get("evaluation.nobj")
     scenes = config.get("evaluation.scenes")
     rotations = config.get("evaluation.rotations_deg")
-    estimators = config.get("evaluation.estimators")
-    runs_metacal = "ngmix" in estimators or config.get("evaluation.metacal.shearnet")
-    blocks = len(scenes) * len(rotations)
-    return {
-        "objects": n,
-        "scenes": [s["name"] for s in scenes],
-        "rotations_deg": rotations,
-        "blocks": blocks,
-        "records": n * blocks,
-        "estimators": estimators,
-        "metacal_fits": n * blocks if runs_metacal else 0,
-        "ngmix_original_fits": n * blocks if "ngmix" in estimators else 0,
-    }
+    return {"objects": n, "scenes": [s["name"] for s in scenes],
+            "rotations_deg": rotations, "records": n * len(scenes) * len(rotations)}
 
 
-def evaluate(run: RunDir, *, override: Optional[Path] = None, eval_name: str = "default",
-             overwrite: bool = False) -> Path:
-    """Evaluate ``run`` into ``<run>/evaluations/<eval_name>/``; returns the catalog path."""
-    run.require_completed()
-    config = Config.from_file(run.config_resolved)
-    if override is not None:
-        config = config.evaluation_override(override)
-    edir = run.evaluation(eval_name)
-    edir.create(overwrite=overwrite)
-    if override is not None:
-        atomic_write(edir.config_input, Path(override).read_bytes())
-    config.save(edir.config_resolved)
-    edir.write_status("running")
-    with run_log(edir.log):
+def columns(config, estimator):
+    outputs = config.get("model.output_keys")
+    tables = {"TRUTH": schema.TRUTH_COLUMNS + [
+        schema.Column(f"label_{k}", "f8", description=f"training target {k}") for k in outputs],
+        "STAMP": schema.STAMP_COLUMNS}
+    metacal = config.get("evaluation.metacal.shearnet")
+    tables[estimator.upper()] = (schema.ngmix_columns() if estimator == "ngmix" else
+                                 schema.shearnet_columns(outputs, metacal=metacal))
+    return tables
+
+
+def evaluate(config, output, *, estimator, run=None, resume=False, chunk_size=None,
+             checkpoint_seconds=300, stop=None):
+    """Measure a standalone estimator catalog; ``output`` owns its shards.
+
+    ``chunk_size`` galaxies are rendered at a time, in every scene and station,
+    and handed to the workers one galaxy at a time (default: the renderer's
+    ``simulation.jax_batch_size``, so no render batch is padded).
+    """
+    if estimator not in ("shearnet", "ngmix"):
+        raise ValueError("choose shearnet or ngmix")
+    chunk_size = chunk_size or config.get("simulation.jax_batch_size")
+    if chunk_size < 1 or checkpoint_seconds <= 0:
+        raise ValueError("chunk size and checkpoint interval must be positive")
+    output = Path(output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    with exclusive(output / ".writer.lock"), StopRequest() as signals:
+        stop = stop or signals
+        status = output / "status.json"
+        write_json(status, {"state": "running"})
+        began = time.monotonic()
         try:
-            path = _evaluate(config, run, edir)
+            path = _evaluate(config, output, estimator, run, resume, chunk_size,
+                             checkpoint_seconds, stop)
         except BaseException as exc:
-            edir.write_status("failed", error=f"{type(exc).__name__}: {exc}")
-            logger.error("evaluation failed: %s", exc)
+            write_json(status, {"state": "paused" if isinstance(exc, Interrupted) else "failed",
+                                "error": str(exc)})
             raise
-    return path
+        write_json(status, {"state": "completed", "catalog": str(path),
+                            "attempt_seconds": time.monotonic() - began})
+        return path
 
 
-def _evaluate(config: Config, run: RunDir, edir: EvaluationDir) -> Path:
+def _evaluate(config, output, estimator, run, resume, chunk_size, interval, stop):
+    import jax
     from .predictor import RunPredictor
 
-    began = time.time()
-    run_name = config.get("run_options.run_name")
-    work = plan(config)
-    estimators = work["estimators"]
-    want_shearnet = "shearnet" in estimators
-    want_ngmix = "ngmix" in estimators
-    shearnet_metacal = config.get("evaluation.metacal.shearnet")
-    runs_metacal = want_ngmix or shearnet_metacal
-    scenes = config.get("evaluation.scenes")
-    rotations = config.get("evaluation.rotations_deg")
-    n = work["objects"]
-    seed = config.get("evaluation.seed")
-    batch = config.get("evaluation.batch_size")
-    nproc = config.get("run_options.ncores")
-    ngmix_kw = dict(psf_model=config.get("evaluation.ngmix.psf_model"),
-                    gal_model=config.get("evaluation.ngmix.gal_model"), nproc=nproc)
-    step = config.get("evaluation.metacal.step")
-    reconv = config.get("evaluation.metacal.psf")
-
-    logger.info("evaluating %s (%s) -> %s", run_name, run.root, edir.root)
-    logger.info("%d objects x %d scenes (%s) x %d stations (%s) = %d records; measuring %s%s",
-                n, len(scenes), ", ".join(work["scenes"]), len(rotations),
-                ", ".join(f"{r:g}" for r in rotations), work["records"], ", ".join(estimators),
-                "; ngmix metacal on every record" if runs_metacal else "")
-    if runs_metacal:
-        logger.info("ngmix workers: %d", resolve_nproc(nproc, n_tasks=n))
-
+    if not jax.config.jax_enable_x64:
+        raise ValueError("evaluation requires JAX_ENABLE_X64=1 in both jobs")
+    if estimator not in config.get("evaluation.estimators"):
+        raise ValueError(f"{estimator} is not enabled in evaluation.estimators")
+    predictor = None
+    checkpoint = None
+    if estimator == "shearnet":
+        if run is None:
+            raise ValueError("ShearNet evaluation requires --run")
+        run.require_completed()
+        checkpoint = file_digest(run.best_params)
+        if checkpoint != run.read_manifest()["checkpoint"]["sha256"]:
+            raise ValueError("model checkpoint differs from the training manifest")
+        predictor = RunPredictor(run, config)
     renderer = EvaluationRenderer(config)
-    predictor = RunPredictor(run, config) if want_shearnet else None
+    identity = {"observation": renderer.recipe, "implementation": implementation(),
+                "estimator": estimator,
+                "measurement": config.get("evaluation.ngmix") if estimator == "ngmix" else
+                {"checkpoint": checkpoint, "model": config.get("model"),
+                 "normalizers": [file_digest(p) for p in
+                                 (run.label_normalizer, run.image_normalizer) if p.exists()]}}
+    tables = columns(config, estimator)
+    work = plan(config)
+    journal = Journal(output / "shards", identity, tables, work["records"], resume=resume)
+    date_path = output / "created.txt"
+    if not date_path.exists():
+        atomic_write(date_path, time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()).encode())
+    config.save(output / "config.resolved.yaml")
+    atomic_write(output / "identity.json", (str(journal.signature) + "\n").encode())
+    n = work["objects"]
+    scenes = config.get("evaluation.scenes")
+    rotations = work["rotations_deg"]
     output_keys = tuple(config.get("model.output_keys"))
+    shearnet_metacal = config.get("evaluation.metacal.shearnet")
+    variants = ("original",) + (schema.METACAL_TYPES if shearnet_metacal else ())
+    workers = resolve_nproc(config.get("run_options.ncores"), n_tasks=n)
+    batch = config.get("evaluation.batch_size")
+    settings = dict(scale=renderer.cfg.scale, step=config.get("evaluation.metacal.step"),
+                    psf=config.get("evaluation.metacal.psf"), estimator=estimator,
+                    psf_model=config.get("evaluation.ngmix.psf_model"),
+                    gal_model=config.get("evaluation.ngmix.gal_model"))
 
-    tables = {"TRUTH": schema.TRUTH_COLUMNS + [
-        schema.Column(f"label_{key}", "f8", description=f"the training target {key} for this "
-                      "stamp, physical units") for key in output_keys],
-        "STAMP": schema.STAMP_COLUMNS}
-    if want_shearnet:
-        tables["SHEARNET"] = schema.shearnet_columns(output_keys, metacal=shearnet_metacal)
-    if want_ngmix:
-        tables["NGMIX"] = schema.ngmix_columns(metacal=True)
-    writer = CatalogWriter(edir.scratch, tables, work["records"])
+    # work done since the last commit, written into the next shard's header so
+    # the catalog's TIMING sums over exactly the committed records
+    spent = dict.fromkeys(TIMING_KEYS, 0.0)
+    if predictor is not None:
+        tick = time.perf_counter()
+        predictor.compile([1], batch, renderer.cfg.npix, renderer.cfg.npix)
+        spent["CMPSEC"] = time.perf_counter() - tick
+        logger.info("ShearNet compiled in %.0f s, kept out of the inference time",
+                    spent["CMPSEC"])
+    buffer, rows, predicted = [], {}, []
+    last_commit = time.monotonic()
 
-    blocks: List[Dict] = []
-    psf_reference = psf_moments = None
-    compile_seconds = 0.0
-    workers = resolve_nproc(nproc, n_tasks=n) if runs_metacal else 0
-    for s, scene in enumerate(scenes):
-        for k, rotation in enumerate(rotations):
-            t0 = time.time()
-            # wall seconds of each stage of this block; ngmix's per-object CPU
-            # seconds go in the NGMIX table
-            wall = dict.fromkeys(("shearnet", "shearnet_metacal", "ngmix_fit",
-                                  "ngmix_metacal"), 0.0)
-            index = s * len(rotations) + k
-            rows = slice(index * n, (index + 1) * n)
-            keys = {
-                "record_id": np.arange(rows.start, rows.stop, dtype=np.int64),
-                "catalog_row": np.arange(n, dtype=np.int64),
-                "scene_id": np.full(n, s, dtype=np.int16),
-                "rotation_id": np.full(n, k, dtype=np.int16),
-            }
-            block = renderer.render(scene["g1"], scene["g2"], rotation)
-            rendered = time.time() - t0
+    def commit():
+        nonlocal last_commit
+        if buffer:
+            journal.commit(buffer, timing=spent)
+            buffer.clear()
+            spent.update(dict.fromkeys(TIMING_KEYS, 0.0))
+            done = int(journal.done.sum())
+            write_json(output / "progress.json", {"completed": done, "total": work["records"],
+                                                   "checkpoint_unix": time.time()})
+            logger.info("%s: saved %d/%d observations", estimator, done, work["records"])
+        last_commit = time.monotonic()
 
-            truth = dict(keys, rotation_deg=np.full(n, float(rotation)), **block.truth)
-            for i, key in enumerate(output_keys):
-                truth[f"label_{key}"] = block.labels[:, i]
-            writer.fill("TRUTH", rows, truth)
-
-            # the PSF does not depend on the scene or the station; measure it once
-            # and check that is still true rather than assume it
-            if psf_reference is None or not np.array_equal(block.psf, psf_reference):
-                psf_moments = measure_psf(block.psf, renderer.cfg.scale, seed=seed)
-                psf_reference = block.psf
-            writer.fill("STAMP", rows, dict(keys, **psf_moments,
-                                            **stamp_observables(block.galaxy,
-                                                                config.get("simulation.noise_sigma"))))
-
-            if want_shearnet:
-                if index == 0:
-                    chunks = [min(NGMIX_CHUNK, n - start) for start in range(0, n, NGMIX_CHUNK)]
-                    compile_seconds = predictor.compile(
-                        [n] + ([9 * m for m in chunks] if shearnet_metacal else []), batch,
-                        block.galaxy.shape[-1], block.psf.shape[-1])
-                    logger.info("ShearNet compiled in %.0f s (kept out of the timings)",
-                                compile_seconds)
-                tick = time.perf_counter()
-                preds = predictor(block.galaxy, block.psf, batch)
-                wall["shearnet"] += time.perf_counter() - tick
-                writer.fill("SHEARNET", rows, dict(
-                    keys, **_shearnet_values(preds, output_keys, "original")))
-            if want_ngmix:
-                writer.fill("NGMIX", rows, keys)
-
-            mseed = metacal_seed(seed, scene, k)
-            failures = {"ngmix_original": 0, "ngmix_metacal": 0}
-            for start in range(0, n, NGMIX_CHUNK) if (want_ngmix or runs_metacal) else ():
-                stop = min(start + NGMIX_CHUNK, n)
-                chunk = slice(rows.start + start, rows.start + stop)
-                if want_ngmix:
-                    observations = renderer.observations(block.galaxy[start:stop],
-                                                         block.psf[start:stop])
+    def tasks():
+        """One task per galaxy: every observation of it not yet committed."""
+        for first in range(0, n, chunk_size):
+            catalog_rows = np.arange(first, min(n, first + chunk_size))
+            pending = {int(r): [] for r in catalog_rows}
+            for s, scene in enumerate(scenes):
+                for k, angle in enumerate(rotations):
+                    stop.check()
+                    offset = (s * len(rotations) + k) * n
+                    indices = catalog_rows[~journal.done[offset + catalog_rows]]
+                    if not len(indices):
+                        continue
                     tick = time.perf_counter()
-                    fit = fit_original(observations, seed=seed, **ngmix_kw)
-                    wall["ngmix_fit"] += time.perf_counter() - tick
-                    failures["ngmix_original"] += int(np.count_nonzero(fit["flags"]))
-                    timing = {f"fit_{name}": fit.pop(name) for name in TIMING_FIELDS}
-                    writer.fill("NGMIX", chunk, dict(_ngmix_values(fit, "original"), **timing))
-                if runs_metacal:
-                    images = want_shearnet and shearnet_metacal
-                    observations = renderer.observations(block.galaxy[start:stop],
-                                                         block.psf[start:stop])
-                    tick = time.perf_counter()
-                    fits, gal_stack, psf_stack = metacal(
-                        observations, seed=mseed, step=step, psf=reconv, return_images=images,
-                        **ngmix_kw)
-                    wall["ngmix_metacal"] += time.perf_counter() - tick
-                    bad = np.zeros(stop - start, dtype=bool)
-                    for t in METACAL_TYPES:
-                        bad |= fits[t]["flags"] != 0
-                        if want_ngmix:
-                            writer.fill("NGMIX", chunk, _ngmix_values(fits[t], t))
-                    if want_ngmix:
-                        writer.fill("NGMIX", chunk, {f"metacal_{name}": value
-                                                     for name, value in fits["timing"].items()})
-                    failures["ngmix_metacal"] += int(bad.sum())
-                    if images:
-                        m, npix = gal_stack.shape[0], gal_stack.shape[-1]
-                        tick = time.perf_counter()
-                        preds = predictor(gal_stack.reshape(m * 9, npix, npix),
-                                          psf_stack.reshape(m * 9, npix, npix), batch)
-                        wall["shearnet_metacal"] += time.perf_counter() - tick
-                        preds = preds.reshape(m, 9, len(output_keys))
-                        values = {}
-                        for j, t in enumerate(METACAL_TYPES):
-                            values.update(_shearnet_values(preds[:, j, :], output_keys, t))
-                        writer.fill("SHEARNET", chunk, values)
-                        del gal_stack, psf_stack
+                    block = renderer.render(scene["g1"], scene["g2"], angle, indices)
+                    spent["RENDSEC"] += time.perf_counter() - tick
+                    observations = renderer.observations(block.galaxy, block.psf)
+                    stamps = stamp_observables(block.galaxy,
+                                               config.get("simulation.noise_sigma"))
+                    for j, catalog_row in enumerate(indices):
+                        record = offset + int(catalog_row)
+                        object_uid = digest([renderer.identity, int(catalog_row)])
+                        uid = digest([object_uid, scene["g1"], scene["g2"], angle])
+                        keys = dict(record_id=record, catalog_row=catalog_row, scene_id=s,
+                                    rotation_id=k, object_uid=object_uid,
+                                    observation_uid=uid)
+                        truth = dict(keys, rotation_deg=angle,
+                                     **{name: values[j] for name, values in block.truth.items()
+                                        if name not in keys})
+                        truth.update({f"label_{name}": block.labels[j, i]
+                                      for i, name in enumerate(output_keys)})
+                        rows[record] = {
+                            "TRUTH": truth,
+                            "STAMP": dict(keys, **{name: values[j]
+                                                   for name, values in stamps.items()}),
+                            estimator.upper(): dict(keys)}
+                        pending[int(catalog_row)].append((record, uid, observations[j]))
+            for catalog_row, observations in pending.items():
+                if observations:
+                    object_uid = digest([renderer.identity, catalog_row])
+                    yield catalog_row, dict(settings, object_uid=object_uid,
+                                            observations=observations)
 
-            seconds = time.time() - t0
-            blocks.append({"scene_id": s, "rotation_id": k, "first_record": rows.start,
-                           "n_records": n, "metacal_seed": mseed if runs_metacal else -1,
-                           "ngmix_seed": seed if want_ngmix else -1,
-                           "noise_quarter_turns": quarter_turns(rotation),
-                           "seconds": round(seconds, 1),
-                           "render_seconds": rendered,
-                           **{f"{stage}_seconds": value for stage, value in wall.items()},
-                           "ngmix_workers": workers})
-            logger.info(
-                "block %d/%d: scene %s, rotation %g: rendered in %.0f s, measured in %.0f s%s",
-                index + 1, work["blocks"], scene["name"], rotation, rendered,
-                seconds - rendered,
-                "" if not runs_metacal else
-                f"; ngmix flags: {failures['ngmix_original']} original, "
-                f"{failures['ngmix_metacal']} metacal")
+    def finish_predictions():
+        if not predicted:
+            return
+        galaxies = np.concatenate([result["galaxy"][:len(variants)] for _, result in predicted])
+        psfs = np.concatenate([result["psf"][:len(variants)] for _, result in predicted])
+        tick = time.perf_counter()
+        predictions = predictor(galaxies, psfs, batch)
+        spent["INFSEC"] += time.perf_counter() - tick
+        spent["INFIMG"] += len(galaxies)
+        predictions = predictions.reshape(len(predicted), len(variants), -1)
+        for (record, _), values in zip(predicted, predictions):
+            row = rows.pop(record)
+            for j, variant in enumerate(variants):
+                row["SHEARNET"].update(_shearnet_values(values[j], output_keys, variant))
+            buffer.append(row)
+        predicted.clear()
 
-    path = edir.catalog_path(run_name)
-    header = _primary_header(config, run, edir, work)
-    extra = _metadata_hdus(config, run, renderer, blocks, scenes, rotations, compile_seconds)
-    writer.write(path, header, extra)
+    try:
+        with Workers(workers) as pool:
+            for completed in pool.map(tasks(), stop):
+                if completed is not None:
+                    _, result = completed
+                    spent["PSFFITS"] += result["psf_fits"]
+                    spent["PSFSEC"] += result["psf_seconds"]
+                    spent["FITERR"] += len(result["errors"])
+                    for record, message in result["errors"]:
+                        logger.warning("record %d: flagged, %s", record, message)
+                    for record, measured in result["records"].items():
+                        row = rows[record]
+                        row["STAMP"].update(
+                            measured["moments"],
+                            input_fingerprint=measured["input_fingerprint"],
+                            metacal_fingerprint=measured["metacal_fingerprint"])
+                        if predictor is None:
+                            row["NGMIX"].update(measured["values"])
+                            buffer.append(rows.pop(record))
+                        else:
+                            predicted.append((record, measured))
+                due = time.monotonic() - last_commit >= interval
+                if len(predicted) * len(variants) >= batch or due:
+                    finish_predictions()
+                if len(buffer) >= 2048 or due:
+                    commit()
+    finally:
+        # save completed observations even when a worker or the allocation fails
+        if predictor is not None:
+            finish_predictions()
+        commit()
+    stop.check()
+    if not journal.done.all():
+        raise RuntimeError("evaluation ended with missing observations")
+    if observation_recipe(config, renderer.psf_files) != renderer.recipe:
+        raise ValueError("evaluation inputs changed during the job")
+    if checkpoint and file_digest(run.best_params) != checkpoint:
+        raise ValueError("model checkpoint changed during evaluation")
+    writer = CatalogWriter(output / ".assembly", tables, work["records"])
+    for path in journal.paths:
+        with journal.open(path) as hdul:
+            ids = hdul["TRUTH"].data["record_id"]
+            for name in tables:
+                writer.fill(name, ids, {c.name: hdul[name].data[c.name] for c in tables[name]})
+    header = {"SCHEMA": (schema.SCHEMA_NAME, "catalog layout"),
+              "SCHEMAV": (schema.SCHEMA_VERSION, "catalog layout version"),
+              "RUNNAME": (config.get("run_options.run_name"), "run"),
+              "EVALNAME": (estimator, "evaluation"),
+              "DATE": (date_path.read_text(), "evaluation created, UTC"),
+              "BACKEND": (f"jax-galsim/{jax.devices()[0].platform}", "renderer and device"),
+              "PSFMODE": (config.get("simulation.psf.mode"), "PSF source"),
+              "X64": (True, "rendering precision"),
+              "ESTIMATR": (estimator, "estimator"), "OBSSHA": (renderer.identity, ""),
+              "IMPLSHA": (digest(identity["implementation"]), ""),
+              "NOBJ": (n, "objects per scene and rotation"),
+              "NRECORD": (work["records"], "complete observations"),
+              "NSCENE": (len(scenes), "scenes"), "NROT": (len(rotations), "rotations"),
+              "MCALSTEP": (config.get("evaluation.metacal.step"), "one-sided shear"),
+              "MCALPSF": (config.get("evaluation.metacal.psf"), "reconvolution PSF")}
+    if checkpoint:
+        header["CKPTSHA"] = (checkpoint, "")
+        header["CKPTEPO"] = (run.read_manifest()["checkpoint"]["epoch"], "model epoch")
+    totals = journal.timing(TIMING_KEYS)
+    extra = metadata(config, renderer, run, workers, identity) + [key_value_hdu("TIMING", {
+        "device": jax.devices()[0].platform,
+        "render_seconds": totals["RENDSEC"],
+        "shearnet_inference_seconds": totals["INFSEC"],
+        "shearnet_images": int(totals["INFIMG"]),
+        "shearnet_compile_seconds": totals["CMPSEC"],
+        "ngmix_workers": workers,
+        "ngmix_psf_fits": int(totals["PSFFITS"]),
+        "failures_raised": int(totals["FITERR"]),
+        "ngmix_psf_cpu_seconds": totals["PSFSEC"],
+        "note": "seconds summed over every attempt's committed work; compilation is kept "
+                "out of the inference time. ngmix fitted each distinct PSF stamp once per "
+                "galaxy: ngmix_psf_fits fits took ngmix_psf_cpu_seconds, which the NGMIX "
+                "*_psf_cpu_seconds columns sum to; *_psf_uncached_cpu_seconds estimate a "
+                "refit everywhere. failures_raised counts measurements that raised and were "
+                "flagged (each logged with its error)"})]
+    path = writer.write(output / f"{estimator}.fits", header, extra)
     writer.cleanup()
-    seconds = round(time.time() - began, 1)
-    edir.write_status("completed", catalog=path.name, records=work["records"], seconds=seconds)
-    logger.info("")
-    logger.info("EVALUATION COMPLETE")
-    logger.info("Checkpoint: %s", run.read_manifest()["checkpoint"]["sha256"])
-    logger.info("Records:    %d (failed fits are flagged, not dropped)", work["records"])
-    logger.info("FITS:       %s", path)
-    logger.info("Scientific analysis: performed separately")
     return path
 
 
-def _shearnet_values(preds: np.ndarray, output_keys, variant: str) -> Dict[str, np.ndarray]:
-    values = {}
-    finite = np.isfinite(preds).all(axis=1)
+def _shearnet_values(prediction, output_keys, variant):
+    values = {f"flags_{variant}": int(not np.isfinite(prediction).all())}
     if "g1" in output_keys:
-        i1, i2 = output_keys.index("g1"), output_keys.index("g2")
-        values[f"g_{variant}"] = preds[:, [i1, i2]]
-    for i, key in enumerate(output_keys):
+        values[f"g_{variant}"] = prediction[[output_keys.index("g1"), output_keys.index("g2")]]
+    for j, key in enumerate(output_keys):
         if key not in ("g1", "g2"):
-            values[f"{key}_{variant}"] = preds[:, i]
-    values[f"flags_{variant}"] = (~finite).astype(np.int32)
+            values[f"{key}_{variant}"] = prediction[j]
     return values
 
 
-def _ngmix_values(fit: Dict[str, np.ndarray], variant: str) -> Dict[str, np.ndarray]:
-    return {f"{name}_{variant}": value for name, value in fit.items()}
-
-
-def _primary_header(config: Config, run: RunDir, edir: EvaluationDir, work: Dict) -> Dict:
-    import jax
-
-    manifest = run.read_manifest()
-    return {
-        "SCHEMA": (schema.SCHEMA_NAME, "catalog layout"),
-        "SCHEMAV": (schema.SCHEMA_VERSION, "catalog layout version"),
-        "RUNNAME": (config.get("run_options.run_name"), "training run"),
-        "EVALNAME": (edir.name, "evaluation name"),
-        "CKPTSHA": (manifest["checkpoint"]["sha256"], ""),
-        "CKPTEPO": (manifest["checkpoint"]["epoch"], "epoch of the saved model"),
-        "NOBJ": (work["objects"], "objects per scene and station"),
-        "NSCENE": (len(work["scenes"]), "scenes (SCENES table)"),
-        "NROT": (len(work["rotations_deg"]), "ring stations (ROTATIONS table)"),
-        "NRECORD": (work["records"], "rows of every per-record table"),
-        "BACKEND": (config.get("simulation.backend"), "renderer"),
-        "PSFMODE": (config.get("simulation.psf.mode"), "ideal or superbit"),
-        "X64": (bool(jax.config.jax_enable_x64), "JAX_ENABLE_X64 at render time"),
-        "MCALSTEP": (config.get("evaluation.metacal.step"), "one-sided metacal step"),
-        "MCALPSF": (config.get("evaluation.metacal.psf"), "metacal reconvolution PSF"),
-        "DATE": (time.strftime("%Y-%m-%dT%H:%M:%S"), "written"),
-    }
-
-
-def _metadata_hdus(config, run, renderer, blocks, scenes, rotations, compile_seconds) -> list:
-    training = run.config_resolved.read_text()
-    evaluation = config.to_yaml()
+def metadata(config, renderer, run, workers, identity):
+    scenes = config.get("evaluation.scenes")
+    rotations = config.get("evaluation.rotations_deg")
+    blocks = len(scenes) * len(rotations)
     return [
-        numeric_hdu("SCENES", {
-            "scene_id": np.arange(len(scenes)),
-            "name": np.array([s["name"] for s in scenes]),
-            "g1": np.array([s["g1"] for s in scenes]),
-            "g2": np.array([s["g2"] for s in scenes]),
-        }),
+        numeric_hdu("SCENES", {"scene_id": np.arange(len(scenes)),
+                               "name": np.array([s["name"] for s in scenes]),
+                               "g1": np.array([s["g1"] for s in scenes]),
+                               "g2": np.array([s["g2"] for s in scenes])}),
         numeric_hdu("ROTATIONS", {
             "rotation_id": np.arange(len(rotations)),
-            "rotation_deg": np.asarray(rotations, dtype=float),
-            "noise_quarter_turns": np.array([quarter_turns(r) for r in rotations]),
-        }),
-        numeric_hdu("BLOCKS", {key: np.array([b[key] for b in blocks]) for key in blocks[0]}),
-        numeric_hdu("PSF_FILES", {
-            "psf_file_id": np.arange(max(len(renderer.psf_files), 1)),
-            "path": np.array(renderer.psf_files or ["<ideal Gaussian>"]),
-        }),
+            "rotation_deg": np.array(rotations),
+            "noise_quarter_turns": np.array([quarter_turns(a) for a in rotations])}),
+        numeric_hdu("BLOCKS", {"scene_id": np.repeat(np.arange(len(scenes)), len(rotations)),
+                               "rotation_id": np.tile(np.arange(len(rotations)), len(scenes)),
+                               "first_record": np.arange(blocks) * renderer.nobj,
+                               "n_records": np.full(blocks, renderer.nobj),
+                               "ngmix_workers": np.full(blocks, workers)}),
+        numeric_hdu("PSF_FILES", {"psf_file_id": np.arange(max(1, len(renderer.psf_files))),
+                                  "path": np.array(renderer.psf_files or ["<ideal Gaussian>"])}),
         key_value_hdu("PROTOCOL", {
-            "row_order": "scene-major, then ring station, then catalog row",
-            "pairing": "every scene and station renders the same catalog rows with the same "
-                       "offsets, PSFs and noise (noise turned with the station by quarter turns)",
-            "ring": "source shape and offset rotated by rotation_deg; PSF not rotated; "
-                    "labels recomposed",
-            "applied_shear": "GalSim .shear(g) after the source shape: reduced shear, area "
-                             "preserving, no convergence or magnification",
-            "metacal": f"ngmix MetacalBootstrapper, psf={config.get('evaluation.metacal.psf')}, "
-                       f"step={config.get('evaluation.metacal.step')} (products are "
-                       f"2*step apart), types={list(METACAL_TYPES)}",
-            "metacal_seeds": "BLOCKS.metacal_seed; zero-shear scene seed+100+station, "
-                             "positive shear seed+1, negative seed+2",
-            "ngmix_fit": f"Fitter(model={config.get('evaluation.ngmix.gal_model')}) with the "
-                         "GPriorBA/CenPrior/flat priors of shearnet.methods.ngmix, PSF "
-                         f"{config.get('evaluation.ngmix.psf_model')}",
-            "ngmix_chunk": NGMIX_CHUNK,
-            "timing": "NGMIX.*_cpu_seconds: CPU seconds per object on one core, measured in "
-                      "the worker (the PSF part separately). BLOCKS.*_seconds: wall seconds "
-                      "of each stage of the block; ngmix ran on BLOCKS.ngmix_workers "
-                      "single-threaded processes, ShearNet on the JAX device in PROVENANCE, in batches "
-                      "of evaluation.batch_size, with its jit compilation done beforehand "
-                      "(shearnet_compile_seconds) and not counted",
-            "shearnet_compile_seconds": round(compile_seconds, 1),
-            "shearnet_batch_size": config.get("evaluation.batch_size"),
-            "ngmix_workers": blocks[0]["ngmix_workers"] if blocks else 0,
-            "noise_sigma": config.get("simulation.noise_sigma"),
-            "pixel_scale_arcsec": config.get("simulation.pixel_scale"),
-            "eval_catalog": config.get("simulation.catalogs.eval_file"),
-            "eval_catalog_sha256": _sha256(config.get("simulation.catalogs.eval_file")),
-            "evaluation_seed": config.get("evaluation.seed"),
-            "training_seed": config.get("training.seed"),
-        }),
-        key_value_hdu("CONFIG", {"training": training, "evaluation": evaluation}),
+            "version": 2, "identity": identity,
+            "row_order": "scene, rotation, catalog row",
+            "pairing": "every scene and station of a galaxy shares its offset, PSF and noise "
+                       "(the noise turned with the station by quarter turns) and its metacal "
+                       "fixnoise field; schema 1 drew a separate fixnoise field per scene",
+            "metacal": "ngmix.get_all_metacal; independent per-observation fitting streams",
+            "psf_fits": "each distinct PSF stamp of a galaxy is fitted once, seeded from the "
+                        "stamp, and that fit serves every observation that has it",
+            "ngmix_workers": workers,
+            "timing": "see the TIMING table"}),
+        key_value_hdu("CONFIG", {"evaluation": config.to_yaml(),
+                                "training": run.config_resolved.read_text() if run else ""}),
         key_value_hdu("PROVENANCE", {**provenance.collect(),
-                                     "training_manifest": run.read_manifest()}),
+                                     "training_manifest": run.read_manifest() if run else None}),
     ]
-
-
-def _sha256(path) -> Optional[str]:
-    if not path or not Path(path).is_file():
-        return None
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()

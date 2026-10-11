@@ -1,7 +1,7 @@
 """Write and read the evaluation catalog.
 
 The per-record tables are filled block by block into memory-mapped,
-big-endian structured arrays under the evaluation's ``.partial/`` directory, so
+big-endian structured arrays under the evaluation's ``.assembly/`` directory, so
 a 4-million-row catalog never has to sit in RAM, and the FITS writer can hand
 the bytes straight through. The finished file is written next to its final
 name, read back and checked (extensions, row counts, columns, keys), and only
@@ -33,6 +33,8 @@ def _dtype(columns: Sequence[Column]) -> np.dtype:
 
 
 def _fill_value(column: Column):
+    if column.dtype.startswith("S"):
+        return b""
     return np.nan if column.dtype.startswith("f") else (-1 if column.name.endswith("_id")
                                                          else 0)
 
@@ -66,6 +68,8 @@ class CatalogWriter:
             raise KeyError(f"{table} has no columns {unknown}")
         for name, value in values.items():
             array[name][rows] = value
+        if known != set(values):
+            raise ValueError(f"{table}: fill must supply every column")
         self.filled[table][rows] = True
 
     def write(self, path: Path, header: Mapping[str, Tuple], extra_hdus: Iterable) -> Path:
@@ -101,10 +105,16 @@ class CatalogWriter:
         tmp = path.with_name(f".{path.name}.writing")
         if tmp.exists():
             tmp.unlink()
-        fits.HDUList(hdus).writeto(tmp, checksum=True)
+        for hdu in hdus:
+            hdu.add_checksum(when="ShearNet catalog schema 2")
+        fits.HDUList(hdus).writeto(tmp, checksum=False)
         validate_catalog(tmp, {n: [c.name for c in cols] for n, cols in self.columns.items()},
                          self.nrows)
+        with open(tmp, "rb") as handle:
+            os.fsync(handle.fileno())
         os.replace(tmp, path)
+        from ..artifacts.recovery import sync_directory
+        sync_directory(path.parent)
         return path
 
     def cleanup(self) -> None:
@@ -152,7 +162,10 @@ def validate_catalog(path, expected: Mapping[str, Sequence[str]], nrows: int) ->
     """Structural check of a written catalog. Raises ``ValueError`` on any problem."""
     from astropy.io import fits
 
-    with fits.open(path, memmap=True) as hdul:
+    with fits.open(path, memmap=True, checksum=True) as hdul:
+        for hdu in hdul:
+            if hdu.verify_checksum() != 1 or hdu.verify_datasum() != 1:
+                raise ValueError(f"{path}: FITS checksum failed")
         header = hdul[0].header
         if header.get("SCHEMA") != SCHEMA_NAME or header.get("SCHEMAV") != SCHEMA_VERSION:
             raise ValueError(f"{path}: not a {SCHEMA_NAME} v{SCHEMA_VERSION} catalog")

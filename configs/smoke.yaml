@@ -2,7 +2,7 @@
 # evaluates this; it is also the quickest way to see the whole pipeline work:
 #
 #   shearnet-train --config configs/smoke.yaml --run runs/smoke
-#   shearnet-eval  --run runs/smoke
+#   shearnet-eval --config configs/smoke.yaml --run runs/smoke --estimator shearnet --output results/smoke/shearnet
 schema_version: 1
 
 run_options:

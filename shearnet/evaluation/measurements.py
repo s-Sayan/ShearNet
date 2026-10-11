@@ -1,20 +1,7 @@
-"""Raw measurements on rendered stamps: PSF moments, ngmix fits, metacal products.
-
-Everything here returns what the measuring code produced and nothing derived
-from it -- no responses, no corrections, no averages over objects. A fit that
-fails is a row with its flag set and NaN values, never a dropped row and never a
-zero (a zero is a plausible shape).
-
-The ngmix work is done ``NGMIX_CHUNK`` objects at a time, each chunk with a
-fresh fitter seeded the same way, so the result for an object does not depend on
-how many objects are measured with it (only, through the worker pool, on the
-worker count -- see :func:`shearnet.methods.ngmix.mp_fit_one_single`).
-"""
-
+"""PSF moments, stamp observables, and the ngmix galaxy fit."""
 from __future__ import annotations
 
-import time
-from typing import Dict, Optional, Sequence
+from typing import Dict
 
 import numpy as np
 
@@ -23,28 +10,13 @@ from ..logging_utils import get_logger
 logger = get_logger(__name__)
 
 __all__ = [
-    "METACAL_TYPES",
-    "NGMIX_CHUNK",
     "FIT_FIELDS",
+    "FLAG_MISSING",
+    "empty_fit",
+    "fit_galaxy",
     "measure_psf",
     "stamp_observables",
-    "fit_original",
-    "metacal",
 ]
-
-#: Objects per ngmix batch. An ``Observation`` is ~362 kB at a 53x53 stamp, so a
-#: 200k population would need ~70 GB to hold at once; nothing downstream of a fit
-#: needs more than a handful of numbers per object.
-NGMIX_CHUNK = 4096
-
-#: The nine metacal products, in the order their images are stacked: the
-#: deconvolve/reconvolve ``noshear``, the four artificial shears of the galaxy,
-#: and the four artificial shears of the dilated reconvolution PSF.
-METACAL_TYPES = (
-    "noshear",
-    "1p", "1m", "2p", "2m",
-    "1p_psf", "1m_psf", "2p_psf", "2m_psf",
-)
 
 #: The fit values kept for every ngmix measurement, with their per-object shape.
 FIT_FIELDS = {
@@ -57,18 +29,8 @@ FIT_FIELDS = {
     "flags": (),
 }
 
-#: Per-object cost of an ngmix measurement (plain fit, or the whole metacal
-#: bootstrap): CPU seconds on one core, and how many of them the PSF fits took.
-TIMING_FIELDS = ("cpu_seconds", "psf_cpu_seconds")
-
 #: Flag for "ngmix returned no result of this type at all".
 FLAG_MISSING = 1 << 30
-
-
-def _empty_fit(n: int) -> Dict[str, np.ndarray]:
-    out = {name: np.full((n,) + shape, np.nan) for name, shape in FIT_FIELDS.items()}
-    out["flags"] = np.full(n, FLAG_MISSING, dtype=np.int32)
-    return out
 
 
 # ----------------------------------------------------------------------
@@ -87,7 +49,6 @@ def measure_psf(psf_images, scale: float, seed: int = 0) -> Dict[str, np.ndarray
     adaptive-moment trace. Both sizes are
     arcsec^2. ``psf_flags`` is non-zero where either fit failed.
     """
-    import galsim
     import ngmix
 
     from ..core.moments import get_admoms_ngmix_fit
@@ -107,7 +68,7 @@ def measure_psf(psf_images, scale: float, seed: int = 0) -> Dict[str, np.ndarray
         try:
             fit = get_admoms_ngmix_fit(obs, reduced=True,
                                        rng=np.random.RandomState(seed + i))
-        except galsim.GalSimHSMError as exc:
+        except Exception as exc:  # HSM and admom both raise on hopeless stamps
             logger.debug("PSF moments failed on object %d: %s", i, exc)
             continue
         out["psf_flags"][i] = fit["flags"]
@@ -133,136 +94,31 @@ def stamp_observables(galaxy_images, noise_sigma: float) -> Dict[str, np.ndarray
 
 
 # ----------------------------------------------------------------------
-# ngmix on the original stamp
+# ngmix fits
 # ----------------------------------------------------------------------
-def _fit_one(runner, psf_runner, obs, index=0):
-    """One plain fit, timed; a failure is reported in the flags, not raised."""
-    start = time.process_time()
-    psf_start = getattr(psf_runner, "seconds", np.nan)
-    row = _fit_one_untimed(runner, psf_runner, obs, index)
-    row["cpu_seconds"] = time.process_time() - start
-    row["psf_cpu_seconds"] = getattr(psf_runner, "seconds", np.nan) - psf_start
+def empty_fit():
+    """A fit row that failed: NaN values, flagged :data:`FLAG_MISSING`."""
+    row = {name: np.full(shape, np.nan) for name, shape in FIT_FIELDS.items()}
+    row["flags"] = FLAG_MISSING
     return row
 
 
-def _fit_one_untimed(runner, psf_runner, obs, index):
-    from ..methods.ngmix import set_tguess
+def fit_galaxy(runner, obs, psf_result):
+    """Fit ``obs`` with its PSF already fitted (``psf_result``, flags 0).
 
-    row = {name: np.full(shape, np.nan) for name, shape in FIT_FIELDS.items()}
-    try:
-        psf_runner.go(obs=obs.psf)
-        set_tguess(runner, obs)
-        res = runner.go(obs=obs)
-    except Exception as exc:  # ngmix raises a zoo of errors on hopeless stamps
-        logger.debug("ngmix fit failed on object %d: %s", index, exc)
-        row["flags"] = FLAG_MISSING
-        return row
+    The PSF result is attached to ``obs.psf`` the way ngmix's ``PSFRunner``
+    would have, so the galaxy fit is the one a refit of that PSF would give.
+    Errors propagate: the caller decides what a failed measurement records.
+    """
+    obs.psf.meta["result"] = psf_result
+    gmix = psf_result.get_gmix()
+    obs.psf.gmix = gmix
+    row = empty_fit()
+    # a single-model PSF fit reports T; an EM mixture only carries the mixture
+    row["Tpsf"] = psf_result["T"] if "T" in psf_result else gmix.get_T()
+    res = runner.go(obs=obs)
     row["flags"] = int(res.get("flags", FLAG_MISSING))
-    psf_result = obs.psf.meta.get("result")
-    if psf_result is not None and psf_result.get("flags", 1) == 0:
-        # a single-model PSF fit reports T; an EM mixture (psf_model: em5, as
-        # SuperBIT uses) only carries the fitted mixture
-        row["Tpsf"] = (psf_result["T"] if "T" in psf_result
-                       else psf_result.get_gmix().get_T())
     if row["flags"] == 0:
         for name in ("g", "g_cov", "T", "flux", "s2n"):
             row[name] = np.asarray(res[name], dtype=float)
     return row
-
-
-_POOL_RUNNERS = (None, None)
-
-
-def _pool_init(runner, psf_runner):
-    global _POOL_RUNNERS
-    _POOL_RUNNERS = (runner, psf_runner)
-
-
-def _pool_fit(obs):
-    return _fit_one(_POOL_RUNNERS[0], _POOL_RUNNERS[1], obs)
-
-
-def fit_original(observations: Sequence, *, seed: int, psf_model: str, gal_model: str,
-                 nproc: Optional[int] = None) -> Dict[str, np.ndarray]:
-    """ngmix fit of each original stamp (no metacal), one chunk's worth.
-
-    Same fitter, guesser and tolerances as the metacal fits
-    (:func:`shearnet.methods.ngmix.build_runners`), seeded with ``seed`` afresh
-    for every call. Besides :data:`FIT_FIELDS` it returns each object's
-    :data:`TIMING_FIELDS`.
-    """
-
-    from ..methods.ngmix import CpuStopwatch, build_runners
-    from ..parallel import cpu_only_children, resolve_nproc, spawn_map
-
-    n = len(observations)
-    out = _empty_fit(n)
-    out.update({name: np.full(n, np.nan) for name in TIMING_FIELDS})
-    if n == 0:
-        return out
-    rng = np.random.RandomState(seed)
-    runner, psf_runner = build_runners(rng, psf_model=psf_model, gal_model=gal_model)
-    psf_runner = CpuStopwatch(psf_runner)
-    workers = resolve_nproc(nproc, n_tasks=n)
-    if workers == 1:
-        rows = [_fit_one(runner, psf_runner, obs, i) for i, obs in enumerate(observations)]
-    else:
-        with cpu_only_children():
-            rows = list(spawn_map(_pool_fit, observations, workers, initializer=_pool_init,
-                                  initargs=(runner, psf_runner), chunksize=64))
-    for i, row in enumerate(rows):
-        for name in (*FIT_FIELDS, *TIMING_FIELDS):
-            out[name][i] = row[name]
-    return out
-
-
-# ----------------------------------------------------------------------
-# metacal
-# ----------------------------------------------------------------------
-def metacal(observations: Sequence, *, seed: int, step: float, psf: str, psf_model: str,
-            gal_model: str, nproc: Optional[int] = None, return_images: bool = False):
-    """ngmix metacal on each observation: every product's fit, raw.
-
-    Returns ``(fits, galaxy_stack, psf_stack)``. ``fits[t]`` holds
-    :data:`FIT_FIELDS` for metacal type ``t``; a type ngmix did not return is
-    flagged :data:`FLAG_MISSING`. ``fits["timing"]`` holds each object's
-    :data:`TIMING_FIELDS` for its whole bootstrap: making the products, their
-    PSF fits and their galaxy fits. With ``return_images`` the stacks are
-    ``(N, 9, npix, npix)`` float32 -- the exact image/PSF pairs ngmix fitted, so
-    another estimator can measure the same products -- else ``None``.
-    """
-    from ..methods.ngmix import _get_priors, mp_fit_one_single
-
-    n = len(observations)
-    fits = {t: _empty_fit(n) for t in METACAL_TYPES}
-    fits["timing"] = {name: np.full(n, np.nan) for name in TIMING_FIELDS}
-    if n == 0:
-        return fits, None, None
-    results, _ = mp_fit_one_single(
-        observations,
-        _get_priors(seed),
-        np.random.RandomState(seed),
-        psf_model=psf_model,
-        gal_model=gal_model,
-        mcal_pars={"psf": psf, "mcal_shear": step, "types": METACAL_TYPES},
-        nproc=nproc,
-        return_images=return_images,
-    )
-    rows = [r[0] for r in results] if return_images else results
-    for i, struct in enumerate(rows):
-        for name in TIMING_FIELDS:
-            fits["timing"][name][i] = struct[name][0] if len(struct) else np.nan
-        for row in struct:
-            t = str(row["shear_type"])
-            if t not in fits:
-                continue
-            fits[t]["flags"][i] = int(row["flags"])
-            fits[t]["Tpsf"][i] = row["Tpsf"]
-            if row["flags"] == 0:
-                for name in ("g", "g_cov", "T", "flux", "s2n"):
-                    fits[t][name][i] = row[name]
-    if not return_images:
-        return fits, None, None
-    galaxy_stack = np.stack([r[1] for r in results], axis=0)
-    psf_stack = np.stack([r[2] for r in results], axis=0)
-    return fits, galaxy_stack, psf_stack

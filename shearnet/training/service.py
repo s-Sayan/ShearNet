@@ -20,6 +20,7 @@ import numpy as np
 from ..artifacts import provenance
 from ..artifacts.checkpoints import save_params
 from ..artifacts.runs import RunDir, atomic_write
+from ..artifacts.recovery import Interrupted, StopRequest, exclusive
 from ..config import Config
 from ..core.augment import d4_augment
 from ..core.dataset import split_combined_images
@@ -58,14 +59,44 @@ class _Checkpointer:
 
 
 def train(config: Config, run: RunDir, *, input_text: Optional[str] = None,
-          overwrite: bool = False) -> RunDir:
+          overwrite: bool = False, resume: bool = False, checkpoint_seconds=300) -> RunDir:
+    if checkpoint_seconds <= 0:
+        raise ValueError("checkpoint interval must be positive")
+    if overwrite and resume:
+        raise ValueError("choose either --overwrite or --resume")
+    with exclusive(run.root.parent / ("." + run.root.name + ".lock")), StopRequest() as stop:
+        return _train_run(config, run, input_text=input_text, overwrite=overwrite,
+                          resume=resume, stop=stop, checkpoint_seconds=checkpoint_seconds)
+
+
+def _train_run(config, run, *, input_text, overwrite, resume, stop, checkpoint_seconds):
     """Train the model ``config`` describes into ``run``. Returns ``run``."""
-    run.create(overwrite=overwrite)
+    from ..evaluation.identity import digest, file_digest, implementation
+    from ..core.dataset import search_psf_files, PSF_DATA_DIR
+    import os
+    inputs = {}
+    path = config.get("simulation.catalogs.train_file")
+    if path:
+        inputs["catalog"] = file_digest(path)
+    psf = config.get("simulation.psf.psfex_file") or PSF_DATA_DIR
+    if config.get("simulation.psf.mode") == "superbit":
+        inputs["psfs"] = [file_digest(p) for p in ([psf] if os.path.isfile(psf)
+                                                   else sorted(search_psf_files(psf)))]
+    identity = digest({"config": config.to_yaml(), "inputs": inputs, "code": implementation()})
+    if resume and run.manifest_path.exists():
+        if run.read_manifest().get("resume_identity") != identity:
+            raise ValueError("training inputs or implementation differ from the saved run")
+        if run.state == "completed":
+            run.require_completed()
+            return run
+    else:
+        run.create(overwrite=overwrite)
     if input_text is not None:
         atomic_write(run.config_input, input_text.encode())
     config.save(run.config_resolved)
     manifest = {
         "schema_version": 1,
+        "resume_identity": identity,
         "kind": "shearnet-training-run",
         "run_name": config.get("run_options.run_name"),
         "description": config.get("run_options.description"),
@@ -80,17 +111,16 @@ def train(config: Config, run: RunDir, *, input_text: Optional[str] = None,
 
     with run_log(run.train_log):
         logger.info("training run %s -> %s", manifest["run_name"], run.root)
-        for note in config.notes:
-            logger.warning("config: %s", note)
         start = time.time()
         try:
-            history, checkpoint, n_parameters = _train(config, run)
+            history, checkpoint, n_parameters = _train(config, run, stop, checkpoint_seconds)
             if checkpoint.epoch is None:
                 raise RuntimeError("no epoch produced a finite validation loss; nothing "
                                    "was saved")
             plot_learning_curve(history, run.learning_curve)
         except BaseException as exc:
-            run.write_status("failed", error=f"{type(exc).__name__}: {exc}")
+            run.write_status("paused" if isinstance(exc, Interrupted) else "failed",
+                             error=f"{type(exc).__name__}: {exc}")
             logger.error("training failed: %s", exc)
             raise
         manifest.update(
@@ -117,7 +147,7 @@ def train(config: Config, run: RunDir, *, input_text: Optional[str] = None,
     return run
 
 
-def _train(config: Config, run: RunDir):
+def _train(config: Config, run: RunDir, stop, checkpoint_seconds):
     import jax
     import jax.random as random
 
@@ -127,12 +157,14 @@ def _train(config: Config, run: RunDir):
     output_keys = tuple(config.get("model.output_keys"))
     history = History(output_keys, run.history_csv, run.history_npz)
     checkpoint = _Checkpointer(run)
+    from .recovery import TrainingRecovery
+    recovery = TrainingRecovery(run, history, checkpoint, stop, checkpoint_seconds)
     rng_key = random.PRNGKey(config.get("training.seed"))
 
     if config.get("training.generation") == "inloop":
-        state = _train_inloop(config, run, rng_key, history, checkpoint)
+        state = _train_inloop(config, run, rng_key, history, checkpoint, recovery)
     else:
-        state = _train_upfront(config, run, rng_key, history, checkpoint)
+        state = _train_upfront(config, run, rng_key, history, checkpoint, recovery)
     n_parameters = int(sum(x.size for x in jax.tree_util.tree_leaves(state.params)))
     return history, checkpoint, n_parameters
 
@@ -227,7 +259,7 @@ def prepare_training_data(config: Config):
             resample_noise_sd)
 
 
-def _train_upfront(config, run, rng_key, history, checkpoint):
+def _train_upfront(config, run, rng_key, history, checkpoint, recovery):
     (galaxy_images, psf_images, labels, norm_params, img_params, eff_val_split,
      resample_noise_sd) = prepare_training_data(config)
     _save_normalizers(run, norm_params, img_params, config.get("model.output_keys"))
@@ -236,14 +268,14 @@ def _train_upfront(config, run, rng_key, history, checkpoint):
     train_cfg.val_split = eff_val_split
     train_cfg.resample_noise_sd = resample_noise_sd
     state, *_ = train_cfg.run(galaxy_images, labels, rng_key, psf_images=psf_images,
-                              checkpoint_fn=checkpoint, history_fn=history)
+                              checkpoint_fn=checkpoint, history_fn=history, recovery=recovery)
     return state
 
 
 # ----------------------------------------------------------------------
 # in-loop: render inside the jitted step
 # ----------------------------------------------------------------------
-def _train_inloop(config, run, rng_key, history, checkpoint):
+def _train_inloop(config, run, rng_key, history, checkpoint, recovery):
     """``training.generation: inloop`` -- no dataset is materialised.
 
     Mirrors the up-front path where it must: the label normalizer is fit on the
@@ -349,6 +381,7 @@ def _train_inloop(config, run, rng_key, history, checkpoint):
         trace_psf_shear=config.get("simulation.apply_psf_shear"),
         checkpoint_fn=checkpoint,
         history_fn=history,
+        recovery=recovery,
     )
     return state
 

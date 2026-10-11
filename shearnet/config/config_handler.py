@@ -18,10 +18,9 @@ from __future__ import annotations
 
 import copy
 import os
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional
 
 from ..logging_utils import get_logger
-from . import legacy
 from .loader import dump_yaml, read_yaml
 from .schema import (
     EVALUATION_OVERRIDABLE,
@@ -44,28 +43,16 @@ _PREFIXES = frozenset(
 class Config:
     """A resolved configuration. Build it with :meth:`from_file` or :meth:`from_dict`."""
 
-    def __init__(self, resolved: Mapping[str, Any], source: Optional[str] = None,
-                 notes: Iterable[str] = ()):
+    def __init__(self, resolved: Mapping[str, Any], source: Optional[str] = None):
         self._data = copy.deepcopy(dict(resolved))
         self.source = source
-        #: Config translation notes; empty for a schema-conforming file.
-        self.notes: List[str] = list(notes)
 
     # -- construction ------------------------------------------------------
     @classmethod
     def from_dict(cls, mapping: Mapping[str, Any], base_dir: Optional[str] = None,
                   source: Optional[str] = None) -> "Config":
-        """Validate ``mapping`` (config schema, or either supported dialect)."""
-        notes: List[str] = []
-        mapping = dict(mapping)
-        if legacy.is_legacy(mapping):
-            mapping, notes = legacy.migrate(mapping)
-            where = source or "a config"
-            logger.warning("%s uses an alternate config layout; translated it. Convert the "
-                           "file with `python -m shearnet.config.legacy`.", where)
-            for note in notes:
-                logger.warning("  %s", note)
-        return cls(resolve(mapping, base_dir=base_dir), source=source, notes=notes)
+        """Validate a mapping against the current configuration schema."""
+        return cls(resolve(dict(mapping), base_dir=base_dir), source=source)
 
     @classmethod
     def from_file(cls, path) -> "Config":
@@ -96,7 +83,7 @@ class Config:
         flat = flatten(mapping)
         check_keys(flat, allowed if allowed is not None else FIELDS)
         resolved = resolve(mapping, base_dir=base_dir, base=self._data)
-        return Config(resolved, source=self.source, notes=self.notes)
+        return Config(resolved, source=self.source)
 
     def evaluation_override(self, path) -> "Config":
         """Layer an evaluation-only YAML on top. Only evaluation settings may change."""

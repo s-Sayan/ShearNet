@@ -35,11 +35,11 @@ def test_an_occupied_run_directory_is_refused_unless_overwritten(tmp_path):
     run = RunDir(tmp_path / "run")
     run.create()
     run.write_status("completed")
-    (run.evaluations_dir / "default").mkdir(parents=True)
+    run.best_params.write_bytes(b"old model")
     with pytest.raises(RunError, match="already holds a run \\(completed\\)"):
         RunDir(tmp_path / "run").create()
     RunDir(tmp_path / "run").create(overwrite=True)
-    assert not run.evaluations_dir.exists()   # evaluations must not survive run replacement
+    assert not run.best_params.exists()
     assert run.state is None
 
 
@@ -66,13 +66,6 @@ def test_only_a_completed_run_can_be_evaluated(tmp_path):
     run.write_status("completed")
     with pytest.raises(RunError, match="is missing"):
         run.require_completed()
-
-
-def test_evaluation_names_are_directories_not_paths(tmp_path):
-    run = RunDir(tmp_path)
-    assert run.evaluation("cut").catalog_path("fid").name == "fid_cut.fits"
-    with pytest.raises(ValueError):
-        run.evaluation("../x")
 
 
 # ----------------------------------------------------------------------

@@ -6,7 +6,7 @@ same file:
 
 ```bash
 shearnet-train --config my.yaml --run runs/my     # trains; saves the resolved config in the run
-shearnet-eval  --run runs/my                      # evaluates with the run's own settings
+shearnet-eval --config my.yaml --run runs/my --estimator shearnet --output results/shearnet
 ```
 
 Rules:
@@ -18,14 +18,11 @@ Rules:
   resolved config to `RUN/config.resolved.yaml`.
 * Relative paths resolve against the directory of the YAML file that sets them.
 * `1e-4` is a number; a key written twice is an error.
-* `shearnet-eval --config OVERRIDE.yaml` may change only `evaluation.*`,
-  `simulation.catalogs.eval_file` and `run_options.ncores`; the model, renderer
-  and training population belong to the run.
+* Both evaluators read a complete configuration. The ShearNet model, training
+  settings and simulation settings must match the saved training configuration.
 
 `configs/example.yaml` is a short commented tour; `configs/paper/` holds the
-paper campaign. Files in the package and unit-test layouts are translated with
-a warning per changed key; `python -m shearnet.config.legacy INPUT.yaml` prints
-the translation.
+paper campaign. Obsolete configuration layouts are rejected.
 
 ## Every setting
 

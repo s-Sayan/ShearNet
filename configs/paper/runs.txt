@@ -1,6 +1,0 @@
-# the paper's runs, one per array task:
-# sbatch --array=0-3 scripts/shearnet.sbatch --list configs/paper/runs.txt
-configs/paper/unit_tests/first.yaml
-configs/paper/unit_tests/second.yaml
-configs/paper/unit_tests/third.yaml
-configs/paper/unit_tests/fourth.yaml
