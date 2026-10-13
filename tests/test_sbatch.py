@@ -15,7 +15,8 @@ class Slurm:
 
     def __call__(self, args, **kwargs):
         if args[:3] == ["scontrol", "show", "partition"]:
-            return "MaxTime=7-00:00:00"
+            # Turing's limits
+            return "MaxTime=1-00:00:00" if args[3] == "short" else "MaxTime=7-00:00:00"
         if args[:3] == ["scontrol", "show", "job"]:
             return "TimeLimit=4-00:00:00"
         if args[0] == "squeue":
@@ -38,6 +39,7 @@ class Slurm:
             self.jobs[args[2]]["reason"] = "Resources"
             return ""
         if args[0] == "sacct":
+            assert args[-1] == "State%40", "sacct truncates State to 10 characters"
             return self.final.get(args[args.index("--jobs") + 1], "COMPLETED")
         if args[0] == "scancel":
             del self.jobs[args[1]]
@@ -136,10 +138,10 @@ def test_submit_from_the_login_node_takes_its_time_limit(experiment, monkeypatch
     """Run with bash instead of sbatch, the dispatcher never waits in a queue."""
     slurm, config, base = experiment
     monkeypatch.delenv("SLURM_JOB_ID")
-    pipeline.submit(config, base, time_limit="1-12:00:00")
+    pipeline.submit(config, base, time_limit="12:00:00")
     calls = {args[-1]: args for args in slurm.submissions}
     for stage in ("train", "shearnet", "ngmix"):
-        assert "--time=1-12:00:00" in calls[stage] and "--partition=short" in calls[stage]
+        assert "--time=12:00:00" in calls[stage] and "--partition=short" in calls[stage]
     assert "--time=02:00:00" in calls["merge"]
     with pytest.raises(ValueError):
         pipeline.submit(config, base / "other", time_limit="soon")
@@ -228,3 +230,27 @@ def test_resources_of_a_queued_stage_are_not_changed_behind_its_back(experiment)
         pipeline.resume(root, {"ngmix": {"memory": "96G"}})
     resources = json.loads((root / "pipeline.json").read_text())["resources"]
     assert resources["ngmix"]["memory"] == "48G"
+
+
+def test_the_partition_follows_slurms_own_limits(experiment):
+    """short is a day on Turing: a longer limit goes to long, and asking short
+    for more than it allows is refused before anything is submitted."""
+    slurm, config, base = experiment
+    root = pipeline.submit(config, base, time_limit="1-12:00:00")
+    calls = {args[-1]: args for args in slurm.submissions}
+    assert "--partition=long" in calls["ngmix"] and "--partition=short" in calls["merge"]
+
+    def unqueue(stage):
+        for job in [j for j, v in slurm.jobs.items() if v["name"].endswith(f"-{stage}")]:
+            del slurm.jobs[job]
+
+    unqueue("train")
+    unqueue("shearnet")
+    pipeline.resume(root, {"train": {"time": "20:00:00"}})
+    train = [args for args in slurm.submissions if args[-1] == "train"][-1]
+    assert "--time=20:00:00" in train and "--partition=short" in train
+    unqueue("shearnet")
+    before = json.loads((root / "pipeline.json").read_text())["resources"]
+    with pytest.raises(ValueError, match="exceeds short's MaxTime of 24 h"):
+        pipeline.resume(root, {"shearnet": {"time": "2-00:00:00", "partition": "short"}})
+    assert json.loads((root / "pipeline.json").read_text())["resources"] == before

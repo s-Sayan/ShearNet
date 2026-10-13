@@ -239,6 +239,9 @@ def test_merge_tolerance_does_not_depend_on_the_other_rows():
     assert not agree("psf_T_hsm", np.array([1e6, 1.0]), np.array([1e6, 2.0]))
     assert not agree("psf_T_hsm", np.array([1.0]), np.array([2.0]))
     assert agree("psf_T_hsm", np.array([1e6, 1.0]), np.array([1e6, 1.0 + 1e-9]))
+    # a round PSF: psf_g ~ 0 differs by roundoff between devices, not 1e-4 of itself
+    assert agree("psf_g", np.array([[1e-17, 0.0]]), np.array([[3.7e-16, -2e-16]]))
+    assert not agree("psf_g", np.array([[1e-17, 0.0]]), np.array([[1e-6, 0.0]]))
     # a stamp sum near zero is judged against its stamp, not its own size
     assert agree("flux_stamp", np.array([0.0]), np.array([1e-3]), np.array([5e4]))
     assert not agree("flux_stamp", np.array([0.0]), np.array([50.0]), np.array([5e4]))

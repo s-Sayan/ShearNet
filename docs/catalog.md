@@ -108,7 +108,8 @@ rotated, flipped or shifted, moves the projections hundreds of times the merge's
 tolerance. The merge requires every shared `TRUTH` and `STAMP` value to agree,
 each on its own: integers and identifiers exactly, floats to 1e-4 of their own
 size, fingerprints to 1e-4 of their image's `sum |x|`, and `flux_stamp` (which
-can sit near zero) to 1e-4 of its stamp's `sum |x|`. The merged file takes
+can sit near zero) to 1e-4 of its stamp's `sum |x|`, each with an absolute floor
+of 1e-12 for values at zero (a round PSF's `psf_g` differs by ~1e-16 there). The merged file takes
 `TRUTH` and `STAMP` from the ngmix job and copies both measurement tables
 unchanged.
 

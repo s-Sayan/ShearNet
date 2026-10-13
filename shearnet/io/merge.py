@@ -21,6 +21,11 @@ from .fits_catalog import PER_RECORD, CatalogWriter, key_value_hdu, validate_cat
 #: changes the values at order unity.
 TOLERANCE = 1e-4
 
+#: Absolute floor under that: values near zero (a round PSF's psf_g) differ by
+#: ~1e-16 of roundoff, which no relative tolerance accepts. Every quantity
+#: compared is in units where 1e-12 is far below anything meaningful.
+ABSOLUTE = 1e-12
+
 #: Header keys that must be identical in the two catalogs.
 SHARED_HEADER = ("SCHEMA", "SCHEMAV", "OBSSHA", "IMPLSHA", "NOBJ", "NRECORD", "NSCENE",
                  "NROT", "MCALSTEP", "MCALPSF")
@@ -48,7 +53,7 @@ def agree(name, x, y, stamp_scale=None):
     rows compared with it. Integers and strings must match exactly; floats to
     :data:`TOLERANCE` of their own size, of their image's ``sum |x|`` for a
     fingerprint, and of ``stamp_scale`` (the row's galaxy ``sum |x|``) for the
-    columns in :data:`IMAGE_SUMS`.
+    columns in :data:`IMAGE_SUMS` -- always with :data:`ABSOLUTE` as a floor.
     """
     x, y = np.asarray(x), np.asarray(y)
     if x.shape != y.shape:
@@ -63,7 +68,7 @@ def agree(name, x, y, stamp_scale=None):
         scale = np.asarray(stamp_scale, dtype=np.float64)
     else:
         scale = np.maximum(np.abs(x), np.abs(y))
-    close = np.abs(x - y) <= TOLERANCE * np.nan_to_num(scale) + 1e-300
+    close = np.abs(x - y) <= TOLERANCE * np.nan_to_num(scale) + ABSOLUTE
     return bool(np.all(close | (np.isnan(x) & np.isnan(y))))
 
 

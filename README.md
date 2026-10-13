@@ -168,7 +168,7 @@ live on shared storage that survives the allocation; node-local temporary storag
 is unsuitable. Turing scratch is useful for active work but can be purged.
 
 The time limit (`--time`, or the dispatcher job's own under `sbatch`) becomes
-the ceiling for each compute job; limits up to 48 hours go to `short`. The merge
+the ceiling for each compute job; a limit that fits in `short`'s MaxTime (read from Slurm) goes there, anything longer to `long`. The merge
 has a two-hour limit. Stage resource requests can be set in a JSON file passed as
 `--resources FILE` after the configuration. For example:
 

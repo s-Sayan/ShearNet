@@ -39,12 +39,13 @@ DEPENDENCIES = {"train": (), "ngmix": (), "shearnet": ("train",),
 #: is what sets that job's length. Every worker process holds ~0.5 GB (it imports
 #: ShearNet, so JAX and Flax come with it), and the ngmix job's main process
 #: renders on the CPU, so 18 workers do not fit in 16G: the first pilot was
-#: OOM-killed there.
+#: OOM-killed there. The merge reads two full catalogs and writes a third (~9 GB
+#: at 4M observations); 16G was OOM-killed on all four unit tests.
 DEFAULT_RESOURCES = {
     "train": {"cpus": 8, "memory": "128G", "gres": "gpu:1"},
     "shearnet": {"cpus": 16, "memory": "48G", "gres": "gpu:1"},
     "ngmix": {"cpus": 18, "memory": "48G"},
-    "merge": {"cpus": 1, "memory": "16G", "time": "02:00:00"},
+    "merge": {"cpus": 1, "memory": "96G", "time": "02:00:00"},
 }
 
 #: Compute-stage time limit when none is given and this is not a Slurm job.
@@ -77,18 +78,28 @@ def job_limit(explicit=None):
     return DEFAULT_TIME
 
 
+def max_time(partition):
+    """A partition's MaxTime in seconds, as Slurm reports it (None if unlimited)."""
+    info = command(["scontrol", "show", "partition", partition, "-o"])
+    fields = dict(f.split("=", 1) for f in info.split() if "=" in f)
+    maximum = fields.get("MaxTime", "UNLIMITED")
+    return None if maximum == "UNLIMITED" else seconds(maximum)
+
+
 def validate_resources(resources, ceiling):
     for stage, resource in resources.items():
         limit = resource.setdefault("time", ceiling)
-        resource.setdefault("partition", "short" if seconds(limit) <= 48 * 3600 else "long")
+        if "partition" not in resource:
+            # short when the limit fits in it (its queue is separate and quicker)
+            short = max_time("short")
+            fits = short is None or seconds(limit) <= short
+            resource["partition"] = "short" if fits else "long"
         if seconds(limit) > 7 * 86400 or resource["cpus"] < 1:
             raise ValueError(f"invalid resource request for {stage}")
-        info = command(["scontrol", "show", "partition", resource["partition"], "-o"])
-        fields = dict(f.split("=", 1) for f in info.split() if "=" in f)
-        maximum = fields.get("MaxTime", "UNLIMITED")
-        if maximum != "UNLIMITED" and seconds(limit) > seconds(maximum):
-            raise ValueError(f"{stage}: {limit} exceeds {resource['partition']} "
-                             f"MaxTime={maximum}")
+        maximum = max_time(resource["partition"])
+        if maximum is not None and seconds(limit) > maximum:
+            raise ValueError(f"{stage}: {limit} exceeds {resource['partition']}'s "
+                             f"MaxTime of {maximum // 3600} h")
         if stage in ("ngmix", "merge") and resource.get("gres"):
             raise ValueError(f"{stage} must not request a GPU")
 
@@ -300,8 +311,9 @@ def status(target):
         resource = manifest["resources"][stage]
         line = "completed" if completed(root, stage) else _live_state(manifest, stage)
         if line is None:
+            # sacct cuts columns at 10 characters ("OUT_OF_ME+") unless told not to
             final = command(["sacct", "--noheader", "-X", "--jobs", job,
-                             "--format", "State"]).split()
+                             "--format", "State%40"]).split()
             state = final[0] if final else "UNKNOWN"
             why = ADVICE.get(state, "stopped ({state})").format(state=state, **resource)
             line = f"stopped: job {job} {why}"
