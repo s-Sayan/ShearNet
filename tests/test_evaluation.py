@@ -260,6 +260,9 @@ def test_the_catalogs_say_what_the_work_cost(experiment):
         assert int(ngmix["failures_raised"]) == 0
         table = b["NGMIX"].data
         assert np.all(table["metacal_psf_cpu_seconds"] < table["metacal_cpu_seconds"])
+        assert np.all(table["metacal_image_cpu_seconds"] > 0)
+        assert np.all(table["metacal_image_cpu_seconds"] + table["metacal_psf_cpu_seconds"]
+                      < table["metacal_cpu_seconds"])
         assert np.all(table["metacal_psf_uncached_cpu_seconds"]
                       >= table["metacal_psf_cpu_seconds"])
         spent = table["fit_psf_cpu_seconds"].sum() + table["metacal_psf_cpu_seconds"].sum()

@@ -141,6 +141,7 @@ def _ngmix_values(obs, products, uid, psfs, preparation):
         values[f"{stage}_cpu_seconds"] = spent[stage]
         values[f"{stage}_psf_cpu_seconds"] = psf_spent[stage]
         values[f"{stage}_psf_uncached_cpu_seconds"] = psf_uncached[stage]
+    values["metacal_image_cpu_seconds"] = preparation
     return values, errors
 
 

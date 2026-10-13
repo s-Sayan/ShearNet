@@ -233,6 +233,7 @@ Every `*_original` column repeats for each metacal product with the suffix `_nos
 | `fit_psf_uncached_cpu_seconds` | f8 | s | estimate: CPU seconds of the PSF fit this observation used, whichever observation ran it |
 | `metacal_cpu_seconds` | f8 | s | measured CPU seconds of this observation's metacal (making the nine products, their galaxy fits, and the PSF fits it ran), on one core; once per observation, not per product |
 | `metacal_psf_cpu_seconds` | f8 | s | measured: of metacal_cpu_seconds, the PSF fits this observation ran |
+| `metacal_image_cpu_seconds` | f8 | s | measured: of metacal_cpu_seconds, making the nine products, which a ShearNet metacal measurement also pays |
 | `metacal_psf_uncached_cpu_seconds` | f8 | s | estimate: CPU seconds of all nine PSF fits the products used, each counted where it is used, as a pipeline that refits every PSF would pay |
 
 Every `*_original` column repeats for each metacal product with the suffix `_noshear`, `_1p`, `_1m`, `_2p`, `_2m`, `_1p_psf`, `_1m_psf`, `_2p_psf`, `_2m_psf`.

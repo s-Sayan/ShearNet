@@ -139,6 +139,8 @@ NGMIX_METACAL_TIMING = [
            "on one core; once per observation, not per product"),
     Column("metacal_psf_cpu_seconds", "f8", (), "s", "measured: of metacal_cpu_seconds, the "
            "PSF fits this observation ran"),
+    Column("metacal_image_cpu_seconds", "f8", (), "s", "measured: of metacal_cpu_seconds, "
+           "making the nine products, which a ShearNet metacal measurement also pays"),
     Column("metacal_psf_uncached_cpu_seconds", "f8", (), "s", "estimate: CPU seconds of all "
            "nine PSF fits the products used, each counted where it is used, as a pipeline "
            "that refits every PSF would pay"),

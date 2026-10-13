@@ -182,7 +182,7 @@ def _get_priors(seed):
     # Flat flux prior; bounds must cover the image flux range.
 
     Fminval = -1.0e1
-    Fmaxval = 1.0e5
+    Fmaxval = 1.0e9
     F_prior = ngmix.priors.FlatPrior(Fminval, Fmaxval, rng=rng)
 
     # now make a joint prior.  This one takes priors
