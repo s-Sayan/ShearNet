@@ -67,8 +67,11 @@ def test_split_graph_and_cpu_resource_isolation(experiment):
     assert not any(a.startswith("--dependency") for a in calls["ngmix"])
     for name in ("ngmix", "merge"):
         assert "--gres=none" in calls[name]
-    for name in ("train", "shearnet"):
-        assert "--gres=gpu:1" in calls[name]
+    assert "--gres=gpu:1" in calls["train"]
+    # the timed jobs are sized like NERSC Perlmutter nodes
+    assert "--gres=gpu:A100:1" in calls["shearnet"]
+    assert "--cpus-per-task=16" in calls["shearnet"] and "--mem=64G" in calls["shearnet"]
+    assert "--cpus-per-task=128" in calls["ngmix"] and "--mem=480G" in calls["ngmix"]
     assert all(j["reason"] != "JobHeldUser" for j in slurm.jobs.values())
     assert (root / "code/shearnet/evaluation/service.py").is_file()
     script = Path(__file__).parents[1] / "scripts/shearnet.sbatch"
@@ -185,17 +188,17 @@ def test_status_explains_an_oom_and_resume_raises_the_memory(experiment, capsys)
     capsys.readouterr()
     pipeline.status(base)
     shown = capsys.readouterr().out
-    assert f"stopped: job {killed} ran out of memory at 48G" in shown
-    assert f"shearnet-pipeline resume {root} --memory ngmix=96G" in shown
+    assert f"stopped: job {killed} ran out of memory at 480G" in shown
+    assert f"shearnet-pipeline resume {root} --memory ngmix=960G" in shown
 
     # the merge waits on the dead job, so it is replaced along with it
     merge = json.loads((root / "pipeline.json").read_text())["jobs"]["merge"]
     slurm.jobs[merge]["state"] = "PENDING"
     before = len(slurm.submissions)
-    assert pipeline.main(["resume", str(base), "--memory", "ngmix=96G"]) == 0
+    assert pipeline.main(["resume", str(base), "--memory", "ngmix=960G"]) == 0
     calls = {args[-1]: args for args in slurm.submissions[before:]}
     assert set(calls) == {"ngmix", "merge"}
-    assert "--mem=96G" in calls["ngmix"]
+    assert "--mem=960G" in calls["ngmix"]
     jobs = json.loads((root / "pipeline.json").read_text())["jobs"]
     assert f"--dependency=afterok:{jobs['shearnet']}:{jobs['ngmix']}" in calls["merge"]
 
@@ -229,7 +232,7 @@ def test_resources_of_a_queued_stage_are_not_changed_behind_its_back(experiment)
     with pytest.raises(RuntimeError, match="scancel it first"):
         pipeline.resume(root, {"ngmix": {"memory": "96G"}})
     resources = json.loads((root / "pipeline.json").read_text())["resources"]
-    assert resources["ngmix"]["memory"] == "48G"
+    assert resources["ngmix"]["memory"] == "480G"
 
 
 def test_the_partition_follows_slurms_own_limits(experiment):
@@ -254,3 +257,50 @@ def test_the_partition_follows_slurms_own_limits(experiment):
     with pytest.raises(ValueError, match="exceeds short's MaxTime of 24 h"):
         pipeline.resume(root, {"shearnet": {"time": "2-00:00:00", "partition": "short"}})
     assert json.loads((root / "pipeline.json").read_text())["resources"] == before
+
+
+def _complete(slurm, root, stage):
+    """Mark a stage finished on disk and take its job out of the queue."""
+    if stage == "merge":
+        (root / "merged.fits").write_text("old merge")
+        (root / "merge.completed").write_text("complete\n")
+    else:
+        directory = root / ("training" if stage == "train" else stage)
+        directory.mkdir(exist_ok=True)
+        (directory / "status.json").write_text(json.dumps({"state": "completed"}))
+    _finish(slurm, root, stage, "COMPLETED")
+
+
+def test_rerun_redoes_the_evaluations_on_new_hardware_and_keeps_the_model(experiment):
+    """Timing on other hardware needs only the two evaluations (and the merge
+    that joins them) run again; the trained model and the old results stay."""
+    slurm, config, base = experiment
+    root = pipeline.submit(config, base)
+    for stage in pipeline.STAGES:
+        _complete(slurm, root, stage)
+    before = len(slurm.submissions)
+    assert pipeline.main(["resume", str(base), "--rerun", "shearnet", "--rerun", "ngmix",
+                          "--gres", "shearnet=gpu:A100:1", "--cpus", "ngmix=128",
+                          "--memory", "ngmix=480G"]) == 0
+    calls = {args[-1]: args for args in slurm.submissions[before:]}
+    assert set(calls) == {"shearnet", "ngmix", "merge"}      # no retraining
+    assert "--gres=gpu:A100:1" in calls["shearnet"]
+    assert "--cpus-per-task=128" in calls["ngmix"] and "--mem=480G" in calls["ngmix"]
+    assert not any(a.startswith("--dependency") for a in calls["shearnet"])  # model kept
+    jobs = json.loads((root / "pipeline.json").read_text())["jobs"]
+    assert f"--dependency=afterok:{jobs['shearnet']}:{jobs['ngmix']}" in calls["merge"]
+    for stage in ("shearnet", "ngmix"):
+        kept = list(root.glob(f"{stage}.replaced-*"))
+        assert len(kept) == 1 and (kept[0] / "status.json").is_file()
+    assert (next(root.glob("merge.replaced-*")) / "merged.fits").read_text() == "old merge"
+    assert not (root / "merged.fits").exists()
+    assert (root / "training/status.json").is_file()
+
+
+def test_rerun_refuses_a_queued_stage_and_training(experiment):
+    slurm, config, base = experiment
+    root = pipeline.submit(config, base)
+    with pytest.raises(RuntimeError, match="scancel it first"):
+        pipeline.resume(root, rerun=["ngmix"])
+    with pytest.raises(SystemExit):
+        pipeline.main(["resume", str(base), "--rerun", "train"])

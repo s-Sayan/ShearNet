@@ -176,8 +176,15 @@ has a two-hour limit. Stage resource requests can be set in a JSON file passed a
 {"ngmix": {"cpus": 32, "memory": "24G", "time": "6-00:00:00", "partition": "long"}}
 ```
 
-Defaults are starting points: training uses one GPU, eight CPUs and 128G; ShearNet
-evaluation uses one GPU, 16 CPUs and 48G; ngmix uses 18 CPUs and 48G (each worker holds ~0.5 GB). ShearNet
+Defaults are starting points: training uses one GPU, eight CPUs and 128G. The two
+evaluation jobs are timed, so they are sized like NERSC Perlmutter nodes: ShearNet
+evaluation uses one A100, 16 CPUs and 64G (one GPU's share of a GPU node); ngmix
+uses 128 CPUs and 480G (one CPU node; Turing's 512 GB nodes offer slightly less
+than 512G, and each worker holds ~0.5 GB). To time a finished run on other
+hardware without retraining, run its evaluations again:
+`shearnet-pipeline resume CONFIG --rerun shearnet --rerun ngmix` with any
+`--cpus`/`--memory`/`--gres` changes; the earlier results are moved to
+`*.replaced-<time>`, not deleted. ShearNet
 evaluation renders and predicts on the GPU, but ngmix's metacal images for it
 are made on its CPUs (about 90 ms per observation), so its CPU count sets how
 long it holds the GPU. The

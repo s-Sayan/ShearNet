@@ -3,12 +3,15 @@
     shearnet-pipeline submit CONFIG [--time 4-00:00:00]   # from the login node
     shearnet-pipeline status CONFIG
     shearnet-pipeline resume CONFIG [--memory ngmix=48G] [--cpus STAGE=N] [--time STAGE=T]
+                                    [--gres STAGE=G] [--rerun STAGE]
 
 ``status`` and ``resume`` take the config you submitted (or its run directory,
 or one generation directory) and use its newest generation. ``status`` says what
 each stage is doing, why a stage stopped, and the command that continues it.
 ``resume`` keeps everything already done and resubmits the rest, with any
-resources changed on the command line.
+resources changed on the command line. ``--rerun shearnet``/``ngmix`` runs a
+finished evaluation again (with the merge that joins it) on the trained model,
+setting its earlier results aside, e.g. to time it on different hardware.
 
 ``submit`` makes a new ``generation-*`` directory under the config's
 ``run_options.outdir`` and submits four jobs: training (GPU), ShearNet
@@ -22,6 +25,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -41,10 +45,17 @@ DEPENDENCIES = {"train": (), "ngmix": (), "shearnet": ("train",),
 #: renders on the CPU, so 18 workers do not fit in 16G: the first pilot was
 #: OOM-killed there. The merge reads two full catalogs and writes a third (~9 GB
 #: at 4M observations); 16G was OOM-killed on all four unit tests.
+#:
+#: The two evaluation jobs are timed, so they are sized like the NERSC Perlmutter
+#: nodes ngmix is normally run on: the ngmix job is one CPU node (128 cores,
+#: 512 GB), the ShearNet job one GPU node's share per GPU (one A100, 16 cores,
+#: 64 GB). The workers follow the allocation, so nothing else changes with it.
+#: The memory is 480G because Turing's "512 GB" nodes offer 512000 MB, less
+#: than --mem=512G; ngmix needs ~0.5 GB per worker.
 DEFAULT_RESOURCES = {
     "train": {"cpus": 8, "memory": "128G", "gres": "gpu:1"},
-    "shearnet": {"cpus": 16, "memory": "48G", "gres": "gpu:1"},
-    "ngmix": {"cpus": 18, "memory": "48G"},
+    "shearnet": {"cpus": 16, "memory": "64G", "gres": "gpu:A100:1"},
+    "ngmix": {"cpus": 128, "memory": "480G"},
     "merge": {"cpus": 1, "memory": "96G", "time": "02:00:00"},
 }
 
@@ -209,12 +220,47 @@ def change_resources(manifest, root, changes):
         validate_resources({stage: resource}, resource["time"])
 
 
-def resume(root, changes=None):
+#: Stages that can be run again on their own: the evaluations (each with the
+#: merge that joins them) and the merge. Training is never redone in place.
+RERUNNABLE = ("shearnet", "ngmix", "merge")
+
+
+def set_aside(root, stages):
+    """Move the saved results of ``stages`` to ``*.replaced-<UTC time>`` so the
+    next submission runs them from the start; nothing is deleted. Redoing an
+    evaluation redoes the merge too, since the old merged catalog contains it."""
+    stages = set(stages)
+    if stages - set(RERUNNABLE):
+        raise ValueError(f"only {', '.join(RERUNNABLE)} can be rerun")
+    if stages & {"shearnet", "ngmix"}:
+        stages.add("merge")
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    for stage in sorted(stages):
+        if stage == "merge":
+            kept = root / f"merge.replaced-{stamp}"
+            for name in ("merged.fits", "merge.completed"):
+                if (root / name).exists():
+                    kept.mkdir(exist_ok=True)
+                    (root / name).rename(kept / name)
+        elif (root / stage).exists():
+            (root / stage).rename(root / f"{stage}.replaced-{stamp}")
+    return stages
+
+
+def resume(root, changes=None, rerun=()):
     root = find_generation(root)
     with exclusive(root / ".submission.lock"):
         manifest = json.loads((root / "pipeline.json").read_text())
         if file_digest(root / "config.yaml") != manifest["config_sha256"]:
             raise ValueError("pipeline configuration changed")
+        if rerun:
+            redo = set(rerun) | ({"merge"} if set(rerun) & {"shearnet", "ngmix"} else set())
+            for stage in redo:
+                if _live_state(manifest, stage):
+                    raise RuntimeError(f"{stage} is queued or running "
+                                       f"({_live_state(manifest, stage)}); scancel it first "
+                                       "to run it again")
+            set_aside(root, rerun)
         if changes:
             for stage in changes:
                 if _live_state(manifest, stage):
@@ -376,7 +422,7 @@ def stage(root, name):
 
 def _parse_changes(parser, args):
     changes = {}
-    for setting in ("memory", "cpus", "time"):
+    for setting in ("memory", "cpus", "time", "gres"):
         for item in getattr(args, setting):
             stage, _, value = item.partition("=")
             if stage not in STAGES or not value:
@@ -402,9 +448,12 @@ def main(argv=None):
     p = sub.add_parser("resume", help="resubmit what is unfinished, keeping what is saved")
     p.add_argument("target", help=where)
     for setting, example in (("memory", "ngmix=48G"), ("cpus", "shearnet=8"),
-                             ("time", "ngmix=2-00:00:00")):
+                             ("time", "ngmix=2-00:00:00"), ("gres", "shearnet=gpu:A100:1")):
         p.add_argument(f"--{setting}", action="append", default=[], metavar="STAGE=VALUE",
                        help=f"change a stage's {setting} before resubmitting, e.g. {example}")
+    p.add_argument("--rerun", action="append", default=[], choices=RERUNNABLE,
+                   help="run a finished stage again, setting its results aside (an "
+                        "evaluation brings its merge with it); training is kept")
     p = sub.add_parser("stage", help=argparse.SUPPRESS)
     p.add_argument("directory")
     p.add_argument("stage", choices=STAGES)
@@ -420,7 +469,7 @@ def main(argv=None):
             submit(args.config, args.directory, args.resources,
                    args.overwrite or "--overwrite" in flags, args.time)
         elif args.action == "resume":
-            resume(args.target, _parse_changes(parser, args))
+            resume(args.target, _parse_changes(parser, args), args.rerun)
         elif args.action == "stage":
             stage(args.directory, args.stage)
         else:
