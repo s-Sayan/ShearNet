@@ -134,6 +134,8 @@ paper campaign. Obsolete configuration layouts are rejected.
 | `metacal.psf` | str: dilate | `dilate` | Metacal reconvolution PSF. Only dilate has the *_psf products. |
 | `metacal.step` | float | `0.01` | One-sided metacal shear step (ngmix 'step', SuperBIT 'mcal_shear'). The +/- products are 2*step apart. |
 | `metacal.shearnet` | bool | `True` | Also run ShearNet on the nine metacal images ngmix fits. |
+| `benchmark.stamps` | int | `32768` | After the ShearNet evaluation, this many of its stamp pairs are kept on the GPU and the network is timed on them alone: compiled and warmed up first, every pass waited for, no copying between host and device. 0 skips it. |
+| `benchmark.batch_sizes` | list[int] | `[256, 1024, 4096, 16384]` | Batch sizes the benchmark times; the fastest per stamp is reported. A size the device cannot hold is skipped. |
 | `ngmix.gal_model` | str | `gauss` | ngmix galaxy model. |
 | `ngmix.psf_model` | str | `gauss` | ngmix PSF model: gauss (one Gaussian), emN (EM mixture of N Gaussians) or coellipN. LITB III fits em5; with one Gaussian the SuperBIT PSFEx profiles are not represented and the R^PSF correction overcorrects. |
 

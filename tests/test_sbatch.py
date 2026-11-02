@@ -72,6 +72,8 @@ def test_split_graph_and_cpu_resource_isolation(experiment):
     assert "--gres=gpu:A100:1" in calls["shearnet"]
     assert "--cpus-per-task=16" in calls["shearnet"] and "--mem=64G" in calls["shearnet"]
     assert "--cpus-per-task=128" in calls["ngmix"] and "--mem=480G" in calls["ngmix"]
+    # ~31 h on 128 cores: its own two days, which is long's
+    assert "--time=2-00:00:00" in calls["ngmix"] and "--partition=long" in calls["ngmix"]
     assert all(j["reason"] != "JobHeldUser" for j in slurm.jobs.values())
     assert (root / "code/shearnet/evaluation/service.py").is_file()
     script = Path(__file__).parents[1] / "scripts/shearnet.sbatch"
@@ -143,8 +145,10 @@ def test_submit_from_the_login_node_takes_its_time_limit(experiment, monkeypatch
     monkeypatch.delenv("SLURM_JOB_ID")
     pipeline.submit(config, base, time_limit="12:00:00")
     calls = {args[-1]: args for args in slurm.submissions}
-    for stage in ("train", "shearnet", "ngmix"):
+    for stage in ("train", "shearnet"):
         assert "--time=12:00:00" in calls[stage] and "--partition=short" in calls[stage]
+    # ngmix and the merge keep their own limits
+    assert "--time=2-00:00:00" in calls["ngmix"] and "--partition=long" in calls["ngmix"]
     assert "--time=02:00:00" in calls["merge"]
     with pytest.raises(ValueError):
         pipeline.submit(config, base / "other", time_limit="soon")

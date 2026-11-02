@@ -91,6 +91,54 @@ class RunPredictor:
             self(galaxy, psf, batch_size)
         return time.perf_counter() - start
 
+    def benchmark(self, galaxy_images, psf_images, batch_sizes, repeats: int = 5) -> dict:
+        """Seconds per stamp of the network alone, ``{batch size: seconds}``.
+
+        The stamps are put on the device once, so no host-device copy is timed.
+        Each batch size is compiled and run once before it is timed, and every
+        timed pass waits for the device to finish (``block_until_ready``). The
+        result is the median of ``repeats`` passes over all the stamps that fill
+        whole batches, per stamp. A batch size larger than the stamps, or one
+        the device cannot hold, is skipped.
+        """
+        import time
+
+        import jax
+
+        if self.uses_psf and psf_images is None:
+            raise ValueError("this model takes PSF stamps")
+        results = {}
+        for size in batch_sizes:
+            batches = len(galaxy_images) // size
+            if batches == 0:
+                continue
+            try:
+                gal = [jax.device_put(np.asarray(galaxy_images[i * size:(i + 1) * size],
+                                                 dtype=np.float32)) for i in range(batches)]
+                psf = [None if psf_images is None else
+                       jax.device_put(np.asarray(psf_images[i * size:(i + 1) * size],
+                                                 dtype=np.float32)) for i in range(batches)]
+                jax.block_until_ready(gal + [p for p in psf if p is not None])
+
+                def one_pass():
+                    jax.block_until_ready([self._jitted(g, p) for g, p in zip(gal, psf)])
+
+                one_pass()  # compile and warm up
+                times = []
+                for _ in range(repeats):
+                    start = time.perf_counter()
+                    one_pass()
+                    times.append(time.perf_counter() - start)
+            except Exception as exc:  # out of device memory: this size does not fit
+                if "RESOURCE_EXHAUSTED" not in str(exc) and "out of memory" not in str(exc):
+                    raise
+                logger.info("benchmark: batch size %d does not fit on the device", size)
+                continue
+            finally:
+                gal = psf = None
+            results[size] = float(np.median(times)) / (batches * size)
+        return results
+
     def __call__(self, galaxy_images, psf_images, batch_size: int = 4096) -> np.ndarray:
         """``(N, len(output_keys))`` predictions, forwarded ``batch_size`` at a time."""
         import jax.numpy as jnp

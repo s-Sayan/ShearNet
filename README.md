@@ -168,8 +168,9 @@ live on shared storage that survives the allocation; node-local temporary storag
 is unsuitable. Turing scratch is useful for active work but can be purged.
 
 The time limit (`--time`, or the dispatcher job's own under `sbatch`) becomes
-the ceiling for each compute job; a limit that fits in `short`'s MaxTime (read from Slurm) goes there, anything longer to `long`. The merge
-has a two-hour limit. Stage resource requests can be set in a JSON file passed as
+the ceiling for the training and ShearNet jobs; a limit that fits in `short`'s MaxTime (read from Slurm) goes there, anything longer to `long`. The ngmix
+job has its own two days (it needs ~31 h for UT4 on 128 cores, so it runs in
+`long`) and the merge two hours. Stage resource requests can be set in a JSON file passed as
 `--resources FILE` after the configuration. For example:
 
 ```json
@@ -184,7 +185,11 @@ than 512G, and each worker holds ~0.5 GB). To time a finished run on other
 hardware without retraining, run its evaluations again:
 `shearnet-pipeline resume CONFIG --rerun shearnet --rerun ngmix` with any
 `--cpus`/`--memory`/`--gres` changes; the earlier results are moved to
-`*.replaced-<time>`, not deleted. ShearNet
+`*.replaced-<time>`, not deleted. After its evaluation, the ShearNet job
+also times the network alone on `evaluation.benchmark.stamps` of its stamps
+already on the GPU (compiled, warmed up, each pass waited for, at each of
+`evaluation.benchmark.batch_sizes`) and records the result in the catalog's
+`TIMING` table, with the GPU and CPU models. ShearNet
 evaluation renders and predicts on the GPU, but ngmix's metacal images for it
 are made on its CPUs (about 90 ms per observation), so its CPU count sets how
 long it holds the GPU. The

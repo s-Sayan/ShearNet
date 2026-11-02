@@ -1,4 +1,6 @@
 """Run one estimator, committing completed observations throughout the job."""
+import os
+import platform
 from pathlib import Path
 import time
 import numpy as np
@@ -130,6 +132,9 @@ def _evaluate(config, output, estimator, run, resume, chunk_size, interval, stop
         logger.info("ShearNet compiled in %.0f s, kept out of the inference time",
                     spent["CMPSEC"])
     buffer, rows, predicted = [], {}, []
+    # stamp pairs kept for the device-resident benchmark after the evaluation
+    keep = config.get("evaluation.benchmark.stamps") if predictor is not None else 0
+    kept = {"galaxy": [], "psf": [], "count": 0}
     last_commit = time.monotonic()
 
     def commit():
@@ -191,6 +196,11 @@ def _evaluate(config, output, estimator, run, resume, chunk_size, interval, stop
             return
         galaxies = np.concatenate([result["galaxy"][:len(variants)] for _, result in predicted])
         psfs = np.concatenate([result["psf"][:len(variants)] for _, result in predicted])
+        if kept["count"] < keep:
+            take = keep - kept["count"]
+            kept["galaxy"].append(galaxies[:take].copy())
+            kept["psf"].append(psfs[:take].copy())
+            kept["count"] += len(kept["galaxy"][-1])
         tick = time.perf_counter()
         predictions = predictor(galaxies, psfs, batch)
         spent["INFSEC"] += time.perf_counter() - tick
@@ -241,6 +251,10 @@ def _evaluate(config, output, estimator, run, resume, chunk_size, interval, stop
         raise ValueError("evaluation inputs changed during the job")
     if checkpoint and file_digest(run.best_params) != checkpoint:
         raise ValueError("model checkpoint changed during evaluation")
+    benchmark = {}
+    if keep:
+        benchmark = _benchmark(predictor, kept, keep, renderer.cfg.npix,
+                               config.get("evaluation.benchmark.batch_sizes"))
     writer = CatalogWriter(output / ".assembly", tables, work["records"])
     for path in journal.paths:
         with journal.open(path) as hdul:
@@ -268,6 +282,10 @@ def _evaluate(config, output, estimator, run, resume, chunk_size, interval, stop
     totals = journal.timing(TIMING_KEYS)
     extra = metadata(config, renderer, run, workers, identity) + [key_value_hdu("TIMING", {
         "device": jax.devices()[0].platform,
+        "device_kind": jax.devices()[0].device_kind,
+        "cpu_model": _cpu_model(),
+        "cpus": len(os.sched_getaffinity(0)),
+        **benchmark,
         "render_seconds": totals["RENDSEC"],
         "shearnet_inference_seconds": totals["INFSEC"],
         "shearnet_images": int(totals["INFIMG"]),
@@ -281,10 +299,52 @@ def _evaluate(config, output, estimator, run, resume, chunk_size, interval, stop
                 "galaxy: ngmix_psf_fits fits took ngmix_psf_cpu_seconds, which the NGMIX "
                 "*_psf_cpu_seconds columns sum to; *_psf_uncached_cpu_seconds estimate a "
                 "refit everywhere. failures_raised counts measurements that raised and were "
-                "flagged (each logged with its error)"})]
+                "flagged (each logged with its error). shearnet_benchmark_* time the network "
+                "alone on stamps already on the device (see evaluation.benchmark)"})]
     path = writer.write(output / f"{estimator}.fits", header, extra)
     writer.cleanup()
     return path
+
+
+def _benchmark(predictor, kept, stamps, npix, batch_sizes):
+    """The network alone on ``stamps`` stamp pairs, for the TIMING table.
+
+    It runs on this job's own stamps, repeated if the final attempt predicted
+    fewer; an attempt that predicted none (resumed after the last prediction)
+    times zeros, which costs a network with no data-dependent branches the
+    same. The source is recorded either way.
+    """
+    if kept["count"]:
+        galaxy, psf = np.concatenate(kept["galaxy"]), np.concatenate(kept["psf"])
+        copies = -(-stamps // len(galaxy))
+        galaxy, psf = (np.tile(a, (copies, 1, 1))[:stamps] for a in (galaxy, psf))
+        source = "this job's stamps" + (f", repeated {copies}x" if copies > 1 else "")
+    else:
+        galaxy = psf = np.zeros((stamps, npix, npix), np.float32)
+        source = "zeros (no stamps were predicted in the final attempt)"
+    seconds = predictor.benchmark(galaxy, psf if predictor.uses_psf else None, batch_sizes)
+    if not seconds:
+        raise RuntimeError(f"no benchmark batch size in {batch_sizes} fits {stamps} stamps "
+                           "on the device")
+    best = min(seconds, key=seconds.get)
+    logger.info("ShearNet alone: %.3g ms per stamp at batch size %d (%s)",
+                1e3 * seconds[best], best, source)
+    return {"shearnet_benchmark_seconds_per_stamp": {str(k): v for k, v in seconds.items()},
+            "shearnet_benchmark_best_seconds_per_stamp": seconds[best],
+            "shearnet_benchmark_best_batch_size": best,
+            "shearnet_benchmark_stamps": stamps,
+            "shearnet_benchmark_input": source}
+
+
+def _cpu_model():
+    try:
+        with open("/proc/cpuinfo") as info:
+            for line in info:
+                if line.startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor() or "unknown"
 
 
 def _shearnet_values(prediction, output_keys, variant):

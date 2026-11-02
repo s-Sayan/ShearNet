@@ -16,7 +16,8 @@ setting its earlier results aside, e.g. to time it on different hardware.
 ``submit`` makes a new ``generation-*`` directory under the config's
 ``run_options.outdir`` and submits four jobs: training (GPU), ShearNet
 evaluation (GPU, after training), ngmix evaluation (CPUs, right away) and the
-merge (after both evaluations). ``--time`` is the limit of each compute job.
+merge (after both evaluations). ``--time`` is the limit of the training and
+ShearNet jobs; the ngmix job (two days) and the merge (two hours) have their own.
 """
 import argparse
 import json
@@ -51,11 +52,13 @@ DEPENDENCIES = {"train": (), "ngmix": (), "shearnet": ("train",),
 #: 512 GB), the ShearNet job one GPU node's share per GPU (one A100, 16 cores,
 #: 64 GB). The workers follow the allocation, so nothing else changes with it.
 #: The memory is 480G because Turing's "512 GB" nodes offer 512000 MB, less
-#: than --mem=512G; ngmix needs ~0.5 GB per worker.
+#: than --mem=512G; ngmix needs ~0.5 GB per worker. The ngmix job takes ~31 h
+#: on 128 cores (UT4, 4M observations: its main process renders every stamp on
+#: the CPU), more than short's one day, so it has its own two-day limit (long).
 DEFAULT_RESOURCES = {
     "train": {"cpus": 8, "memory": "128G", "gres": "gpu:1"},
     "shearnet": {"cpus": 16, "memory": "64G", "gres": "gpu:A100:1"},
-    "ngmix": {"cpus": 128, "memory": "480G"},
+    "ngmix": {"cpus": 128, "memory": "480G", "time": "2-00:00:00"},
     "merge": {"cpus": 1, "memory": "96G", "time": "02:00:00"},
 }
 
@@ -440,8 +443,9 @@ def main(argv=None):
     p.add_argument("directory", nargs="?")
     p.add_argument("--resources")
     p.add_argument("--overwrite", action="store_true")
-    p.add_argument("--time", help="time limit of each compute job (default: this Slurm "
-                   f"job's own limit, or {DEFAULT_TIME} outside Slurm)")
+    p.add_argument("--time", help="time limit of the training and ShearNet jobs (default: "
+                   f"this Slurm job's own limit, or {DEFAULT_TIME} outside Slurm); ngmix and "
+                   "the merge have their own")
     where = "the submitted config, its run directory, or a generation directory"
     p = sub.add_parser("status", help="what each stage is doing")
     p.add_argument("target", help=where)

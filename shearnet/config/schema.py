@@ -334,6 +334,15 @@ FIELDS: Dict[str, Field] = {
         "'mcal_shear'). The +/- products are 2*step apart.", check=_positive),
     "evaluation.metacal.shearnet": Field(
         "bool", True, "Also run ShearNet on the nine metacal images ngmix fits."),
+    "evaluation.benchmark.stamps": Field(
+        "int", 32768, "After the ShearNet evaluation, this many of its stamp pairs are "
+        "kept on the GPU and the network is timed on them alone: compiled and warmed up "
+        "first, every pass waited for, no copying between host and device. 0 skips it.",
+        check=_non_negative),
+    "evaluation.benchmark.batch_sizes": Field(
+        "list[int]", [256, 1024, 4096, 16384], "Batch sizes the benchmark times; the "
+        "fastest per stamp is reported. A size the device cannot hold is skipped.",
+        check=_all_positive),
     "evaluation.ngmix.gal_model": Field("str", "gauss", "ngmix galaxy model."),
     "evaluation.ngmix.psf_model": Field(
         "str", "gauss", "ngmix PSF model: gauss (one Gaussian), emN (EM mixture of N "

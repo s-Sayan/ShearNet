@@ -21,6 +21,7 @@ TINY = {
     "model": {"type": "mlp", "output_keys": ["g1", "g2"]},
     "training": {"nobj": 40, "epochs": 2, "batch_size": 8},
     "evaluation": {"seed": 7, "nobj": 2, "batch_size": 8,
+                   "benchmark": {"stamps": 64, "batch_sizes": [8, 32, 1000]},
                    "scenes": [{"name": "plus", "g1": .01, "g2": 0.},
                               {"name": "minus", "g1": -.01, "g2": 0.}],
                    "rotations_deg": [0., 90.]}}
@@ -255,6 +256,18 @@ def test_the_catalogs_say_what_the_work_cost(experiment):
         assert int(shearnet["shearnet_images"]) == 8 * 10
         assert float(shearnet["shearnet_compile_seconds"]) > 0
         assert float(shearnet["shearnet_inference_seconds"]) > 0
+        # the network alone, on this job's stamps already on the device; a batch
+        # size larger than the stamps is skipped, the fastest is reported
+        per_stamp = json.loads(shearnet["shearnet_benchmark_seconds_per_stamp"])
+        assert set(per_stamp) == {"8", "32"} and all(v > 0 for v in per_stamp.values())
+        best = int(shearnet["shearnet_benchmark_best_batch_size"])
+        assert float(shearnet["shearnet_benchmark_best_seconds_per_stamp"]) == min(
+            per_stamp.values()) == per_stamp[str(best)]
+        assert int(shearnet["shearnet_benchmark_stamps"]) == 64
+        assert shearnet["shearnet_benchmark_input"].startswith("this job's stamps")
+        assert "shearnet_benchmark_stamps" not in ngmix
+        for timing in (shearnet, ngmix):  # the hardware is named in both catalogs
+            assert timing["device_kind"] and timing["cpu_model"] and int(timing["cpus"]) >= 1
         # two galaxies, six distinct PSF stamps each
         assert int(ngmix["ngmix_psf_fits"]) == 12
         assert int(ngmix["failures_raised"]) == 0
